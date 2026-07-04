@@ -27,6 +27,7 @@ public class ModelCallApplicationService {
         long start = System.nanoTime();
         try {
             ModelCallResponse response = modelProviderClient.call(request);
+            applyRequestContext(request, response);
             if (response.getExternalCallSummary() == null) {
                 response.setExternalCallSummary(summary(request, response.getStatus(), response.getErrorMessage(),
                         elapsedMs(start)));
@@ -40,10 +41,19 @@ public class ModelCallApplicationService {
             response.setErrorCode(String.valueOf(exception.getCode()));
             response.setErrorMessage(exception.getMessage());
             response.setCostMs(elapsedMs(start));
+            applyRequestContext(request, response);
             response.setExternalCallSummary(summary(request, ModelCallStatus.FAILED, exception.getMessage(),
                     response.getCostMs()));
             return response;
         }
+    }
+
+    private void applyRequestContext(ModelCallRequest request, ModelCallResponse response) {
+        response.setProjectId(request.getProjectId());
+        response.setUserId(request.getUserId());
+        response.setRequestId(request.getRequestId());
+        response.setTaskId(request.getTaskId());
+        response.setRouteMode(request.getRouteMode());
     }
 
     private void validateMessages(ModelCallRequest request) {
