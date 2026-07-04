@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:unit": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:perf": "npm run build && playwright test --config=playwright.perf.config.ts"
   },
   "dependencies": {
     "@element-plus/icons-vue": "latest",
@@ -20,6 +24,11 @@
     "@vitejs/plugin-vue": "latest",
     "typescript": "latest",
     "vite": "latest",
-    "vue-tsc": "latest"
+    "vue-tsc": "latest",
+    "@playwright/test": "latest",
+    "@vitest/coverage-v8": "latest",
+    "@vue/test-utils": "latest",
+    "jsdom": "latest",
+    "vitest": "latest"
   }
 }

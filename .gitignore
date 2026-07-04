@@ -30,3 +30,11 @@ frontend/node_modules/
 frontend/dist/
 frontend/.env.local
 frontend/.env.*.local
+
+# Local project reference docs
+doc/
+# Test artifacts
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+frontend/performance/playwright-report/
