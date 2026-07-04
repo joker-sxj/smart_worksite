@@ -47,7 +47,7 @@ public class QaMessageApplicationService {
             return response;
         }
         response.setStatus(QaReplyStatus.ROUTE_DECIDED);
-        response.setAnswer("Route decided; answer generation awaits selected capability adapters");
+        response.setPendingReason("Answer generation awaits selected capability adapters");
         return response;
     }
 }

@@ -9,6 +9,7 @@ public class QaMessageResponse {
     private Long sessionId;
     private QaReplyStatus status;
     private String answer;
+    private String pendingReason;
     private String clarificationQuestion;
     private String contextSummary;
     private RouteDecisionResponse routeDecision;
@@ -43,6 +44,14 @@ public class QaMessageResponse {
 
     public void setAnswer(String answer) {
         this.answer = answer;
+    }
+
+    public String getPendingReason() {
+        return pendingReason;
+    }
+
+    public void setPendingReason(String pendingReason) {
+        this.pendingReason = pendingReason;
     }
 
     public String getClarificationQuestion() {
