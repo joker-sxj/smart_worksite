@@ -52,6 +52,12 @@ public class GenerateTask {
         }
     }
 
+    public void ensureTimeoutMarkAllowed() {
+        if (status != TaskStatus.QUEUED && status != TaskStatus.RUNNING && status != TaskStatus.RETRYING) {
+            throw new BusinessException(ErrorCode.CONFLICT, "Only QUEUED, RUNNING, or RETRYING tasks can be timed out");
+        }
+    }
+
     public Long getId() {
         return id;
     }

@@ -52,4 +52,11 @@ public class TaskController {
     public ApiResponse<TaskResponse> cancelTask(@RequestParam Long projectId, @PathVariable Long taskId) {
         return ApiResponse.success(taskApplicationService.cancelTask(projectId, taskId));
     }
+
+    @PostMapping("/{taskId}/timeout")
+    public ApiResponse<TaskResponse> timeoutTask(@RequestParam Long projectId,
+                                                 @PathVariable Long taskId,
+                                                 @RequestParam(required = false) String reason) {
+        return ApiResponse.success(taskApplicationService.timeoutTask(projectId, taskId, reason));
+    }
 }

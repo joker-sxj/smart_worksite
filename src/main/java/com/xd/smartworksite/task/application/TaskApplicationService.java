@@ -90,6 +90,19 @@ public class TaskApplicationService {
     }
 
     @Transactional
+    public TaskResponse timeoutTask(Long projectId, Long taskId, String reason) {
+        GenerateTask task = loadTask(projectId, taskId);
+        TaskStatus expectedStatus = task.getStatus();
+        task.ensureTimeoutMarkAllowed();
+        task.transitionTo(TaskStatus.FAILED);
+        String errorMessage = reason == null || reason.isBlank() ? "Task execution timed out" : reason.trim();
+        if (!taskRepository.updateStatus(task, expectedStatus, TaskStatus.FAILED, task.getCurrentStage(), errorMessage)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "Task status changed, timeout rejected");
+        }
+        return getTask(projectId, taskId);
+    }
+
+    @Transactional
     public void recordStage(TaskStageLog stageLog) {
         GenerateTask task = loadTask(stageLog.getTaskId());
         if (!task.getProjectId().equals(stageLog.getProjectId())) {
