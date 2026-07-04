@@ -30,7 +30,11 @@ public class KnowledgeSearchApplicationService implements KnowledgeSearchFacade 
     @Override
     public KnowledgeSearchResponse search(KnowledgeSearchRequest request) {
         List<Long> validatedKnowledgeBaseIds = resolveKnowledgeBaseIds(request);
-        return knowledgeRetrievalClient.search(request, validatedKnowledgeBaseIds);
+        KnowledgeSearchResponse response = knowledgeRetrievalClient.search(request, validatedKnowledgeBaseIds);
+        response.setProjectId(request.getProjectId());
+        response.setUserId(request.getUserId());
+        response.setRequestId(request.getRequestId());
+        return response;
     }
 
     private List<Long> resolveKnowledgeBaseIds(KnowledgeSearchRequest request) {

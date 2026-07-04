@@ -13,6 +13,8 @@ public class KnowledgeSearchRequest {
     @NotNull
     private Long projectId;
 
+    private Long userId;
+
     @NotBlank
     @Size(max = 1000)
     private String query;
@@ -40,6 +42,14 @@ public class KnowledgeSearchRequest {
 
     public void setProjectId(Long projectId) {
         this.projectId = projectId;
+    }
+
+    public Long getUserId() {
+        return userId;
+    }
+
+    public void setUserId(Long userId) {
+        this.userId = userId;
     }
 
     public String getQuery() {
