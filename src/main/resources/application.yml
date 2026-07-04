@@ -42,6 +42,14 @@ logging:
     level: "%5p [requestId:%X{requestId:-}]"
 
 app:
+  intelligence:
+    model:
+      openai-compatible:
+        enabled: ${MODEL_PROVIDER_ENABLED:false}
+        base-url: ${MODEL_PROVIDER_BASE_URL:}
+        api-key: ${MODEL_PROVIDER_API_KEY:}
+        provider: ${MODEL_PROVIDER_NAME:openai-compatible}
+        default-model: ${MODEL_PROVIDER_DEFAULT_MODEL:}
   storage:
     minio:
       endpoint: ${MINIO_ENDPOINT:http://${MINIO_HOST:localhost}:${MINIO_API_PORT:9000}}
