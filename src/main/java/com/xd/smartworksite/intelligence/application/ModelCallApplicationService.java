@@ -47,6 +47,9 @@ public class ModelCallApplicationService {
     }
 
     private void validateMessages(ModelCallRequest request) {
+        if (request.getRouteMode() == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Model route mode must not be empty");
+        }
         if (request.getMessages() == null || request.getMessages().isEmpty()) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Model messages must not be empty");
         }
@@ -61,6 +64,9 @@ public class ModelCallApplicationService {
                                         Long costMs) {
         ExternalCallSummary summary = new ExternalCallSummary();
         summary.setProjectId(request.getProjectId());
+        summary.setUserId(request.getUserId());
+        summary.setTaskId(request.getTaskId());
+        summary.setRouteMode(request.getRouteMode().name());
         summary.setServiceName("model-provider");
         summary.setCallType("MODEL_CALL");
         summary.setRequestId(request.getRequestId());
