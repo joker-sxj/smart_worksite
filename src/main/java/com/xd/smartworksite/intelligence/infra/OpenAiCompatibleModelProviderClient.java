@@ -25,28 +25,35 @@ import java.util.Set;
 public class OpenAiCompatibleModelProviderClient implements ModelProviderClient {
 
     private static final Set<String> RESERVED_PARAMETER_NAMES = Set.of("model", "messages", "stream");
+    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(10);
 
     private final OpenAiCompatibleModelProperties properties;
     private final RestClient.Builder restClientBuilder;
+    private final ModelProviderRequestFactoryProvider requestFactoryProvider;
 
     public OpenAiCompatibleModelProviderClient(OpenAiCompatibleModelProperties properties,
-                                               RestClient.Builder restClientBuilder) {
+                                               RestClient.Builder restClientBuilder,
+                                               ModelProviderRequestFactoryProvider requestFactoryProvider) {
         this.properties = properties;
         this.restClientBuilder = restClientBuilder;
+        this.requestFactoryProvider = requestFactoryProvider;
     }
 
     @Override
     public ModelCallResponse call(ModelCallRequest request) {
         validateConfigured();
         String modelName = resolveModelName(request);
+        Map<String, Object> payload = payload(request, modelName);
         long start = System.nanoTime();
         try {
-            Map<?, ?> response = restClientBuilder.build()
+            Map<?, ?> response = restClientBuilder.clone()
+                    .requestFactory(requestFactoryProvider.requestFactory(resolveTimeout(request)))
+                    .build()
                     .post()
                     .uri(properties.getBaseUrl() + "/chat/completions")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.getApiKey())
                     .contentType(MediaType.APPLICATION_JSON)
-                    .body(payload(request, modelName))
+                    .body(payload)
                     .retrieve()
                     .body(Map.class);
             return toResponse(response, modelName, elapsedMs(start));
@@ -147,5 +154,12 @@ public class OpenAiCompatibleModelProviderClient implements ModelProviderClient 
 
     private Long elapsedMs(long start) {
         return Duration.ofNanos(System.nanoTime() - start).toMillis();
+    }
+
+    private Duration resolveTimeout(ModelCallRequest request) {
+        if (request.getTimeoutMs() == null) {
+            return DEFAULT_TIMEOUT;
+        }
+        return Duration.ofMillis(request.getTimeoutMs());
     }
 }
