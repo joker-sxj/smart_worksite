@@ -30,6 +30,7 @@ public class KnowledgeSearchApplicationService implements KnowledgeSearchFacade 
 
     @Override
     public KnowledgeSearchResponse search(KnowledgeSearchRequest request) {
+        validateRequest(request);
         List<Long> validatedKnowledgeBaseIds = resolveKnowledgeBaseIds(request);
         KnowledgeSearchResponse response = knowledgeRetrievalClient.search(request, validatedKnowledgeBaseIds);
         response.setProjectId(request.getProjectId());
@@ -42,6 +43,41 @@ public class KnowledgeSearchApplicationService implements KnowledgeSearchFacade 
         }
         applySummaryContext(request, response.getExternalCallSummary());
         return response;
+    }
+
+    private void validateRequest(KnowledgeSearchRequest request) {
+        if (request == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Knowledge search request must not be null");
+        }
+        if (request.getProjectId() == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Project id must not be null");
+        }
+        requireText(request.getQuery(), "Knowledge query must not be blank");
+        requireMaxLength(request.getQuery(), 1000, "Knowledge query must not exceed 1000 characters");
+        requireMaxLength(request.getRouteMode(), 32, "Route mode must not exceed 32 characters");
+        requireMaxLength(request.getDomain(), 64, "Knowledge domain must not exceed 64 characters");
+        requireMaxLength(request.getRequestId(), 128, "Request id must not exceed 128 characters");
+        if (request.getTopK() == null || request.getTopK() < 1 || request.getTopK() > 20) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Knowledge topK must be between 1 and 20");
+        }
+        if (request.getMinScore() != null && (request.getMinScore() < 0 || request.getMinScore() > 100)) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Knowledge minScore must be between 0 and 100");
+        }
+        if (request.getKnowledgeBaseIds() != null && request.getKnowledgeBaseIds().size() > 50) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Knowledge base id count must not exceed 50");
+        }
+    }
+
+    private void requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
+        }
+    }
+
+    private void requireMaxLength(String value, int maxLength, String message) {
+        if (value != null && value.length() > maxLength) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
+        }
     }
 
     private void applySummaryContext(KnowledgeSearchRequest request, ExternalCallSummary summary) {
