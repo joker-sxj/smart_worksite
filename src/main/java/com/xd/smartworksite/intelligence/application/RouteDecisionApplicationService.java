@@ -29,6 +29,7 @@ public class RouteDecisionApplicationService implements RouteDecisionFacade {
 
     @Override
     public RouteDecisionResponse decide(RouteDecisionRequest request) {
+        validateRequest(request);
         RouteMode requestedMode = request.getRequestedRouteMode() == null ? RouteMode.AUTO : request.getRequestedRouteMode();
         List<Long> knowledgeBaseIds = knowledgeScopeFacade.validateEnabledKnowledgeBases(
                 request.getProjectId(), normalizeIds(request.getAllowedKnowledgeBaseIds(), "Knowledge base id"));
@@ -44,6 +45,40 @@ public class RouteDecisionApplicationService implements RouteDecisionFacade {
             case MIXED -> decideMixed(knowledgeBaseIds, dataSourceIds);
         };
         return RouteDecisionResponse.from(request, decision);
+    }
+
+    private void validateRequest(RouteDecisionRequest request) {
+        if (request == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Route decision request must not be null");
+        }
+        if (request.getProjectId() == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Project id must not be null");
+        }
+        requireText(request.getQuestion(), "Route question must not be blank");
+        requireMaxLength(request.getQuestion(), 1000, "Route question must not exceed 1000 characters");
+        requireMaxLength(request.getRequestId(), 128, "Request id must not exceed 128 characters");
+        requireMaxLength(request.getConversationContextSummary(), 2000,
+                "Conversation context summary must not exceed 2000 characters");
+        requireIdListSize(request.getAllowedKnowledgeBaseIds(), 50, "Knowledge base id");
+        requireIdListSize(request.getAllowedDataSourceIds(), 50, "Data source id");
+    }
+
+    private void requireText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
+        }
+    }
+
+    private void requireMaxLength(String value, int maxLength, String message) {
+        if (value != null && value.length() > maxLength) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
+        }
+    }
+
+    private void requireIdListSize(List<Long> ids, int maxSize, String fieldName) {
+        if (ids != null && ids.size() > maxSize) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, fieldName + " count must not exceed " + maxSize);
+        }
     }
 
     private RouteDecision decideAuto(List<Long> knowledgeBaseIds, List<Long> dataSourceIds) {
