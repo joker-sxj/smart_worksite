@@ -14,6 +14,7 @@ import com.xd.smartworksite.task.domain.TaskStatus;
 import com.xd.smartworksite.task.dto.TaskCreateRequest;
 import com.xd.smartworksite.task.dto.TaskResponse;
 import com.xd.smartworksite.task.dto.TaskStageLogResponse;
+import com.xd.smartworksite.task.facade.TaskStageFacade;
 import com.xd.smartworksite.task.repository.TaskRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,7 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 
 @Service
-public class TaskApplicationService {
+public class TaskApplicationService implements TaskStageFacade {
 
     public static final String TASK_QUEUE_NAME = "tasks";
 
@@ -103,6 +104,7 @@ public class TaskApplicationService {
     }
 
     @Transactional
+    @Override
     public void recordStage(TaskStageLog stageLog) {
         GenerateTask task = loadTask(stageLog.getTaskId());
         if (!task.getProjectId().equals(stageLog.getProjectId())) {
