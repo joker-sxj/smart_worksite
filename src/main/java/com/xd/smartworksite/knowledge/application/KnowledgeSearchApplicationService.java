@@ -34,21 +34,29 @@ public class KnowledgeSearchApplicationService implements KnowledgeSearchFacade 
         KnowledgeSearchResponse response = knowledgeRetrievalClient.search(request, validatedKnowledgeBaseIds);
         response.setProjectId(request.getProjectId());
         response.setUserId(request.getUserId());
+        response.setTaskId(request.getTaskId());
+        response.setRouteMode(request.getRouteMode());
         response.setRequestId(request.getRequestId());
         if (response.getExternalCallSummary() == null) {
             response.setExternalCallSummary(summary(request, validatedKnowledgeBaseIds, response));
         }
+        applySummaryContext(request, response.getExternalCallSummary());
         return response;
+    }
+
+    private void applySummaryContext(KnowledgeSearchRequest request, ExternalCallSummary summary) {
+        summary.setProjectId(request.getProjectId());
+        summary.setUserId(request.getUserId());
+        summary.setTaskId(request.getTaskId());
+        summary.setRouteMode(request.getRouteMode());
+        summary.setRequestId(request.getRequestId());
     }
 
     private ExternalCallSummary summary(KnowledgeSearchRequest request, List<Long> validatedKnowledgeBaseIds,
                                         KnowledgeSearchResponse response) {
         ExternalCallSummary summary = new ExternalCallSummary();
-        summary.setProjectId(request.getProjectId());
-        summary.setUserId(request.getUserId());
         summary.setServiceName("knowledge-retrieval");
         summary.setCallType("KNOWLEDGE_SEARCH");
-        summary.setRequestId(request.getRequestId());
         summary.setRequestSummary("knowledgeBaseCount=" + validatedKnowledgeBaseIds.size()
                 + ", topK=" + request.getTopK()
                 + ", domain=" + nullSafe(request.getDomain()));

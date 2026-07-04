@@ -10,6 +10,8 @@ public class DatabaseQueryResponse {
     private Long dataSourceId;
     private Long projectId;
     private Long userId;
+    private Long taskId;
+    private String routeMode;
     private String requestId;
     private String sqlSummary;
     private List<String> tables;
@@ -43,6 +45,22 @@ public class DatabaseQueryResponse {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    public Long getTaskId() {
+        return taskId;
+    }
+
+    public void setTaskId(Long taskId) {
+        this.taskId = taskId;
+    }
+
+    public String getRouteMode() {
+        return routeMode;
+    }
+
+    public void setRouteMode(String routeMode) {
+        this.routeMode = routeMode;
     }
 
     public String getRequestId() {

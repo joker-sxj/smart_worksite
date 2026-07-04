@@ -15,6 +15,11 @@ public class KnowledgeSearchRequest {
 
     private Long userId;
 
+    private Long taskId;
+
+    @Size(max = 32)
+    private String routeMode;
+
     @NotBlank
     @Size(max = 1000)
     private String query;
@@ -50,6 +55,22 @@ public class KnowledgeSearchRequest {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    public Long getTaskId() {
+        return taskId;
+    }
+
+    public void setTaskId(Long taskId) {
+        this.taskId = taskId;
+    }
+
+    public String getRouteMode() {
+        return routeMode;
+    }
+
+    public void setRouteMode(String routeMode) {
+        this.routeMode = routeMode;
     }
 
     public String getQuery() {

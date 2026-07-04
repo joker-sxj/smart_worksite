@@ -13,6 +13,11 @@ public class DatabaseQueryRequest {
 
     private Long userId;
 
+    private Long taskId;
+
+    @Size(max = 32)
+    private String routeMode;
+
     @Size(max = 128)
     private String requestId;
 
@@ -52,6 +57,22 @@ public class DatabaseQueryRequest {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    public Long getTaskId() {
+        return taskId;
+    }
+
+    public void setTaskId(Long taskId) {
+        this.taskId = taskId;
+    }
+
+    public String getRouteMode() {
+        return routeMode;
+    }
+
+    public void setRouteMode(String routeMode) {
+        this.routeMode = routeMode;
     }
 
     public String getRequestId() {

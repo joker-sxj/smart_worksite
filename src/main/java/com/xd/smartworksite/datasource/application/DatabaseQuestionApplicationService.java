@@ -44,6 +44,8 @@ public class DatabaseQuestionApplicationService {
         response.setDataSourceId(dataSource.getId());
         response.setProjectId(dataSource.getProjectId());
         response.setUserId(request.getUserId());
+        response.setTaskId(request.getTaskId());
+        response.setRouteMode(request.getRouteMode());
         response.setRequestId(request.getRequestId());
         response.setSqlSummary(SqlSummary.summarize(safetyResult.getNormalizedSql()));
         response.setTables(safetyResult.getTableNames());
@@ -62,6 +64,8 @@ public class DatabaseQuestionApplicationService {
         ExternalCallSummary summary = new ExternalCallSummary();
         summary.setProjectId(dataSource.getProjectId());
         summary.setUserId(request.getUserId());
+        summary.setTaskId(request.getTaskId());
+        summary.setRouteMode(request.getRouteMode());
         summary.setServiceName("business-datasource");
         summary.setCallType("DATABASE_QUERY");
         summary.setRequestId(request.getRequestId());
