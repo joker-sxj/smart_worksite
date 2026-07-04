@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.xd.smartworksite.knowledge.mapper.KnowledgeBaseMapper">
+
+    <resultMap id="KnowledgeBaseResultMap" type="com.xd.smartworksite.knowledge.domain.KnowledgeBase">
+        <id property="id" column="id"/>
+        <result property="projectId" column="project_id"/>
+        <result property="name" column="name"/>
+        <result property="domain" column="domain"/>
+        <result property="status" column="status" javaType="com.xd.smartworksite.knowledge.domain.KnowledgeBaseStatus"/>
+    </resultMap>
+
+    <select id="selectByProjectAndIds" resultMap="KnowledgeBaseResultMap">
+        select id, project_id, name, domain, status
+        from knowledge_base
+        where project_id = #{projectId}
+          and deleted = 0
+          and id in
+        <foreach collection="knowledgeBaseIds" item="knowledgeBaseId" open="(" separator="," close=")">
+            #{knowledgeBaseId}
+        </foreach>
+    </select>
+
+    <select id="selectEnabledByProject" resultMap="KnowledgeBaseResultMap">
+        select id, project_id, name, domain, status
+        from knowledge_base
+        where project_id = #{projectId}
+          and status = 'ENABLED'
+          and deleted = 0
+        <if test="domain != null and domain != ''">
+          and domain = #{domain}
+        </if>
+        order by id asc
+    </select>
+</mapper>
