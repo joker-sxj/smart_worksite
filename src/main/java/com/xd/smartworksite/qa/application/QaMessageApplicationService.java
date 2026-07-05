@@ -47,6 +47,7 @@ public class QaMessageApplicationService {
     private static final int DATABASE_PAGE_NO = 1;
     private static final int DATABASE_PAGE_SIZE = 50;
     private static final int DATABASE_TIMEOUT_MS = 5000;
+    private static final int MAX_CONTEXT_MESSAGES = 20;
     private static final String DATABASE_EXECUTION_STATUS_VALIDATED_NOT_EXECUTED = "VALIDATED_NOT_EXECUTED";
     private static final String MODEL_SYSTEM_PROMPT = "You are the Smart Worksite Q&A assistant. "
             + "Answer the user's question directly using only the supplied conversation context when relevant. "
@@ -97,8 +98,11 @@ public class QaMessageApplicationService {
         validateRequest(sessionId, request);
         QaSession session = loadSession(sessionId);
         validateSessionAccess(session, request);
-        String contextSummary = conversationContextAssembler.assemble(
-                request.getHistory(), request.getMaxContextMessages() == null ? 0 : request.getMaxContextMessages());
+        int maxContextMessages = request.getMaxContextMessages() == null ? 0 : request.getMaxContextMessages();
+        String contextSummary = conversationContextAssembler.assemblePersisted(
+                qaConversationRepository.findRecentMessages(request.getProjectId(), sessionId, MAX_CONTEXT_MESSAGES),
+                request.getHistory(),
+                maxContextMessages);
         requireMaxLength(contextSummary, MAX_CONTEXT_SUMMARY_LENGTH,
                 "QA context summary must not exceed 2000 characters");
         RouteDecisionRequest routeRequest = new RouteDecisionRequest();

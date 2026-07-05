@@ -1,7 +1,10 @@
 package com.xd.smartworksite.qa.application;
 
 import com.xd.smartworksite.qa.dto.QaHistoryMessageRequest;
+import com.xd.smartworksite.qa.domain.QaMessageRecord;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class ConversationContextAssembler {
@@ -23,5 +26,31 @@ public class ConversationContextAssembler {
             builder.append(message.getRole().name()).append(": ").append(message.getContent().trim());
         }
         return builder.toString();
+    }
+
+    public String assemblePersisted(List<QaMessageRecord> newestFirstMessages, List<QaHistoryMessageRequest> requestHistory,
+                                    int maxContextMessages) {
+        if (maxContextMessages <= 0) {
+            return "";
+        }
+        List<QaHistoryMessageRequest> merged = new ArrayList<>();
+        if (newestFirstMessages != null && !newestFirstMessages.isEmpty()) {
+            List<QaMessageRecord> chronological = new ArrayList<>(newestFirstMessages);
+            Collections.reverse(chronological);
+            for (QaMessageRecord record : chronological) {
+                if (record == null || record.getRole() == null || record.getContent() == null
+                        || record.getContent().isBlank()) {
+                    continue;
+                }
+                QaHistoryMessageRequest message = new QaHistoryMessageRequest();
+                message.setRole(record.getRole());
+                message.setContent(record.getContent());
+                merged.add(message);
+            }
+        }
+        if (requestHistory != null && !requestHistory.isEmpty()) {
+            merged.addAll(requestHistory);
+        }
+        return assemble(merged, maxContextMessages);
     }
 }

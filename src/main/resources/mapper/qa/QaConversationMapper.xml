@@ -12,6 +12,25 @@
         <result property="updatedBy" column="updated_by"/>
     </resultMap>
 
+    <resultMap id="QaMessageResultMap" type="com.xd.smartworksite.qa.domain.QaMessageRecord">
+        <id property="id" column="id"/>
+        <result property="projectId" column="project_id"/>
+        <result property="sessionId" column="session_id"/>
+        <result property="userId" column="user_id"/>
+        <result property="role" column="role"/>
+        <result property="content" column="content"/>
+        <result property="replyStatus" column="reply_status"/>
+        <result property="routeMode" column="route_mode"/>
+        <result property="routeRationale" column="route_rationale"/>
+        <result property="answerContent" column="answer_content"/>
+        <result property="pendingReason" column="pending_reason"/>
+        <result property="clarificationQuestion" column="clarification_question"/>
+        <result property="requestId" column="request_id"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="createdBy" column="created_by"/>
+        <result property="updatedBy" column="updated_by"/>
+    </resultMap>
+
     <insert id="insertSession" useGeneratedKeys="true" keyProperty="id">
         insert into qa_session (
             project_id, title, status, created_at, updated_at, created_by, updated_by
@@ -25,6 +44,18 @@
         from qa_session
         where id = #{sessionId}
           and deleted = 0
+    </select>
+
+    <select id="selectRecentMessages" resultMap="QaMessageResultMap">
+        select id, project_id, session_id, user_id, role, content, reply_status, route_mode,
+               route_rationale, answer_content, pending_reason, clarification_question,
+               request_id, created_at, created_by, updated_by
+        from qa_message
+        where project_id = #{projectId}
+          and session_id = #{sessionId}
+          and deleted = 0
+        order by id desc
+        limit #{limit}
     </select>
 
     <insert id="insertMessage" useGeneratedKeys="true" keyProperty="id">
