@@ -45,6 +45,7 @@ public class DatabaseQuestionApplicationService {
         SqlSafetyResult safetyResult = readOnlySqlValidator.validate(request.getSql());
         DatabaseQueryExecutor.QueryExecutionResult executionResult = databaseQueryExecutor.dryRun(
                 request.getPageNo(), request.getPageSize());
+        validateDryRunResult(executionResult, request);
         DatabaseQueryResponse response = new DatabaseQueryResponse();
         response.setDataSourceId(dataSource.getId());
         response.setProjectId(dataSource.getProjectId());
@@ -64,6 +65,31 @@ public class DatabaseQuestionApplicationService {
         response.setResultSummary("SQL validated as read-only; execution not performed");
         response.setExternalCallSummary(summary(request, dataSource, safetyResult, executionResult.costMs()));
         return response;
+    }
+
+    private void validateDryRunResult(DatabaseQueryExecutor.QueryExecutionResult executionResult,
+                                      DatabaseQueryRequest request) {
+        if (executionResult == null) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Database dry-run result must not be null");
+        }
+        if (executionResult.columns() == null || executionResult.rows() == null) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Database dry-run columns and rows must not be null");
+        }
+        if (!executionResult.columns().isEmpty() || !executionResult.rows().isEmpty()) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Database dry-run must not return executable result data");
+        }
+        if (executionResult.costMs() == null || executionResult.costMs() < 0) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Database dry-run costMs must not be null or negative");
+        }
+        if (!request.getPageNo().equals(executionResult.pageNo())
+                || !request.getPageSize().equals(executionResult.pageSize())) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Database dry-run pagination must match request");
+        }
     }
 
     private void validateRequest(DatabaseQueryRequest request) {
