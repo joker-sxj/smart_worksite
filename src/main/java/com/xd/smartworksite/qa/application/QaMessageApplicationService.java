@@ -95,6 +95,10 @@ public class QaMessageApplicationService {
         if (routeDecision.isNeedClarification()) {
             requireRouteText(routeDecision.getClarificationQuestion(),
                     "QA route clarification question must not be blank");
+        } else if (routeDecision.getClarificationQuestion() != null
+                && !routeDecision.getClarificationQuestion().isBlank()) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "QA route decision must not include clarification question when clarification is not required");
         }
     }
 
