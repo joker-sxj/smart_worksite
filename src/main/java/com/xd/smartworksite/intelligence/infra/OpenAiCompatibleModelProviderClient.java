@@ -137,6 +137,9 @@ public class OpenAiCompatibleModelProviderClient implements ModelProviderClient 
         if (!(content instanceof String text)) {
             throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "Model provider response content is invalid");
         }
+        if (text.isBlank()) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "Model provider response content must not be blank");
+        }
         return text;
     }
 
@@ -146,10 +149,19 @@ public class OpenAiCompatibleModelProviderClient implements ModelProviderClient 
             return null;
         }
         Object value = usage.get(field);
-        if (value instanceof Number number) {
-            return number.intValue();
+        if (value == null) {
+            return null;
         }
-        return null;
+        if (!(value instanceof Number number)) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Model provider response usage field is invalid: " + field);
+        }
+        int tokenCount = number.intValue();
+        if (tokenCount < 0 || number.doubleValue() != tokenCount) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Model provider response usage field is invalid: " + field);
+        }
+        return tokenCount;
     }
 
     private Long elapsedMs(long start) {
