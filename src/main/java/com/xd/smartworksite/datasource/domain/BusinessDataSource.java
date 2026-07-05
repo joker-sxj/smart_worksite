@@ -11,6 +11,7 @@ public class BusinessDataSource {
     private String passwordCipher;
     private DataSourceStatus status;
     private String tableWhitelistJson;
+    private String fieldWhitelistJson;
 
     public boolean isEnabled() {
         return status == DataSourceStatus.ENABLED;
@@ -86,5 +87,13 @@ public class BusinessDataSource {
 
     public void setTableWhitelistJson(String tableWhitelistJson) {
         this.tableWhitelistJson = tableWhitelistJson;
+    }
+
+    public String getFieldWhitelistJson() {
+        return fieldWhitelistJson;
+    }
+
+    public void setFieldWhitelistJson(String fieldWhitelistJson) {
+        this.fieldWhitelistJson = fieldWhitelistJson;
     }
 }

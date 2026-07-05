@@ -6,10 +6,12 @@ public class SqlSafetyResult {
 
     private final String normalizedSql;
     private final List<String> tableNames;
+    private final List<String> selectedColumnNames;
 
-    public SqlSafetyResult(String normalizedSql, List<String> tableNames) {
+    public SqlSafetyResult(String normalizedSql, List<String> tableNames, List<String> selectedColumnNames) {
         this.normalizedSql = normalizedSql;
         this.tableNames = List.copyOf(tableNames);
+        this.selectedColumnNames = List.copyOf(selectedColumnNames);
     }
 
     public String getNormalizedSql() {
@@ -18,5 +20,9 @@ public class SqlSafetyResult {
 
     public List<String> getTableNames() {
         return tableNames;
+    }
+
+    public List<String> getSelectedColumnNames() {
+        return selectedColumnNames;
     }
 }

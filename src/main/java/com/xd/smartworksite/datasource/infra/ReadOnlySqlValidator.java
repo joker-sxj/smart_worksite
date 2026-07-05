@@ -4,7 +4,11 @@ import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.datasource.domain.SqlSafetyResult;
 import net.sf.jsqlparser.JSQLParserException;
+import net.sf.jsqlparser.expression.Expression;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.select.AllColumns;
+import net.sf.jsqlparser.statement.select.AllTableColumns;
 import net.sf.jsqlparser.statement.select.FromItem;
 import net.sf.jsqlparser.statement.select.Join;
 import net.sf.jsqlparser.statement.select.ParenthesedFromItem;
@@ -39,7 +43,11 @@ public class ReadOnlySqlValidator {
         if (tableNames.isEmpty()) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "SELECT must reference at least one table");
         }
-        return new SqlSafetyResult(statement.toString(), List.copyOf(tableNames));
+        Set<String> selectedColumnNames = extractSelectedColumnNames(select);
+        if (selectedColumnNames.isEmpty()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "SELECT must expose at least one whitelisted field");
+        }
+        return new SqlSafetyResult(statement.toString(), List.copyOf(tableNames), List.copyOf(selectedColumnNames));
     }
 
     private Statement parseSingleStatement(String sql) {
@@ -93,6 +101,73 @@ public class ReadOnlySqlValidator {
             // JSqlParser traverses nested SELECTs for table names; mutation is rejected by statement type.
             if (selectItem == null) {
                 throw new BusinessException(ErrorCode.PARAM_ERROR, "Invalid SELECT item");
+            }
+        }
+    }
+
+    private Set<String> extractSelectedColumnNames(Select select) {
+        Set<String> selectedColumnNames = new LinkedHashSet<>();
+        collectSelectedColumnNames(select, selectedColumnNames);
+        return selectedColumnNames;
+    }
+
+    private void collectSelectedColumnNames(Select select, Set<String> selectedColumnNames) {
+        if (select.getWithItemsList() != null) {
+            for (WithItem withItem : select.getWithItemsList()) {
+                collectSelectedColumnNames(withItem, selectedColumnNames);
+            }
+        }
+        if (select instanceof PlainSelect plainSelect) {
+            collectPlainSelectColumnNames(plainSelect, selectedColumnNames);
+            return;
+        }
+        if (select instanceof SetOperationList setOperationList) {
+            for (Select nestedSelect : setOperationList.getSelects()) {
+                collectSelectedColumnNames(nestedSelect, selectedColumnNames);
+            }
+            return;
+        }
+        if (select instanceof ParenthesedSelect parenthesedSelect) {
+            collectSelectedColumnNames(parenthesedSelect.getSelect(), selectedColumnNames);
+        }
+    }
+
+    private void collectPlainSelectColumnNames(PlainSelect plainSelect, Set<String> selectedColumnNames) {
+        if (plainSelect.getSelectItems() == null || plainSelect.getSelectItems().isEmpty()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "SELECT fields must not be empty");
+        }
+        for (SelectItem<?> selectItem : plainSelect.getSelectItems()) {
+            if (selectItem == null) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "Invalid SELECT item");
+            }
+            Expression expression = selectItem.getExpression();
+            if (expression instanceof AllColumns || expression instanceof AllTableColumns) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "SELECT wildcard fields are not allowed");
+            }
+            if (!(expression instanceof Column column)) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "SELECT fields must be direct columns");
+            }
+            selectedColumnNames.add(normalizeIdentifier(column.getColumnName()));
+        }
+        collectFromItemColumnNames(plainSelect.getFromItem(), selectedColumnNames);
+        if (plainSelect.getJoins() != null) {
+            for (Join join : plainSelect.getJoins()) {
+                collectFromItemColumnNames(join.getRightItem(), selectedColumnNames);
+            }
+        }
+    }
+
+    private void collectFromItemColumnNames(FromItem fromItem, Set<String> selectedColumnNames) {
+        if (fromItem instanceof ParenthesedSelect parenthesedSelect) {
+            collectSelectedColumnNames(parenthesedSelect, selectedColumnNames);
+            return;
+        }
+        if (fromItem instanceof ParenthesedFromItem parenthesedFromItem) {
+            collectFromItemColumnNames(parenthesedFromItem.getFromItem(), selectedColumnNames);
+            if (parenthesedFromItem.getJoins() != null) {
+                for (Join join : parenthesedFromItem.getJoins()) {
+                    collectFromItemColumnNames(join.getRightItem(), selectedColumnNames);
+                }
             }
         }
     }

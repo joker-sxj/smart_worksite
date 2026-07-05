@@ -26,7 +26,7 @@ public class DatabaseQuestionApplicationService {
 
     private static final String EXECUTION_STATUS_VALIDATED_NOT_EXECUTED = "VALIDATED_NOT_EXECUTED";
     private static final String EXECUTION_BLOCKED_REASON =
-            "Datasource credential and field whitelist contracts are not configured";
+            "Datasource credential contract is not configured";
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
     };
 
@@ -57,6 +57,7 @@ public class DatabaseQuestionApplicationService {
         }
         SqlSafetyResult safetyResult = readOnlySqlValidator.validate(request.getSql());
         validateTableWhitelist(dataSource, safetyResult);
+        validateFieldWhitelist(dataSource, safetyResult);
         DatabaseQueryExecutor.QueryExecutionResult executionResult = databaseQueryExecutor.dryRun(
                 request.getPageNo(), request.getPageSize());
         validateDryRunResult(executionResult, request);
@@ -115,34 +116,48 @@ public class DatabaseQuestionApplicationService {
         }
     }
 
+    private void validateFieldWhitelist(BusinessDataSource dataSource, SqlSafetyResult safetyResult) {
+        Set<String> allowedFields = parseWhitelist(dataSource.getFieldWhitelistJson(),
+                "Data source field whitelist", "field name");
+        for (String fieldName : safetyResult.getSelectedColumnNames()) {
+            if (!allowedFields.contains(fieldName)) {
+                throw new BusinessException(ErrorCode.FORBIDDEN, "SQL field is outside data source whitelist");
+            }
+        }
+    }
+
     private Set<String> parseTableWhitelist(String tableWhitelistJson) {
-        if (tableWhitelistJson == null || tableWhitelistJson.isBlank()) {
-            throw new BusinessException(ErrorCode.CONFLICT, "Data source table whitelist is not configured");
+        return parseWhitelist(tableWhitelistJson, "Data source table whitelist", "table name");
+    }
+
+    private Set<String> parseWhitelist(String whitelistJson, String whitelistName, String itemName) {
+        if (whitelistJson == null || whitelistJson.isBlank()) {
+            throw new BusinessException(ErrorCode.CONFLICT, whitelistName + " is not configured");
         }
         List<String> tableNames;
         try {
-            tableNames = objectMapper.readValue(tableWhitelistJson, STRING_LIST);
+            tableNames = objectMapper.readValue(whitelistJson, STRING_LIST);
         } catch (JsonProcessingException exception) {
-            throw new BusinessException(ErrorCode.CONFLICT, "Data source table whitelist is invalid");
+            throw new BusinessException(ErrorCode.CONFLICT, whitelistName + " is invalid");
         }
         if (tableNames == null || tableNames.isEmpty()) {
-            throw new BusinessException(ErrorCode.CONFLICT, "Data source table whitelist must not be empty");
+            throw new BusinessException(ErrorCode.CONFLICT, whitelistName + " must not be empty");
         }
-        Set<String> normalizedTables = new LinkedHashSet<>();
+        Set<String> normalizedItems = new LinkedHashSet<>();
         for (String tableName : tableNames) {
             String normalized = normalizeTableName(tableName);
             if (normalized.isBlank()) {
-                throw new BusinessException(ErrorCode.CONFLICT, "Data source table whitelist contains blank table name");
+                throw new BusinessException(ErrorCode.CONFLICT, whitelistName + " contains blank " + itemName);
             }
             if (normalized.length() > 128) {
-                throw new BusinessException(ErrorCode.CONFLICT, "Data source table whitelist table name is too long");
+                throw new BusinessException(ErrorCode.CONFLICT, whitelistName + " " + itemName + " is too long");
             }
-            normalizedTables.add(normalized);
+            normalizedItems.add(normalized);
         }
-        if (normalizedTables.isEmpty()) {
-            throw new BusinessException(ErrorCode.CONFLICT, "Data source table whitelist must not be empty");
+        if (normalizedItems.isEmpty()) {
+            throw new BusinessException(ErrorCode.CONFLICT, whitelistName + " must not be empty");
         }
-        return normalizedTables;
+        return normalizedItems;
     }
 
     private String normalizeTableName(String tableName) {
