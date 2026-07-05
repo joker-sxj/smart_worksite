@@ -47,7 +47,7 @@ public class QaMessageApplicationService {
         routeRequest.setConversationContextSummary(contextSummary);
 
         RouteDecisionResponse routeDecision = routeDecisionFacade.decide(routeRequest);
-        validateRouteDecision(routeDecision);
+        validateRouteDecision(request, routeDecision);
         QaMessageResponse response = new QaMessageResponse();
         response.setProjectId(request.getProjectId());
         response.setSessionId(sessionId);
@@ -65,9 +65,18 @@ public class QaMessageApplicationService {
         return response;
     }
 
-    private void validateRouteDecision(RouteDecisionResponse routeDecision) {
+    private void validateRouteDecision(QaMessageRequest request, RouteDecisionResponse routeDecision) {
         if (routeDecision == null) {
             throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "QA route decision must not be null");
+        }
+        if (!request.getProjectId().equals(routeDecision.getProjectId())) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "QA route decision project id must match request");
+        }
+        if (!sameNullable(request.getUserId(), routeDecision.getUserId())) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "QA route decision user id must match request");
+        }
+        if (!sameNullable(request.getRequestId(), routeDecision.getRequestId())) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "QA route decision request id must match request");
         }
         if (routeDecision.getRouteMode() == null) {
             throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "QA route decision route mode must not be null");
@@ -85,6 +94,10 @@ public class QaMessageApplicationService {
             requireRouteText(routeDecision.getClarificationQuestion(),
                     "QA route clarification question must not be blank");
         }
+    }
+
+    private boolean sameNullable(Object expected, Object actual) {
+        return expected == null ? actual == null : expected.equals(actual);
     }
 
     private void requireRouteText(String value, String message) {
