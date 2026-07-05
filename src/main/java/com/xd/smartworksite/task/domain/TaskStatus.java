@@ -31,6 +31,6 @@ public enum TaskStatus {
     }
 
     public boolean isTerminal() {
-        return this == SUCCESS || this == CANCELED;
+        return this == SUCCESS || this == FAILED || this == CANCELED;
     }
 }

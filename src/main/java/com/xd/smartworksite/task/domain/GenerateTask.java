@@ -46,11 +46,14 @@ public class GenerateTask {
     }
 
     public void ensureCancelable() {
-        if (status == null || status.isTerminal()) {
-            throw new BusinessException(ErrorCode.CONFLICT, "Terminal tasks cannot be canceled");
+        if (status == null) {
+            throw new BusinessException(ErrorCode.CONFLICT, "Task current status is missing");
         }
         if (status == TaskStatus.FAILED) {
             throw new BusinessException(ErrorCode.CONFLICT, "FAILED tasks must be retried instead of canceled");
+        }
+        if (status.isTerminal()) {
+            throw new BusinessException(ErrorCode.CONFLICT, "Terminal tasks cannot be canceled");
         }
     }
 
