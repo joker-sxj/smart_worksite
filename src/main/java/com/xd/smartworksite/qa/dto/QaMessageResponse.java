@@ -1,6 +1,7 @@
 package com.xd.smartworksite.qa.dto;
 
 import com.xd.smartworksite.intelligence.dto.RouteDecisionResponse;
+import com.xd.smartworksite.intelligence.dto.ModelCallResponse;
 import com.xd.smartworksite.knowledge.dto.KnowledgeSearchResponse;
 import com.xd.smartworksite.qa.domain.QaReplyStatus;
 
@@ -17,6 +18,7 @@ public class QaMessageResponse {
     private String contextSummary;
     private RouteDecisionResponse routeDecision;
     private KnowledgeSearchResponse knowledgeSearch;
+    private ModelCallResponse modelCall;
 
     public Long getProjectId() {
         return projectId;
@@ -104,5 +106,13 @@ public class QaMessageResponse {
 
     public void setKnowledgeSearch(KnowledgeSearchResponse knowledgeSearch) {
         this.knowledgeSearch = knowledgeSearch;
+    }
+
+    public ModelCallResponse getModelCall() {
+        return modelCall;
+    }
+
+    public void setModelCall(ModelCallResponse modelCall) {
+        this.modelCall = modelCall;
     }
 }

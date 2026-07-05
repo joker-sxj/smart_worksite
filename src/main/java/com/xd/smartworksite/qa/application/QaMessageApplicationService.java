@@ -2,7 +2,12 @@ package com.xd.smartworksite.qa.application;
 
 import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.result.ErrorCode;
+import com.xd.smartworksite.intelligence.application.ModelCallApplicationService;
+import com.xd.smartworksite.intelligence.domain.ModelCallStatus;
 import com.xd.smartworksite.intelligence.domain.RouteMode;
+import com.xd.smartworksite.intelligence.dto.ModelCallRequest;
+import com.xd.smartworksite.intelligence.dto.ModelCallResponse;
+import com.xd.smartworksite.intelligence.dto.ModelMessageRequest;
 import com.xd.smartworksite.intelligence.dto.RouteDecisionRequest;
 import com.xd.smartworksite.intelligence.dto.RouteDecisionResponse;
 import com.xd.smartworksite.intelligence.facade.RouteDecisionFacade;
@@ -22,20 +27,29 @@ public class QaMessageApplicationService {
 
     private final RouteDecisionFacade routeDecisionFacade;
     private final KnowledgeSearchFacade knowledgeSearchFacade;
+    private final ModelCallApplicationService modelCallApplicationService;
     private final ConversationContextAssembler conversationContextAssembler;
     private static final int MAX_CONTEXT_SUMMARY_LENGTH = 2000;
     private static final int KNOWLEDGE_TOP_K = 5;
+    private static final int MODEL_TIMEOUT_MS = 10000;
+    private static final String MODEL_SYSTEM_PROMPT = "You are the Smart Worksite Q&A assistant. "
+            + "Answer the user's question directly using only the supplied conversation context when relevant. "
+            + "Do not claim retrieval, database, OCR, report, or compliance-review results unless they are provided.";
 
     public QaMessageApplicationService(RouteDecisionFacade routeDecisionFacade,
-                                       KnowledgeSearchFacade knowledgeSearchFacade) {
-        this(routeDecisionFacade, knowledgeSearchFacade, new ConversationContextAssembler());
+                                       KnowledgeSearchFacade knowledgeSearchFacade,
+                                       ModelCallApplicationService modelCallApplicationService) {
+        this(routeDecisionFacade, knowledgeSearchFacade, modelCallApplicationService,
+                new ConversationContextAssembler());
     }
 
     QaMessageApplicationService(RouteDecisionFacade routeDecisionFacade,
                                 KnowledgeSearchFacade knowledgeSearchFacade,
+                                ModelCallApplicationService modelCallApplicationService,
                                 ConversationContextAssembler conversationContextAssembler) {
         this.routeDecisionFacade = routeDecisionFacade;
         this.knowledgeSearchFacade = knowledgeSearchFacade;
+        this.modelCallApplicationService = modelCallApplicationService;
         this.conversationContextAssembler = conversationContextAssembler;
     }
 
@@ -77,8 +91,82 @@ public class QaMessageApplicationService {
             response.setPendingReason("Answer generation awaits model synthesis after knowledge retrieval");
             return response;
         }
+        if (routeDecision.getRouteMode() == RouteMode.MODEL) {
+            ModelCallResponse modelCall = modelCallApplicationService.call(modelRequest(request, routeDecision, contextSummary));
+            validateModelCall(request, routeDecision, modelCall);
+            response.setModelCall(modelCall);
+            response.setAnswer(modelCall.getContent());
+            return response;
+        }
         response.setPendingReason("Answer generation awaits selected capability adapters");
         return response;
+    }
+
+    private ModelCallRequest modelRequest(QaMessageRequest request, RouteDecisionResponse routeDecision,
+                                          String contextSummary) {
+        ModelCallRequest modelRequest = new ModelCallRequest();
+        modelRequest.setProjectId(request.getProjectId());
+        modelRequest.setUserId(request.getUserId());
+        modelRequest.setRequestId(request.getRequestId());
+        modelRequest.setRouteMode(routeDecision.getRouteMode());
+        modelRequest.setTimeoutMs(MODEL_TIMEOUT_MS);
+        modelRequest.setMessages(List.of(
+                modelMessage("system", MODEL_SYSTEM_PROMPT),
+                modelMessage("user", userModelPrompt(request.getQuestion(), contextSummary))
+        ));
+        return modelRequest;
+    }
+
+    private ModelMessageRequest modelMessage(String role, String content) {
+        ModelMessageRequest message = new ModelMessageRequest();
+        message.setRole(role);
+        message.setContent(content);
+        return message;
+    }
+
+    private String userModelPrompt(String question, String contextSummary) {
+        if (contextSummary == null || contextSummary.isBlank()) {
+            return "Question:\n" + question.trim();
+        }
+        return "Conversation context:\n" + contextSummary + "\n\nQuestion:\n" + question.trim();
+    }
+
+    private void validateModelCall(QaMessageRequest request, RouteDecisionResponse routeDecision,
+                                   ModelCallResponse modelCall) {
+        if (modelCall == null) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "QA model call response must not be null");
+        }
+        if (!request.getProjectId().equals(modelCall.getProjectId())) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "QA model call project id must match request");
+        }
+        if (!sameNullable(request.getUserId(), modelCall.getUserId())) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "QA model call user id must match request");
+        }
+        if (!sameNullable(request.getRequestId(), modelCall.getRequestId())) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "QA model call request id must match request");
+        }
+        if (modelCall.getRouteMode() != routeDecision.getRouteMode()) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "QA model call route mode must match route decision");
+        }
+        if (modelCall.getStatus() != ModelCallStatus.SUCCESS) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "QA model call did not produce a successful answer");
+        }
+        if (modelCall.getCostMs() == null || modelCall.getCostMs() < 0) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "QA model call costMs must not be null or negative");
+        }
+        requireRouteText(modelCall.getProvider(),
+                "QA model call provider must not be blank");
+        requireRouteText(modelCall.getModelName(),
+                "QA model call model name must not be blank");
+        requireRouteText(modelCall.getContent(),
+                "QA model call answer content must not be blank");
     }
 
     private KnowledgeSearchRequest knowledgeRequest(QaMessageRequest request, RouteDecisionResponse routeDecision) {
