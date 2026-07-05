@@ -47,6 +47,7 @@ public class QaMessageApplicationService {
         routeRequest.setConversationContextSummary(contextSummary);
 
         RouteDecisionResponse routeDecision = routeDecisionFacade.decide(routeRequest);
+        validateRouteDecision(routeDecision);
         QaMessageResponse response = new QaMessageResponse();
         response.setProjectId(request.getProjectId());
         response.setSessionId(sessionId);
@@ -62,6 +63,48 @@ public class QaMessageApplicationService {
         response.setStatus(QaReplyStatus.ROUTE_DECIDED);
         response.setPendingReason("Answer generation awaits selected capability adapters");
         return response;
+    }
+
+    private void validateRouteDecision(RouteDecisionResponse routeDecision) {
+        if (routeDecision == null) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "QA route decision must not be null");
+        }
+        if (routeDecision.getRouteMode() == null) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "QA route decision route mode must not be null");
+        }
+        validateRouteIds(routeDecision.getSelectedKnowledgeBaseIds(), "QA route knowledge base id");
+        validateRouteIds(routeDecision.getSelectedDataSourceIds(), "QA route data source id");
+        requireRouteText(routeDecision.getRationale(), "QA route decision rationale must not be blank");
+        if (routeDecision.getDeterministicScore() == null
+                || routeDecision.getDeterministicScore() < 0
+                || routeDecision.getDeterministicScore() > 1) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "QA route decision score must be between 0 and 1");
+        }
+        if (routeDecision.isNeedClarification()) {
+            requireRouteText(routeDecision.getClarificationQuestion(),
+                    "QA route clarification question must not be blank");
+        }
+    }
+
+    private void requireRouteText(String value, String message) {
+        if (value == null || value.isBlank()) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, message);
+        }
+    }
+
+    private void validateRouteIds(List<Long> ids, String fieldName) {
+        if (ids == null) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, fieldName + " list must not be null");
+        }
+        for (Long id : ids) {
+            if (id == null) {
+                throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, fieldName + " must not be null");
+            }
+            if (id <= 0) {
+                throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, fieldName + " must be positive");
+            }
+        }
     }
 
     private void validateRequest(Long sessionId, QaMessageRequest request) {
