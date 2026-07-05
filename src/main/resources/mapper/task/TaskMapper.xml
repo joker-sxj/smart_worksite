@@ -53,6 +53,16 @@
           and deleted = 0
     </select>
 
+    <select id="selectTimeoutCandidates" resultMap="TaskResultMap">
+        select <include refid="TaskColumns"/>
+        from generate_task
+        where status in ('QUEUED', 'RUNNING', 'RETRYING')
+          and coalesce(started_at, created_at) &lt;= #{cutoffTime}
+          and deleted = 0
+        order by coalesce(started_at, created_at) asc, id asc
+        limit #{limit}
+    </select>
+
     <insert id="insertTask" useGeneratedKeys="true" keyProperty="id">
         insert into generate_task (
             project_id, task_type, biz_type, biz_id, status, current_stage,

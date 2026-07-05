@@ -5,12 +5,16 @@ import com.xd.smartworksite.task.domain.TaskStageLog;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Mapper
 public interface TaskMapper {
 
     GenerateTask selectTaskById(@Param("taskId") Long taskId);
+
+    List<GenerateTask> selectTimeoutCandidates(@Param("cutoffTime") LocalDateTime cutoffTime,
+                                               @Param("limit") int limit);
 
     int insertTask(GenerateTask task);
 

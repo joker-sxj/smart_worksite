@@ -7,10 +7,13 @@ import com.xd.smartworksite.task.domain.TaskStatus;
 
 import java.util.List;
 import java.util.Optional;
+import java.time.LocalDateTime;
 
 public interface TaskRepository {
 
     Optional<GenerateTask> findTaskById(Long taskId);
+
+    List<GenerateTask> findTimeoutCandidates(LocalDateTime cutoffTime, int limit);
 
     void create(GenerateTask task);
 

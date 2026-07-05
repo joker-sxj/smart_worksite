@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Optional;
+import java.time.LocalDateTime;
 
 @Repository
 public class MyBatisTaskRepository implements TaskRepository {
@@ -22,6 +23,11 @@ public class MyBatisTaskRepository implements TaskRepository {
     @Override
     public Optional<GenerateTask> findTaskById(Long taskId) {
         return Optional.ofNullable(taskMapper.selectTaskById(taskId));
+    }
+
+    @Override
+    public List<GenerateTask> findTimeoutCandidates(LocalDateTime cutoffTime, int limit) {
+        return taskMapper.selectTimeoutCandidates(cutoffTime, limit);
     }
 
     @Override

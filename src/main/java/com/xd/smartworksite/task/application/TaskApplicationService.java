@@ -20,6 +20,7 @@ import com.xd.smartworksite.task.repository.TaskRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -115,6 +116,24 @@ public class TaskApplicationService implements TaskStageFacade {
     }
 
     @Transactional
+    public int markTimedOutTasks(LocalDateTime cutoffTime, int limit, String reason) {
+        validateTimeoutScan(cutoffTime, limit, reason);
+        String errorMessage = reason == null || reason.isBlank() ? "Task execution timed out" : reason.trim();
+        int markedCount = 0;
+        for (GenerateTask task : taskRepository.findTimeoutCandidates(cutoffTime, limit)) {
+            validateWorkerTask(task);
+            TaskStatus expectedStatus = task.getStatus();
+            task.ensureTimeoutMarkAllowed();
+            task.transitionTo(TaskStatus.FAILED);
+            if (taskRepository.updateStatus(task, expectedStatus, TaskStatus.FAILED,
+                    task.getCurrentStage(), errorMessage)) {
+                markedCount++;
+            }
+        }
+        return markedCount;
+    }
+
+    @Transactional
     @Override
     public void recordStage(TaskStageLog stageLog) {
         validateStageLog(stageLog);
@@ -198,6 +217,16 @@ public class TaskApplicationService implements TaskStageFacade {
                 && (request.getMaxRetryCount() < 0 || request.getMaxRetryCount() > 10)) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Task max retry count must be between 0 and 10");
         }
+    }
+
+    private void validateTimeoutScan(LocalDateTime cutoffTime, int limit, String reason) {
+        if (cutoffTime == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Task timeout cutoff time must not be null");
+        }
+        if (limit < 1 || limit > 500) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Task timeout scan limit must be between 1 and 500");
+        }
+        requireMaxLength(reason, 4000, "Task timeout reason must not exceed 4000 characters");
     }
 
     private void validateProjectTaskIds(Long projectId, Long taskId) {
