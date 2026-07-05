@@ -74,6 +74,9 @@ public class ModelCallApplicationService {
         if (request.getProjectId() == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Project id must not be null");
         }
+        requirePositive(request.getProjectId(), "Project id must be positive");
+        requirePositive(request.getUserId(), "Model user id must be positive");
+        requirePositive(request.getTaskId(), "Model task id must be positive");
         requireMaxLength(request.getRequestId(), 128, "Request id must not exceed 128 characters");
         requireMaxLength(request.getModelName(), 128, "Model name must not exceed 128 characters");
         if (request.getRouteMode() == null) {
@@ -110,6 +113,12 @@ public class ModelCallApplicationService {
 
     private void requireMaxLength(String value, int maxLength, String message) {
         if (value != null && value.length() > maxLength) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
+        }
+    }
+
+    private void requirePositive(Long value, String message) {
+        if (value != null && value <= 0) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, message);
         }
     }

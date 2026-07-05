@@ -54,6 +54,8 @@ public class RouteDecisionApplicationService implements RouteDecisionFacade {
         if (request.getProjectId() == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Project id must not be null");
         }
+        requirePositive(request.getProjectId(), "Project id must be positive");
+        requirePositive(request.getUserId(), "Route user id must be positive");
         requireText(request.getQuestion(), "Route question must not be blank");
         requireMaxLength(request.getQuestion(), 1000, "Route question must not exceed 1000 characters");
         requireMaxLength(request.getRequestId(), 128, "Request id must not exceed 128 characters");
@@ -78,6 +80,12 @@ public class RouteDecisionApplicationService implements RouteDecisionFacade {
     private void requireIdListSize(List<Long> ids, int maxSize, String fieldName) {
         if (ids != null && ids.size() > maxSize) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, fieldName + " count must not exceed " + maxSize);
+        }
+    }
+
+    private void requirePositive(Long value, String message) {
+        if (value != null && value <= 0) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
         }
     }
 
@@ -138,6 +146,7 @@ public class RouteDecisionApplicationService implements RouteDecisionFacade {
             if (id == null) {
                 throw new BusinessException(ErrorCode.PARAM_ERROR, fieldName + " must not be null");
             }
+            requirePositive(id, fieldName + " must be positive");
         }
         return ids.stream()
                 .collect(Collectors.toCollection(LinkedHashSet::new))

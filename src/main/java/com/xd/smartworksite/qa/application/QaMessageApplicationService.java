@@ -68,12 +68,15 @@ public class QaMessageApplicationService {
         if (sessionId == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "QA session id must not be null");
         }
+        requirePositive(sessionId, "QA session id must be positive");
         if (request == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "QA message request must not be null");
         }
         if (request.getProjectId() == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Project id must not be null");
         }
+        requirePositive(request.getProjectId(), "Project id must be positive");
+        requirePositive(request.getUserId(), "QA user id must be positive");
         requireText(request.getQuestion(), "QA question must not be blank");
         requireMaxLength(request.getQuestion(), 1000, "QA question must not exceed 1000 characters");
         requireMaxLength(request.getRequestId(), 128, "Request id must not exceed 128 characters");
@@ -101,6 +104,7 @@ public class QaMessageApplicationService {
             if (id == null) {
                 throw new BusinessException(ErrorCode.PARAM_ERROR, fieldName + " must not be null");
             }
+            requirePositive(id, fieldName + " must be positive");
         }
     }
 
@@ -131,6 +135,12 @@ public class QaMessageApplicationService {
 
     private void requireMaxLength(String value, int maxLength, String message) {
         if (value != null && value.length() > maxLength) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
+        }
+    }
+
+    private void requirePositive(Long value, String message) {
+        if (value != null && value <= 0) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, message);
         }
     }
