@@ -5,7 +5,9 @@ import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.datasource.domain.SqlSafetyResult;
 import net.sf.jsqlparser.JSQLParserException;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
-import net.sf.jsqlparser.schema.Table;
+import net.sf.jsqlparser.statement.select.FromItem;
+import net.sf.jsqlparser.statement.select.Join;
+import net.sf.jsqlparser.statement.select.ParenthesedFromItem;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.Statements;
 import net.sf.jsqlparser.statement.select.ParenthesedSelect;
@@ -56,6 +58,11 @@ public class ReadOnlySqlValidator {
     }
 
     private void rejectSelectInto(Select select) {
+        if (select.getWithItemsList() != null) {
+            for (WithItem withItem : select.getWithItemsList()) {
+                rejectSelectInto(withItem);
+            }
+        }
         if (select instanceof PlainSelect plainSelect) {
             rejectPlainSelectInto(plainSelect);
             return;
@@ -70,19 +77,37 @@ public class ReadOnlySqlValidator {
             rejectSelectInto(parenthesedSelect.getSelect());
             return;
         }
-        if (select instanceof WithItem withItem && withItem.getSelect() != null) {
-            rejectSelectInto(withItem.getSelect());
-        }
     }
 
     private void rejectPlainSelectInto(PlainSelect plainSelect) {
         if (plainSelect.getIntoTables() != null && !plainSelect.getIntoTables().isEmpty()) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "SELECT INTO is not allowed");
         }
+        rejectFromItemSelectInto(plainSelect.getFromItem());
+        if (plainSelect.getJoins() != null) {
+            for (Join join : plainSelect.getJoins()) {
+                rejectFromItemSelectInto(join.getRightItem());
+            }
+        }
         for (SelectItem<?> selectItem : plainSelect.getSelectItems()) {
             // JSqlParser traverses nested SELECTs for table names; mutation is rejected by statement type.
             if (selectItem == null) {
                 throw new BusinessException(ErrorCode.PARAM_ERROR, "Invalid SELECT item");
+            }
+        }
+    }
+
+    private void rejectFromItemSelectInto(FromItem fromItem) {
+        if (fromItem instanceof ParenthesedSelect parenthesedSelect) {
+            rejectSelectInto(parenthesedSelect);
+            return;
+        }
+        if (fromItem instanceof ParenthesedFromItem parenthesedFromItem) {
+            rejectFromItemSelectInto(parenthesedFromItem.getFromItem());
+            if (parenthesedFromItem.getJoins() != null) {
+                for (Join join : parenthesedFromItem.getJoins()) {
+                    rejectFromItemSelectInto(join.getRightItem());
+                }
             }
         }
     }
