@@ -6,6 +6,7 @@ import com.xd.smartworksite.audit.dto.ExternalCallSummary;
 import com.xd.smartworksite.knowledge.domain.KnowledgeBase;
 import com.xd.smartworksite.knowledge.dto.KnowledgeSearchRequest;
 import com.xd.smartworksite.knowledge.dto.KnowledgeSearchResponse;
+import com.xd.smartworksite.knowledge.dto.KnowledgeSnippetResponse;
 import com.xd.smartworksite.knowledge.facade.KnowledgeSearchFacade;
 import com.xd.smartworksite.knowledge.infra.KnowledgeRetrievalClient;
 import com.xd.smartworksite.knowledge.repository.KnowledgeBaseRepository;
@@ -33,7 +34,7 @@ public class KnowledgeSearchApplicationService implements KnowledgeSearchFacade 
         validateRequest(request);
         List<Long> validatedKnowledgeBaseIds = resolveKnowledgeBaseIds(request);
         KnowledgeSearchResponse response = knowledgeRetrievalClient.search(request, validatedKnowledgeBaseIds);
-        validateRetrievalResponse(response);
+        validateRetrievalResponse(response, request, validatedKnowledgeBaseIds);
         applyResponseContext(request, validatedKnowledgeBaseIds, response);
         if (response.getExternalCallSummary() == null) {
             response.setExternalCallSummary(summary(request, validatedKnowledgeBaseIds, response));
@@ -42,7 +43,8 @@ public class KnowledgeSearchApplicationService implements KnowledgeSearchFacade 
         return response;
     }
 
-    private void validateRetrievalResponse(KnowledgeSearchResponse response) {
+    private void validateRetrievalResponse(KnowledgeSearchResponse response, KnowledgeSearchRequest request,
+                                           List<Long> validatedKnowledgeBaseIds) {
         if (response == null) {
             throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
                     "Knowledge retrieval response must not be null");
@@ -50,6 +52,69 @@ public class KnowledgeSearchApplicationService implements KnowledgeSearchFacade 
         if (response.getSnippets() == null) {
             throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
                     "Knowledge retrieval snippets must not be null");
+        }
+        if (response.getSnippets().size() > request.getTopK()) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Knowledge retrieval snippets must not exceed requested topK");
+        }
+        if (response.getCostMs() == null || response.getCostMs() < 0) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Knowledge retrieval costMs must not be null or negative");
+        }
+        if (response.getResultSummary() == null || response.getResultSummary().isBlank()) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Knowledge retrieval result summary must not be blank");
+        }
+        if (response.getResultSummary().length() > 500) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Knowledge retrieval result summary must not exceed 500 characters");
+        }
+        for (KnowledgeSnippetResponse snippet : response.getSnippets()) {
+            validateSnippet(snippet, validatedKnowledgeBaseIds);
+        }
+    }
+
+    private void validateSnippet(KnowledgeSnippetResponse snippet, List<Long> validatedKnowledgeBaseIds) {
+        if (snippet == null) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Knowledge retrieval snippet must not be null");
+        }
+        requirePositiveExternal(snippet.getKnowledgeBaseId(),
+                "Knowledge retrieval snippet knowledge base id must be positive");
+        if (!validatedKnowledgeBaseIds.contains(snippet.getKnowledgeBaseId())) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Knowledge retrieval snippet knowledge base id is outside validated scope");
+        }
+        requirePositiveExternal(snippet.getDocumentId(),
+                "Knowledge retrieval snippet document id must be positive");
+        requireSnippetText(snippet.getTitle(), 200, "Knowledge retrieval snippet title");
+        requireSnippetText(snippet.getSourceType(), 64, "Knowledge retrieval snippet source type");
+        requireSnippetText(snippet.getLocation(), 300, "Knowledge retrieval snippet location");
+        requireSnippetText(snippet.getContentExcerpt(), 2000, "Knowledge retrieval snippet content excerpt");
+        requireScore(snippet.getScore(), "Knowledge retrieval snippet score");
+        if (snippet.getRerankScore() != null) {
+            requireScore(snippet.getRerankScore(), "Knowledge retrieval snippet rerank score");
+        }
+    }
+
+    private void requireSnippetText(String value, int maxLength, String fieldName) {
+        if (value == null || value.isBlank()) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, fieldName + " must not be blank");
+        }
+        if (value.length() > maxLength) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, fieldName + " must not exceed " + maxLength + " characters");
+        }
+    }
+
+    private void requireScore(Double value, String fieldName) {
+        if (value == null || value < 0 || value > 100 || value.isNaN() || value.isInfinite()) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, fieldName + " must be between 0 and 100");
+        }
+    }
+
+    private void requirePositiveExternal(Long value, String message) {
+        if (value == null || value <= 0) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, message);
         }
     }
 
