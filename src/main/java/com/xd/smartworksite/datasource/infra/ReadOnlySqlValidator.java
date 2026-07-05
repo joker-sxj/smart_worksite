@@ -34,6 +34,9 @@ public class ReadOnlySqlValidator {
         for (String tableName : finder.getTableList(statement)) {
             tableNames.add(normalizeIdentifier(tableName));
         }
+        if (tableNames.isEmpty()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "SELECT must reference at least one table");
+        }
         return new SqlSafetyResult(statement.toString(), List.copyOf(tableNames));
     }
 
