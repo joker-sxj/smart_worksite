@@ -42,6 +42,13 @@ logging:
     level: "%5p [requestId:%X{requestId:-}]"
 
 app:
+  task:
+    timeout-scan:
+      enabled: ${TASK_TIMEOUT_SCAN_ENABLED:false}
+      fixed-delay-ms: ${TASK_TIMEOUT_SCAN_FIXED_DELAY_MS:}
+      stale-after-ms: ${TASK_TIMEOUT_SCAN_STALE_AFTER_MS:}
+      batch-limit: ${TASK_TIMEOUT_SCAN_BATCH_LIMIT:}
+      reason: ${TASK_TIMEOUT_SCAN_REASON:}
   intelligence:
     model:
       openai-compatible:
