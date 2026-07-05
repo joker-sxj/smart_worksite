@@ -96,10 +96,14 @@ public class QaMessageApplicationService {
         }
         response.setStatus(QaReplyStatus.ROUTE_DECIDED);
         if (routeDecision.getRouteMode() == RouteMode.KNOWLEDGE) {
-            KnowledgeSearchResponse knowledgeSearch = knowledgeSearchFacade.search(knowledgeRequest(request, routeDecision));
-            validateKnowledgeSearch(request, routeDecision, knowledgeSearch);
-            response.setKnowledgeSearch(knowledgeSearch);
+            response.setKnowledgeSearch(executeKnowledgeSearch(request, routeDecision));
             response.setPendingReason("Answer generation awaits model synthesis after knowledge retrieval");
+            return response;
+        }
+        if (routeDecision.getRouteMode() == RouteMode.MIXED) {
+            response.setKnowledgeSearch(executeKnowledgeSearch(request, routeDecision));
+            response.setDatabaseQuery(executeDatabaseQuery(request, routeDecision));
+            response.setPendingReason("Answer generation awaits model synthesis after mixed retrieval and database validation");
             return response;
         }
         if (routeDecision.getRouteMode() == RouteMode.MODEL) {
@@ -110,15 +114,25 @@ public class QaMessageApplicationService {
             return response;
         }
         if (routeDecision.getRouteMode() == RouteMode.DATABASE) {
-            DatabaseQueryResponse databaseQuery = databaseQuestionApplicationService.query(
-                    databaseRequest(request, routeDecision));
-            validateDatabaseQuery(request, routeDecision, databaseQuery);
-            response.setDatabaseQuery(databaseQuery);
+            response.setDatabaseQuery(executeDatabaseQuery(request, routeDecision));
             response.setPendingReason("Answer generation awaits model synthesis after database validation");
             return response;
         }
         response.setPendingReason("Answer generation awaits selected capability adapters");
         return response;
+    }
+
+    private KnowledgeSearchResponse executeKnowledgeSearch(QaMessageRequest request, RouteDecisionResponse routeDecision) {
+        KnowledgeSearchResponse knowledgeSearch = knowledgeSearchFacade.search(knowledgeRequest(request, routeDecision));
+        validateKnowledgeSearch(request, routeDecision, knowledgeSearch);
+        return knowledgeSearch;
+    }
+
+    private DatabaseQueryResponse executeDatabaseQuery(QaMessageRequest request, RouteDecisionResponse routeDecision) {
+        DatabaseQueryResponse databaseQuery = databaseQuestionApplicationService.query(
+                databaseRequest(request, routeDecision));
+        validateDatabaseQuery(request, routeDecision, databaseQuery);
+        return databaseQuery;
     }
 
     private DatabaseQueryRequest databaseRequest(QaMessageRequest request, RouteDecisionResponse routeDecision) {
@@ -140,7 +154,7 @@ public class QaMessageApplicationService {
     private Long singleDataSourceId(RouteDecisionResponse routeDecision) {
         if (routeDecision.getSelectedDataSourceIds().size() != 1) {
             throw new BusinessException(ErrorCode.PARAM_ERROR,
-                    "QA DATABASE route currently requires exactly one data source");
+                    "QA database execution currently requires exactly one data source");
         }
         return routeDecision.getSelectedDataSourceIds().get(0);
     }
