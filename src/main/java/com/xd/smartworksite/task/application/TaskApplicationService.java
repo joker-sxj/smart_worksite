@@ -10,6 +10,7 @@ import com.xd.smartworksite.task.domain.GenerateTask;
 import com.xd.smartworksite.task.domain.TaskQueueMessage;
 import com.xd.smartworksite.task.domain.TaskStageCode;
 import com.xd.smartworksite.task.domain.TaskStageLog;
+import com.xd.smartworksite.task.domain.TaskStageStatus;
 import com.xd.smartworksite.task.domain.TaskStatus;
 import com.xd.smartworksite.task.dto.TaskCreateRequest;
 import com.xd.smartworksite.task.dto.TaskResponse;
@@ -224,6 +225,14 @@ public class TaskApplicationService implements TaskStageFacade {
         requireMaxLength(stageLog.getInputSummary(), 4000, "Task stage input summary must not exceed 4000 characters");
         requireMaxLength(stageLog.getOutputSummary(), 4000, "Task stage output summary must not exceed 4000 characters");
         requireMaxLength(stageLog.getErrorMessage(), 4000, "Task stage error message must not exceed 4000 characters");
+        if (stageLog.getStatus() == TaskStageStatus.FAILED
+                && (stageLog.getErrorMessage() == null || stageLog.getErrorMessage().isBlank())) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Task failed stage error message must not be blank");
+        }
+        if (stageLog.getStatus() == TaskStageStatus.SUCCESS
+                && stageLog.getErrorMessage() != null && !stageLog.getErrorMessage().isBlank()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Task success stage error message must be blank");
+        }
         if (stageLog.getCostMs() != null && stageLog.getCostMs() < 0) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Task stage costMs must not be negative");
         }
