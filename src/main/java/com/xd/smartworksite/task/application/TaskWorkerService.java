@@ -56,6 +56,7 @@ public class TaskWorkerService {
         if (lockToken == null) {
             return false;
         }
+        GenerateTask runningTaskForFailure = null;
         try {
             GenerateTask task = taskApplicationService.loadTaskForWorker(message.getTaskId());
             if (!task.getProjectId().equals(message.getProjectId())) {
@@ -75,14 +76,14 @@ public class TaskWorkerService {
             if (!taskApplicationService.markRunning(task)) {
                 return false;
             }
+            runningTaskForFailure = task;
             GenerateTask runningTask = taskApplicationService.loadTaskForWorker(task.getId());
             handler.get().handle(new TaskExecutionContext(runningTask, message));
             taskApplicationService.markSuccess(runningTask);
             return true;
         } catch (RuntimeException exception) {
-            GenerateTask latestTask = taskApplicationService.loadTaskForWorker(message.getTaskId());
-            if (latestTask.getStatus() == TaskStatus.RUNNING) {
-                taskApplicationService.markFailed(latestTask, summarize(exception));
+            if (runningTaskForFailure != null && runningTaskForFailure.getStatus() == TaskStatus.RUNNING) {
+                taskApplicationService.markFailed(runningTaskForFailure, summarize(exception));
             }
             throw exception;
         } finally {
