@@ -17,15 +17,35 @@ public class TaskHandlerRegistry {
     public TaskHandlerRegistry(List<TaskHandler> taskHandlers) {
         Map<String, TaskHandler> mappedHandlers = new HashMap<>();
         for (TaskHandler handler : taskHandlers) {
-            TaskHandler previous = mappedHandlers.putIfAbsent(handler.taskType(), handler);
+            String taskType = validateHandler(handler);
+            TaskHandler previous = mappedHandlers.putIfAbsent(taskType, handler);
             if (previous != null) {
-                throw new BusinessException(ErrorCode.CONFLICT, "Duplicate task handler for type " + handler.taskType());
+                throw new BusinessException(ErrorCode.CONFLICT, "Duplicate task handler for type " + taskType);
             }
         }
         this.handlers = Map.copyOf(mappedHandlers);
     }
 
     public Optional<TaskHandler> findHandler(String taskType) {
+        validateTaskType(taskType);
         return Optional.ofNullable(handlers.get(taskType));
+    }
+
+    private String validateHandler(TaskHandler handler) {
+        if (handler == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Task handler must not be null");
+        }
+        String taskType = handler.taskType();
+        validateTaskType(taskType);
+        return taskType;
+    }
+
+    private void validateTaskType(String taskType) {
+        if (taskType == null || taskType.isBlank()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Task handler type must not be blank");
+        }
+        if (taskType.length() > 64) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Task handler type must not exceed 64 characters");
+        }
     }
 }
