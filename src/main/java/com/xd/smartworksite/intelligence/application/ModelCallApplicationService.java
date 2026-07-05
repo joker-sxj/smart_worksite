@@ -30,8 +30,7 @@ public class ModelCallApplicationService {
             ModelCallResponse response = modelProviderClient.call(request);
             validateProviderResponse(response);
             applyRequestContext(request, response);
-            response.setExternalCallSummary(summary(request, response.getStatus(), response.getErrorMessage(),
-                    response.getCostMs()));
+            response.setExternalCallSummary(summary(request, response.getStatus(), response.getCostMs()));
             applySummaryContext(request, response.getExternalCallSummary());
             return response;
         } catch (BusinessException exception) {
@@ -43,8 +42,7 @@ public class ModelCallApplicationService {
             response.setErrorMessage(exception.getMessage());
             response.setCostMs(elapsedMs(start));
             applyRequestContext(request, response);
-            response.setExternalCallSummary(summary(request, ModelCallStatus.FAILED, exception.getMessage(),
-                    response.getCostMs()));
+            response.setExternalCallSummary(summary(request, ModelCallStatus.FAILED, response.getCostMs()));
             return response;
         }
     }
@@ -156,8 +154,7 @@ public class ModelCallApplicationService {
         }
     }
 
-    private ExternalCallSummary summary(ModelCallRequest request, ModelCallStatus status, String errorMessage,
-                                        Long costMs) {
+    private ExternalCallSummary summary(ModelCallRequest request, ModelCallStatus status, Long costMs) {
         ExternalCallSummary summary = new ExternalCallSummary();
         summary.setProjectId(request.getProjectId());
         summary.setUserId(request.getUserId());
@@ -172,7 +169,6 @@ public class ModelCallApplicationService {
         summary.setResponseSummary(status == ModelCallStatus.SUCCESS ? "status=SUCCESS" : "status=FAILED");
         summary.setStatus(status.name());
         summary.setCostMs(costMs);
-        summary.setErrorMessage(errorMessage);
         return summary;
     }
 
