@@ -76,6 +76,10 @@ public class DatabaseQuestionApplicationService {
         if (request.getDataSourceId() == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Data source id must not be null");
         }
+        requirePositive(request.getProjectId(), "Project id must be positive");
+        requirePositive(request.getDataSourceId(), "Data source id must be positive");
+        requirePositive(request.getUserId(), "Database user id must be positive");
+        requirePositive(request.getTaskId(), "Database task id must be positive");
         requireText(request.getQuestion(), "Database question must not be blank");
         requireText(request.getSql(), "SQL must not be blank");
         requireMaxLength(request.getQuestion(), 1000, "Database question must not exceed 1000 characters");
@@ -101,6 +105,12 @@ public class DatabaseQuestionApplicationService {
 
     private void requireMaxLength(String value, int maxLength, String message) {
         if (value != null && value.length() > maxLength) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
+        }
+    }
+
+    private void requirePositive(Long value, String message) {
+        if (value != null && value <= 0) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, message);
         }
     }

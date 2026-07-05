@@ -52,6 +52,9 @@ public class KnowledgeSearchApplicationService implements KnowledgeSearchFacade 
         if (request.getProjectId() == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Project id must not be null");
         }
+        requirePositive(request.getProjectId(), "Project id must be positive");
+        requirePositive(request.getUserId(), "Knowledge user id must be positive");
+        requirePositive(request.getTaskId(), "Knowledge task id must be positive");
         requireText(request.getQuery(), "Knowledge query must not be blank");
         requireMaxLength(request.getQuery(), 1000, "Knowledge query must not exceed 1000 characters");
         requireMaxLength(request.getRouteMode(), 32, "Route mode must not exceed 32 characters");
@@ -76,6 +79,12 @@ public class KnowledgeSearchApplicationService implements KnowledgeSearchFacade 
 
     private void requireMaxLength(String value, int maxLength, String message) {
         if (value != null && value.length() > maxLength) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
+        }
+    }
+
+    private void requirePositive(Long value, String message) {
+        if (value != null && value <= 0) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, message);
         }
     }
@@ -148,6 +157,7 @@ public class KnowledgeSearchApplicationService implements KnowledgeSearchFacade 
             if (knowledgeBaseId == null) {
                 throw new BusinessException(ErrorCode.PARAM_ERROR, "Knowledge base id must not be null");
             }
+            requirePositive(knowledgeBaseId, "Knowledge base id must be positive");
         }
         return knowledgeBaseIds.stream()
                 .collect(Collectors.toCollection(LinkedHashSet::new))
