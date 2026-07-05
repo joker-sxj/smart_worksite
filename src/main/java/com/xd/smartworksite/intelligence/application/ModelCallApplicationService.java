@@ -34,6 +34,7 @@ public class ModelCallApplicationService {
                 response.setExternalCallSummary(summary(request, response.getStatus(), response.getErrorMessage(),
                         elapsedMs(start)));
             }
+            applySummaryContext(request, response.getExternalCallSummary());
             return response;
         } catch (BusinessException exception) {
             ModelCallResponse response = new ModelCallResponse();
@@ -91,6 +92,14 @@ public class ModelCallApplicationService {
         response.setRequestId(request.getRequestId());
         response.setTaskId(request.getTaskId());
         response.setRouteMode(request.getRouteMode());
+    }
+
+    private void applySummaryContext(ModelCallRequest request, ExternalCallSummary summary) {
+        summary.setProjectId(request.getProjectId());
+        summary.setUserId(request.getUserId());
+        summary.setTaskId(request.getTaskId());
+        summary.setRouteMode(request.getRouteMode().name());
+        summary.setRequestId(request.getRequestId());
     }
 
     private void validateRequest(ModelCallRequest request) {
