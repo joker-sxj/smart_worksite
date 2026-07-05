@@ -2,6 +2,7 @@ package com.xd.smartworksite.qa.application;
 
 import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.result.ErrorCode;
+import com.xd.smartworksite.intelligence.domain.RouteMode;
 import com.xd.smartworksite.intelligence.dto.RouteDecisionRequest;
 import com.xd.smartworksite.intelligence.dto.RouteDecisionResponse;
 import com.xd.smartworksite.intelligence.facade.RouteDecisionFacade;
@@ -83,6 +84,7 @@ public class QaMessageApplicationService {
         }
         validateRouteIds(routeDecision.getSelectedKnowledgeBaseIds(), "QA route knowledge base id");
         validateRouteIds(routeDecision.getSelectedDataSourceIds(), "QA route data source id");
+        validateRouteResourceShape(routeDecision);
         requireRouteText(routeDecision.getRationale(), "QA route decision rationale must not be blank");
         if (routeDecision.getDeterministicScore() == null
                 || routeDecision.getDeterministicScore() < 0
@@ -93,6 +95,41 @@ public class QaMessageApplicationService {
         if (routeDecision.isNeedClarification()) {
             requireRouteText(routeDecision.getClarificationQuestion(),
                     "QA route clarification question must not be blank");
+        }
+    }
+
+    private void validateRouteResourceShape(RouteDecisionResponse routeDecision) {
+        boolean hasKnowledge = !routeDecision.getSelectedKnowledgeBaseIds().isEmpty();
+        boolean hasDataSource = !routeDecision.getSelectedDataSourceIds().isEmpty();
+        if (routeDecision.getRouteMode() == RouteMode.MODEL && (hasKnowledge || hasDataSource)) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "QA MODEL route decision must not select retrieval resources");
+        }
+        if (routeDecision.getRouteMode() == RouteMode.KNOWLEDGE) {
+            if (hasDataSource) {
+                throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                        "QA KNOWLEDGE route decision must not select data sources");
+            }
+            if (!routeDecision.isNeedClarification() && !hasKnowledge) {
+                throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                        "QA KNOWLEDGE route decision must select knowledge bases");
+            }
+        }
+        if (routeDecision.getRouteMode() == RouteMode.DATABASE) {
+            if (hasKnowledge) {
+                throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                        "QA DATABASE route decision must not select knowledge bases");
+            }
+            if (!routeDecision.isNeedClarification() && !hasDataSource) {
+                throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                        "QA DATABASE route decision must select data sources");
+            }
+        }
+        if (routeDecision.getRouteMode() == RouteMode.MIXED
+                && !routeDecision.isNeedClarification()
+                && (!hasKnowledge || !hasDataSource)) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "QA MIXED route decision must select knowledge bases and data sources");
         }
     }
 
