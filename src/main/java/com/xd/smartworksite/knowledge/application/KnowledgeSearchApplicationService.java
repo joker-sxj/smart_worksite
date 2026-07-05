@@ -33,16 +33,35 @@ public class KnowledgeSearchApplicationService implements KnowledgeSearchFacade 
         validateRequest(request);
         List<Long> validatedKnowledgeBaseIds = resolveKnowledgeBaseIds(request);
         KnowledgeSearchResponse response = knowledgeRetrievalClient.search(request, validatedKnowledgeBaseIds);
-        response.setProjectId(request.getProjectId());
-        response.setUserId(request.getUserId());
-        response.setTaskId(request.getTaskId());
-        response.setRouteMode(request.getRouteMode());
-        response.setRequestId(request.getRequestId());
+        validateRetrievalResponse(response);
+        applyResponseContext(request, validatedKnowledgeBaseIds, response);
         if (response.getExternalCallSummary() == null) {
             response.setExternalCallSummary(summary(request, validatedKnowledgeBaseIds, response));
         }
         applySummaryContext(request, response.getExternalCallSummary());
         return response;
+    }
+
+    private void validateRetrievalResponse(KnowledgeSearchResponse response) {
+        if (response == null) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Knowledge retrieval response must not be null");
+        }
+        if (response.getSnippets() == null) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                    "Knowledge retrieval snippets must not be null");
+        }
+    }
+
+    private void applyResponseContext(KnowledgeSearchRequest request, List<Long> validatedKnowledgeBaseIds,
+                                      KnowledgeSearchResponse response) {
+        response.setProjectId(request.getProjectId());
+        response.setUserId(request.getUserId());
+        response.setTaskId(request.getTaskId());
+        response.setRouteMode(request.getRouteMode());
+        response.setRequestId(request.getRequestId());
+        response.setKnowledgeBaseIds(validatedKnowledgeBaseIds);
+        response.setTopK(request.getTopK());
     }
 
     private void validateRequest(KnowledgeSearchRequest request) {
