@@ -185,6 +185,9 @@ public class TaskApplicationService implements TaskStageFacade {
         if (request.getProjectId() == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Project id must not be null");
         }
+        requirePositive(request.getProjectId(), "Project id must be positive");
+        requirePositive(request.getUserId(), "Task user id must be positive");
+        requirePositive(request.getBizId(), "Task business id must be positive");
         requireMaxLength(request.getRequestId(), 128, "Task request id must not exceed 128 characters");
         requireText(request.getTaskType(), "Task type must not be blank");
         requireMaxLength(request.getTaskType(), 64, "Task type must not exceed 64 characters");
@@ -202,6 +205,8 @@ public class TaskApplicationService implements TaskStageFacade {
         if (taskId == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Task id must not be null");
         }
+        requirePositive(projectId, "Project id must be positive");
+        requirePositive(taskId, "Task id must be positive");
     }
 
     private void validateStageLog(TaskStageLog stageLog) {
@@ -233,6 +238,8 @@ public class TaskApplicationService implements TaskStageFacade {
         if (task.getProjectId() == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Project id must not be null");
         }
+        requirePositive(task.getId(), "Task id must be positive");
+        requirePositive(task.getProjectId(), "Project id must be positive");
         if (task.getStatus() == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Task status must not be null");
         }
@@ -253,6 +260,12 @@ public class TaskApplicationService implements TaskStageFacade {
         }
     }
 
+    private void requirePositive(Long value, String message) {
+        if (value != null && value <= 0) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
+        }
+    }
+
     private GenerateTask loadTask(Long projectId, Long taskId) {
         GenerateTask task = loadTask(taskId);
         if (!task.getProjectId().equals(projectId)) {
@@ -262,6 +275,7 @@ public class TaskApplicationService implements TaskStageFacade {
     }
 
     private GenerateTask loadTask(Long taskId) {
+        requirePositive(taskId, "Task id must be positive");
         return taskRepository.findTaskById(taskId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Task does not exist"));
     }

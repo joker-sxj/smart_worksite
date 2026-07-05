@@ -39,6 +39,8 @@ public class TaskExecutionContext {
         if (task.getProjectId() == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Task execution context project id must not be null");
         }
+        requirePositive(task.getId(), "Task execution context task id must be positive");
+        requirePositive(task.getProjectId(), "Task execution context project id must be positive");
         if (task.getTaskType() == null || task.getTaskType().isBlank()) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Task execution context task type must not be blank");
         }
@@ -51,6 +53,9 @@ public class TaskExecutionContext {
         if (message == null) {
             return;
         }
+        requirePositive(message.getTaskId(), "Task execution context message task id must be positive");
+        requirePositive(message.getProjectId(), "Task execution context message project id must be positive");
+        requirePositive(message.getUserId(), "Task execution context message user id must be positive");
         if (!task.getId().equals(message.getTaskId())) {
             throw new BusinessException(ErrorCode.CONFLICT, "Task execution context message task id does not match task");
         }
@@ -59,6 +64,12 @@ public class TaskExecutionContext {
         }
         if (!task.getTaskType().equals(message.getTaskType())) {
             throw new BusinessException(ErrorCode.CONFLICT, "Task execution context message type does not match task");
+        }
+    }
+
+    private void requirePositive(Long value, String message) {
+        if (value != null && value <= 0) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
         }
     }
 

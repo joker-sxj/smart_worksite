@@ -109,6 +109,9 @@ public class TaskWorkerService {
         if (message.getProjectId() == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Task queue message project id must not be null");
         }
+        requirePositive(message.getTaskId(), "Task queue message task id must be positive");
+        requirePositive(message.getProjectId(), "Task queue message project id must be positive");
+        requirePositive(message.getUserId(), "Task queue message user id must be positive");
         if (message.getTaskType() == null || message.getTaskType().isBlank()) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Task queue message task type must not be blank");
         }
@@ -117,6 +120,12 @@ public class TaskWorkerService {
         }
         if (message.getRequestId() != null && message.getRequestId().length() > 128) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "Task queue message request id must not exceed 128 characters");
+        }
+    }
+
+    private void requirePositive(Long value, String message) {
+        if (value != null && value <= 0) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, message);
         }
     }
 
