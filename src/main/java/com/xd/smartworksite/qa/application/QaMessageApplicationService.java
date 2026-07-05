@@ -17,11 +17,18 @@ import com.xd.smartworksite.intelligence.facade.RouteDecisionFacade;
 import com.xd.smartworksite.knowledge.dto.KnowledgeSearchRequest;
 import com.xd.smartworksite.knowledge.dto.KnowledgeSearchResponse;
 import com.xd.smartworksite.knowledge.facade.KnowledgeSearchFacade;
+import com.xd.smartworksite.qa.domain.QaMessageRecord;
+import com.xd.smartworksite.qa.domain.QaMessageRole;
 import com.xd.smartworksite.qa.domain.QaReplyStatus;
+import com.xd.smartworksite.qa.domain.QaSession;
 import com.xd.smartworksite.qa.dto.QaHistoryMessageRequest;
 import com.xd.smartworksite.qa.dto.QaMessageRequest;
 import com.xd.smartworksite.qa.dto.QaMessageResponse;
+import com.xd.smartworksite.qa.dto.QaSessionCreateRequest;
+import com.xd.smartworksite.qa.dto.QaSessionResponse;
+import com.xd.smartworksite.qa.repository.QaConversationRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -33,6 +40,7 @@ public class QaMessageApplicationService {
     private final ModelCallApplicationService modelCallApplicationService;
     private final DatabaseQuestionApplicationService databaseQuestionApplicationService;
     private final ConversationContextAssembler conversationContextAssembler;
+    private final QaConversationRepository qaConversationRepository;
     private static final int MAX_CONTEXT_SUMMARY_LENGTH = 2000;
     private static final int KNOWLEDGE_TOP_K = 5;
     private static final int MODEL_TIMEOUT_MS = 10000;
@@ -47,25 +55,44 @@ public class QaMessageApplicationService {
     public QaMessageApplicationService(RouteDecisionFacade routeDecisionFacade,
                                        KnowledgeSearchFacade knowledgeSearchFacade,
                                        ModelCallApplicationService modelCallApplicationService,
-                                       DatabaseQuestionApplicationService databaseQuestionApplicationService) {
+                                       DatabaseQuestionApplicationService databaseQuestionApplicationService,
+                                       QaConversationRepository qaConversationRepository) {
         this(routeDecisionFacade, knowledgeSearchFacade, modelCallApplicationService,
-                databaseQuestionApplicationService, new ConversationContextAssembler());
+                databaseQuestionApplicationService, new ConversationContextAssembler(), qaConversationRepository);
     }
 
     QaMessageApplicationService(RouteDecisionFacade routeDecisionFacade,
                                 KnowledgeSearchFacade knowledgeSearchFacade,
                                 ModelCallApplicationService modelCallApplicationService,
                                 DatabaseQuestionApplicationService databaseQuestionApplicationService,
-                                ConversationContextAssembler conversationContextAssembler) {
+                                ConversationContextAssembler conversationContextAssembler,
+                                QaConversationRepository qaConversationRepository) {
         this.routeDecisionFacade = routeDecisionFacade;
         this.knowledgeSearchFacade = knowledgeSearchFacade;
         this.modelCallApplicationService = modelCallApplicationService;
         this.databaseQuestionApplicationService = databaseQuestionApplicationService;
         this.conversationContextAssembler = conversationContextAssembler;
+        this.qaConversationRepository = qaConversationRepository;
     }
 
+    @Transactional
+    public QaSessionResponse createSession(QaSessionCreateRequest request) {
+        validateSessionCreateRequest(request);
+        QaSession session = new QaSession();
+        session.setProjectId(request.getProjectId());
+        session.setTitle(normalizeNullableText(request.getTitle()));
+        session.setStatus("ACTIVE");
+        session.setCreatedBy(request.getUserId());
+        session.setUpdatedBy(request.getUserId());
+        qaConversationRepository.createSession(session);
+        return toSessionResponse(loadSession(session.getId()));
+    }
+
+    @Transactional
     public QaMessageResponse answer(Long sessionId, QaMessageRequest request) {
         validateRequest(sessionId, request);
+        QaSession session = loadSession(sessionId);
+        validateSessionAccess(session, request);
         String contextSummary = conversationContextAssembler.assemble(
                 request.getHistory(), request.getMaxContextMessages() == null ? 0 : request.getMaxContextMessages());
         requireMaxLength(contextSummary, MAX_CONTEXT_SUMMARY_LENGTH,
@@ -92,18 +119,21 @@ public class QaMessageApplicationService {
         if (routeDecision.isNeedClarification()) {
             response.setStatus(QaReplyStatus.CLARIFICATION_REQUIRED);
             response.setClarificationQuestion(routeDecision.getClarificationQuestion());
+            persistExchange(request, response);
             return response;
         }
         response.setStatus(QaReplyStatus.ROUTE_DECIDED);
         if (routeDecision.getRouteMode() == RouteMode.KNOWLEDGE) {
             response.setKnowledgeSearch(executeKnowledgeSearch(request, routeDecision));
             response.setPendingReason("Answer generation awaits model synthesis after knowledge retrieval");
+            persistExchange(request, response);
             return response;
         }
         if (routeDecision.getRouteMode() == RouteMode.MIXED) {
             response.setKnowledgeSearch(executeKnowledgeSearch(request, routeDecision));
             response.setDatabaseQuery(executeDatabaseQuery(request, routeDecision));
             response.setPendingReason("Answer generation awaits model synthesis after mixed retrieval and database validation");
+            persistExchange(request, response);
             return response;
         }
         if (routeDecision.getRouteMode() == RouteMode.MODEL) {
@@ -111,15 +141,66 @@ public class QaMessageApplicationService {
             validateModelCall(request, routeDecision, modelCall);
             response.setModelCall(modelCall);
             response.setAnswer(modelCall.getContent());
+            persistExchange(request, response);
             return response;
         }
         if (routeDecision.getRouteMode() == RouteMode.DATABASE) {
             response.setDatabaseQuery(executeDatabaseQuery(request, routeDecision));
             response.setPendingReason("Answer generation awaits model synthesis after database validation");
+            persistExchange(request, response);
             return response;
         }
         response.setPendingReason("Answer generation awaits selected capability adapters");
+        persistExchange(request, response);
         return response;
+    }
+
+    private void persistExchange(QaMessageRequest request, QaMessageResponse response) {
+        qaConversationRepository.saveMessage(userMessageRecord(request, response));
+        qaConversationRepository.saveMessage(assistantMessageRecord(request, response));
+    }
+
+    private QaMessageRecord userMessageRecord(QaMessageRequest request, QaMessageResponse response) {
+        QaMessageRecord record = baseMessageRecord(request, response);
+        record.setRole(QaMessageRole.USER);
+        record.setContent(request.getQuestion().trim());
+        return record;
+    }
+
+    private QaMessageRecord assistantMessageRecord(QaMessageRequest request, QaMessageResponse response) {
+        QaMessageRecord record = baseMessageRecord(request, response);
+        record.setRole(QaMessageRole.ASSISTANT);
+        record.setContent(assistantDisplayContent(response));
+        record.setReplyStatus(response.getStatus());
+        if (response.getRouteDecision() != null && response.getRouteDecision().getRouteMode() != null) {
+            record.setRouteMode(response.getRouteDecision().getRouteMode().name());
+            record.setRouteRationale(response.getRouteDecision().getRationale());
+        }
+        record.setAnswerContent(response.getAnswer());
+        record.setPendingReason(response.getPendingReason());
+        record.setClarificationQuestion(response.getClarificationQuestion());
+        return record;
+    }
+
+    private QaMessageRecord baseMessageRecord(QaMessageRequest request, QaMessageResponse response) {
+        QaMessageRecord record = new QaMessageRecord();
+        record.setProjectId(request.getProjectId());
+        record.setSessionId(response.getSessionId());
+        record.setUserId(request.getUserId());
+        record.setRequestId(request.getRequestId());
+        record.setCreatedBy(request.getUserId());
+        record.setUpdatedBy(request.getUserId());
+        return record;
+    }
+
+    private String assistantDisplayContent(QaMessageResponse response) {
+        if (response.getAnswer() != null && !response.getAnswer().isBlank()) {
+            return response.getAnswer();
+        }
+        if (response.getClarificationQuestion() != null && !response.getClarificationQuestion().isBlank()) {
+            return response.getClarificationQuestion();
+        }
+        return response.getPendingReason();
     }
 
     private KnowledgeSearchResponse executeKnowledgeSearch(QaMessageRequest request, RouteDecisionResponse routeDecision) {
@@ -457,6 +538,51 @@ public class QaMessageApplicationService {
         validateHistory(request.getHistory());
     }
 
+    private void validateSessionCreateRequest(QaSessionCreateRequest request) {
+        if (request == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "QA session create request must not be null");
+        }
+        if (request.getProjectId() == null) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "Project id must not be null");
+        }
+        requirePositive(request.getProjectId(), "Project id must be positive");
+        requirePositive(request.getUserId(), "QA user id must be positive");
+        requireMaxLength(request.getTitle(), 100, "QA session title must not exceed 100 characters");
+    }
+
+    private QaSession loadSession(Long sessionId) {
+        requirePositive(sessionId, "QA session id must be positive");
+        return qaConversationRepository.findSessionById(sessionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "QA session does not exist"));
+    }
+
+    private void validateSessionAccess(QaSession session, QaMessageRequest request) {
+        if (!request.getProjectId().equals(session.getProjectId())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "QA session does not belong to project");
+        }
+        if (request.getUserId() != null && session.getCreatedBy() != null
+                && !request.getUserId().equals(session.getCreatedBy())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "QA session does not belong to user");
+        }
+        if (session.getStatus() == null || session.getStatus().isBlank()) {
+            throw new BusinessException(ErrorCode.CONFLICT, "QA session status must not be blank");
+        }
+        if (!"ACTIVE".equals(session.getStatus())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "QA session is not active");
+        }
+    }
+
+    private QaSessionResponse toSessionResponse(QaSession session) {
+        QaSessionResponse response = new QaSessionResponse();
+        response.setSessionId(session.getId());
+        response.setProjectId(session.getProjectId());
+        response.setUserId(session.getCreatedBy());
+        response.setTitle(session.getTitle());
+        response.setStatus(session.getStatus());
+        response.setCreatedAt(session.getCreatedAt());
+        return response;
+    }
+
     private void validateIdList(List<Long> ids, int maxSize, String fieldName) {
         if (ids == null) {
             return;
@@ -507,5 +633,12 @@ public class QaMessageApplicationService {
         if (value != null && value <= 0) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, message);
         }
+    }
+
+    private String normalizeNullableText(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 }

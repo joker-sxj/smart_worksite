@@ -4,6 +4,8 @@ import com.xd.smartworksite.common.result.ApiResponse;
 import com.xd.smartworksite.qa.application.QaMessageApplicationService;
 import com.xd.smartworksite.qa.dto.QaMessageRequest;
 import com.xd.smartworksite.qa.dto.QaMessageResponse;
+import com.xd.smartworksite.qa.dto.QaSessionCreateRequest;
+import com.xd.smartworksite.qa.dto.QaSessionResponse;
 import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,6 +23,11 @@ public class QaMessageController {
 
     public QaMessageController(QaMessageApplicationService qaMessageApplicationService) {
         this.qaMessageApplicationService = qaMessageApplicationService;
+    }
+
+    @PostMapping
+    public ApiResponse<QaSessionResponse> createSession(@Valid @RequestBody QaSessionCreateRequest request) {
+        return ApiResponse.success(qaMessageApplicationService.createSession(request));
     }
 
     @PostMapping("/{sessionId}/messages")
