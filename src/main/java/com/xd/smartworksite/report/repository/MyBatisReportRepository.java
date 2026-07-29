@@ -148,6 +148,11 @@ public class MyBatisReportRepository implements ReportRepository {
     }
 
     @Override
+    public Optional<Long> findCurrentPdfFileId(Long reportId) {
+        return Optional.ofNullable(reportMapper.selectCurrentPdfFileId(reportId));
+    }
+
+    @Override
     public Optional<Report> findReportById(Long reportId) {
         return Optional.ofNullable(reportMapper.selectReportById(reportId));
     }

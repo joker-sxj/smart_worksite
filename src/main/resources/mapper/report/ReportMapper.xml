@@ -327,4 +327,13 @@
           and rv.word_file_id is not null
     </select>
 
+    <select id="selectCurrentPdfFileId" resultType="java.lang.Long">
+        select rv.pdf_file_id
+        from report r
+        join report_version rv on rv.id = r.current_version_id and rv.deleted = 0
+        where r.id = #{reportId}
+          and r.deleted = 0
+          and rv.pdf_file_id is not null
+    </select>
+
 </mapper>

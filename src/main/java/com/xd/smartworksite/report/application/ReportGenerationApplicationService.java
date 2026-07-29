@@ -43,17 +43,27 @@ import org.apache.poi.xwpf.usermodel.XWPFRun;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.font.PDFont;
+import org.apache.pdfbox.pdmodel.font.PDType0Font;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -77,6 +87,11 @@ public class ReportGenerationApplicationService {
     private static final String TASK_STAGE_AI_CONTENT_GENERATION = "AI_CONTENT_GENERATION";
     private static final String TASK_STAGE_TEMPLATE_RENDERING = "TEMPLATE_RENDERING";
     private static final String TASK_STAGE_STORING_RESULT = "STORING_RESULT";
+    private static final String WORD_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    private static final String PDF_CONTENT_TYPE = "application/pdf";
+    private static final float PDF_MARGIN = 56F;
+    private static final float PDF_FONT_SIZE = 11F;
+    private static final float PDF_LINE_HEIGHT = 18F;
     private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{\\{\\s*(var_[a-z0-9_]+)\\s*}}");
 
     private final ReportRepository reportRepository;
@@ -219,13 +234,15 @@ public class ReportGenerationApplicationService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告不存在"));
         projectAccessApplicationService.requireProjectAccess(report.getProjectId());
         String normalizedFormat = format == null || format.isBlank() ? "WORD" : format.trim().toUpperCase(Locale.ROOT);
-        if (!"WORD".equals(normalizedFormat)) {
-            throw new BusinessException(ErrorCode.PARAM_ERROR, "当前版本尚未生成PDF报告");
+        if (!"WORD".equals(normalizedFormat) && !"PDF".equals(normalizedFormat)) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "报告下载格式仅支持WORD或PDF");
         }
         if (!ReportStatus.COMPLETED.name().equals(report.getStatus())) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "报告尚未生成成功");
         }
-        return reportRepository.findCurrentWordFileId(reportId)
+        return ("PDF".equals(normalizedFormat)
+                ? reportRepository.findCurrentPdfFileId(reportId)
+                : reportRepository.findCurrentWordFileId(reportId))
                 .flatMap(reportRepository::findFileObjectById)
                 .map(file -> storageAdapter.createAccessUrl(file.getObjectName(), Duration.ofMinutes(10)))
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告文件不存在"));
@@ -296,7 +313,8 @@ public class ReportGenerationApplicationService {
 
         requireUpdated(reportRepository.updateTaskStatus(task.getId(), TASK_STATUS_PROCESSING, TASK_STAGE_STORING_RESULT, null), "task storing status update failed");
         Long wordFileId = saveGeneratedWord(report, reportBytes);
-        ReportVersion version = saveVersion(report, config, wordFileId, reportBytes);
+        Long pdfFileId = saveGeneratedPdf(report, renderPdf(reportBytes));
+        ReportVersion version = saveVersion(report, config, wordFileId, pdfFileId, reportBytes);
         requireUpdated(reportRepository.updateReportSuccess(report.getId(), version.getId(), ReportStatus.COMPLETED.name(), 100, null), "report success status update failed");
     }
 
@@ -485,11 +503,149 @@ public class ReportGenerationApplicationService {
         }
     }
 
+    private byte[] renderPdf(byte[] docxBytes) {
+        try (XWPFDocument wordDocument = new XWPFDocument(new ByteArrayInputStream(docxBytes));
+             PDDocument pdfDocument = new PDDocument();
+             ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            PDFont font = loadPdfFont(pdfDocument);
+            List<String> lines = new ArrayList<>();
+            for (String text : extractReportText(wordDocument)) {
+                lines.addAll(wrapLine(text, font, PDF_FONT_SIZE, PDRectangle.A4.getWidth() - PDF_MARGIN * 2));
+            }
+            writePdfLines(pdfDocument, font, lines);
+            pdfDocument.save(outputStream);
+            byte[] bytes = outputStream.toByteArray();
+            if (bytes.length == 0) {
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR, "生成PDF报告文件为空");
+            }
+            return bytes;
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (IOException ex) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "PDF报告生成失败: " + ex.getMessage());
+        } catch (RuntimeException ex) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "PDF报告内容写入失败: " + ex.getMessage());
+        }
+    }
+
+    private PDFont loadPdfFont(PDDocument document) throws IOException {
+        IOException lastFailure = null;
+        for (Path path : candidatePdfFontPaths()) {
+            if (Files.isRegularFile(path)) {
+                try {
+                    return PDType0Font.load(document, path.toFile());
+                } catch (IOException ex) {
+                    lastFailure = ex;
+                }
+            }
+        }
+        if (lastFailure != null) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "PDF报告字体加载失败: " + lastFailure.getMessage());
+        }
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR,
+                "PDF报告生成缺少中文字体，请配置环境变量REPORT_PDF_FONT_PATH指向TTF或OTF字体文件");
+    }
+
+    private List<Path> candidatePdfFontPaths() {
+        List<Path> paths = new ArrayList<>();
+        addFontPath(paths, System.getenv("REPORT_PDF_FONT_PATH"));
+        addFontPath(paths, System.getenv("SMART_WORKSITE_PDF_FONT_PATH"));
+        addFontPath(paths, "C:/Windows/Fonts/simhei.ttf");
+        addFontPath(paths, "C:/Windows/Fonts/NotoSansSC-VF.ttf");
+        addFontPath(paths, "C:/Windows/Fonts/Noto Sans SC (TrueType).otf");
+        addFontPath(paths, "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf");
+        addFontPath(paths, "/usr/share/fonts/truetype/noto/NotoSansSC-Regular.ttf");
+        return paths;
+    }
+
+    private void addFontPath(List<Path> paths, String value) {
+        if (value != null && !value.isBlank()) {
+            paths.add(new File(value.trim()).toPath());
+        }
+    }
+
+    private List<String> extractReportText(XWPFDocument document) {
+        List<String> lines = new ArrayList<>();
+        document.getParagraphs().forEach(paragraph -> addLine(lines, paragraph.getText()));
+        for (XWPFTable table : document.getTables()) {
+            for (XWPFTableRow row : table.getRows()) {
+                List<String> cells = row.getTableCells().stream().map(XWPFTableCell::getText).toList();
+                addLine(lines, String.join("  ", cells));
+            }
+        }
+        if (lines.isEmpty()) {
+            lines.add("报告内容为空");
+        }
+        return lines;
+    }
+
+    private void addLine(List<String> lines, String text) {
+        if (text != null && !text.isBlank()) {
+            lines.add(text.trim());
+        }
+    }
+
+    private List<String> wrapLine(String text, PDFont font, float fontSize, float maxWidth) throws IOException {
+        List<String> lines = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (int offset = 0; offset < text.length(); ) {
+            int codePoint = text.codePointAt(offset);
+            String next = new String(Character.toChars(codePoint));
+            String candidate = current + next;
+            if (!current.isEmpty() && stringWidth(candidate, font, fontSize) > maxWidth) {
+                lines.add(current.toString());
+                current.setLength(0);
+            }
+            current.append(next);
+            offset += Character.charCount(codePoint);
+        }
+        if (!current.isEmpty()) {
+            lines.add(current.toString());
+        }
+        return lines;
+    }
+
+    private float stringWidth(String text, PDFont font, float fontSize) throws IOException {
+        return font.getStringWidth(text) / 1000F * fontSize;
+    }
+
+    private void writePdfLines(PDDocument document, PDFont font, List<String> lines) throws IOException {
+        PDPage page = new PDPage(PDRectangle.A4);
+        document.addPage(page);
+        PDPageContentStream stream = new PDPageContentStream(document, page);
+        try {
+            stream.beginText();
+            stream.setFont(font, PDF_FONT_SIZE);
+            stream.setLeading(PDF_LINE_HEIGHT);
+            stream.newLineAtOffset(PDF_MARGIN, PDRectangle.A4.getHeight() - PDF_MARGIN);
+            float y = PDRectangle.A4.getHeight() - PDF_MARGIN;
+            for (String line : lines) {
+                if (y < PDF_MARGIN) {
+                    stream.endText();
+                    stream.close();
+                    page = new PDPage(PDRectangle.A4);
+                    document.addPage(page);
+                    stream = new PDPageContentStream(document, page);
+                    stream.beginText();
+                    stream.setFont(font, PDF_FONT_SIZE);
+                    stream.setLeading(PDF_LINE_HEIGHT);
+                    stream.newLineAtOffset(PDF_MARGIN, PDRectangle.A4.getHeight() - PDF_MARGIN);
+                    y = PDRectangle.A4.getHeight() - PDF_MARGIN;
+                }
+                stream.showText(line);
+                stream.newLine();
+                y -= PDF_LINE_HEIGHT;
+            }
+            stream.endText();
+        } finally {
+            stream.close();
+        }
+    }
+
     private Long saveGeneratedWord(Report report, byte[] bytes) {
         String objectName = "reports/project-" + report.getProjectId() + "/report-" + report.getId() + "/"
                 + LocalDate.now() + "/" + UUID.randomUUID() + ".docx";
-        StorageObject object = storageAdapter.upload(objectName, new ByteArrayInputStream(bytes), bytes.length,
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        StorageObject object = storageAdapter.upload(objectName, new ByteArrayInputStream(bytes), bytes.length, WORD_CONTENT_TYPE);
 
         FileObjectRecord fileObject = new FileObjectRecord();
         fileObject.setProjectId(report.getProjectId());
@@ -508,12 +664,35 @@ public class ReportGenerationApplicationService {
         return fileObject.getId();
     }
 
-    private ReportVersion saveVersion(Report report, ReportConfig config, Long wordFileId, byte[] reportBytes) {
+    private Long saveGeneratedPdf(Report report, byte[] bytes) {
+        String objectName = "reports/project-" + report.getProjectId() + "/report-" + report.getId() + "/"
+                + LocalDate.now() + "/" + UUID.randomUUID() + ".pdf";
+        StorageObject object = storageAdapter.upload(objectName, new ByteArrayInputStream(bytes), bytes.length, PDF_CONTENT_TYPE);
+
+        FileObjectRecord fileObject = new FileObjectRecord();
+        fileObject.setProjectId(report.getProjectId());
+        fileObject.setBizType("REPORT_OUTPUT");
+        fileObject.setBizId(report.getId());
+        fileObject.setFileName(report.getReportName() + ".pdf");
+        fileObject.setObjectName(object.getObjectName());
+        fileObject.setContentType(object.getContentType());
+        fileObject.setFileSize(object.getSize());
+        fileObject.setStatus("ACTIVE");
+        fileObject.setMetadata("{}");
+        reportRepository.saveFileObject(fileObject);
+        if (fileObject.getId() == null) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "report pdf file object id was not generated");
+        }
+        return fileObject.getId();
+    }
+
+    private ReportVersion saveVersion(Report report, ReportConfig config, Long wordFileId, Long pdfFileId, byte[] reportBytes) {
         ReportVersion version = new ReportVersion();
         version.setProjectId(report.getProjectId());
         version.setReportId(report.getId());
         version.setVersionNo(1);
         version.setWordFileId(wordFileId);
+        version.setPdfFileId(pdfFileId);
         Map<String, Object> sourceSnapshot = new LinkedHashMap<>();
         sourceSnapshot.put("templateId", config.getTemplateId());
         sourceSnapshot.put("templateEngine", ReportEngineType.JAVA_TEMPLATE_AI.name());

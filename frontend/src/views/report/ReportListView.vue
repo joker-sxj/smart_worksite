@@ -27,7 +27,7 @@ const pager = reactive({ pageNo: 1, pageSize: 20, total: 0 });
 const reports = ref<ReportItem[]>([]);
 const templates = ref<ReportTemplate[]>([]);
 const knowledgeBases = ref<KnowledgeBase[]>([]);
-const downloadingId = ref<ID>('');
+const downloadingKey = ref('');
 const form = reactive<{ reportName: string; reportType: string; templateId: ID | ''; knowledgeBaseId: ID | '' }>({
   reportName: '',
   reportType: 'SAFETY_MONTHLY',
@@ -141,17 +141,22 @@ async function submitCreate() {
   }
 }
 
-async function handleDownload(row: ReportItem) {
+async function handleDownload(row: ReportItem, format: 'WORD' | 'PDF') {
   if (!canDownloadReport(row)) return ElMessage.warning(`当前报告状态为 ${row.status}，尚不能下载`);
-  downloadingId.value = row.reportId;
+  downloadingKey.value = `${row.reportId}:${format}`;
   error.value = '';
   try {
-    await downloadReport(row.reportId, 'WORD', `${row.reportName}.docx`);
+    await downloadReport(row.reportId, format, `${row.reportName}.${format === 'PDF' ? 'pdf' : 'docx'}`);
   } catch (err) {
     error.value = err instanceof Error ? err.message : '报告下载失败';
   } finally {
-    downloadingId.value = '';
+    downloadingKey.value = '';
   }
+}
+
+function handleDownloadCommand(row: ReportItem, command: string | number | object) {
+  const format = command === 'PDF' ? 'PDF' : 'WORD';
+  return handleDownload(row, format);
 }
 
 function goTemplates() {
@@ -210,7 +215,15 @@ onMounted(loadData);
         <el-table-column label="操作" width="260">
           <template #default="{ row }">
             <el-button link type="primary" @click="$router.push(`/report/${row.reportId}`)">详情</el-button>
-            <el-button link :loading="String(downloadingId) === String(row.reportId)" :disabled="!canDownloadReport(row)" @click="handleDownload(row)">下载</el-button>
+            <el-dropdown :disabled="!canDownloadReport(row)" trigger="click" @command="(command: string | number | object) => handleDownloadCommand(row, command)">
+              <el-button link :loading="downloadingKey.startsWith(`${row.reportId}:`)" :disabled="!canDownloadReport(row)">导出</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="WORD" :disabled="downloadingKey === `${row.reportId}:WORD`">Word报告</el-dropdown-item>
+                  <el-dropdown-item command="PDF" :disabled="downloadingKey === `${row.reportId}:PDF`">PDF报告</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
         </el-table-column>
       </AppTable>

@@ -102,10 +102,10 @@ POST /api/reports/{reportId}/regenerate
 ## 4. 下载报告
 
 ```text
-GET /api/reports/{reportId}/download?format=WORD
+GET /api/reports/{reportId}/download?format=WORD|PDF
 ```
 
-当前支持 Word 下载。报告必须已完成，接口返回 MinIO 预签名下载地址字符串。前端先携带 JWT 调用本接口获取地址，再使用不携带 `Authorization` 和 `X-Request-Id` 的独立请求读取该预签名地址；签名查询参数本身就是 MinIO 鉴权，不能同时附加 Bearer Token。`format=PDF` 明确不支持。
+当前支持 Word 与 PDF 下载。报告必须已完成，接口返回 MinIO 预签名下载地址字符串。前端先携带 JWT 调用本接口获取地址，再使用不携带 `Authorization` 和 `X-Request-Id` 的独立请求读取该预签名地址；签名查询参数本身就是 MinIO 鉴权，不能同时附加 Bearer Token。`format` 仅允许 `WORD` 或 `PDF`。
 
 ## 写入规则
 

@@ -7,7 +7,7 @@ This file records the current implementation contract of the `report` module.
 - Java owns report orchestration, DOCX template rendering, state records, file persistence, project isolation, and observable failures.
 - The QA/RAG application gateway retrieves one selected knowledge base and generates one template variable at a time without creating ordinary QA history.
 - `POST /api/reports` and `POST /api/reports/{reportId}/regenerate` create the report, config, task, and `task_outbox` event.
-- HTTP creation endpoints do not generate files directly. The Worker claims `REPORT_GENERATION` tasks and renders the Word report.
+- HTTP creation endpoints do not generate files directly. The Worker claims `REPORT_GENERATION` tasks and renders Word plus PDF report outputs.
 - If Python AI, template loading, material loading, or persistence fails, production code must mark the report as `FAILED` and record the error. It must not return fake success or fallback content.
 
 ## Current APIs
@@ -19,7 +19,7 @@ This file records the current implementation contract of the `report` module.
 | GET | `/api/reports/{reportId}` | Gets report detail after project access validation. |
 | GET | `/api/reports/{reportId}/variables` | Gets ordered per-variable status, description, value, trace, and error details. |
 | POST | `/api/reports/{reportId}/regenerate` | Creates a new report and task from the original report config. |
-| GET | `/api/reports/{reportId}/download?format=WORD` | Returns a MinIO access URL for the saved Word file. |
+| GET | `/api/reports/{reportId}/download?format=WORD|PDF` | Returns a MinIO access URL for the saved Word or PDF file. |
 
 ## State Flow
 
@@ -42,7 +42,7 @@ This file records the current implementation contract of the `report` module.
 ## Download Behavior
 
 - Only `WORD` is supported.
-- PDF requests fail explicitly. Word output must not be returned as fake PDF.
+- PDF output is generated from the rendered DOCX content and stored as a separate file object. Missing PDF artifacts must fail explicitly instead of returning Word output as fake PDF.
 - The API returns a MinIO signed URL for the current report version `word_file_id`.
 
 ## Verification

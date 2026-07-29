@@ -25,6 +25,8 @@ import com.xd.smartworksite.template.dto.TemplateVariableDescriptionResponse;
 import com.xd.smartworksite.template.repository.TemplateRepository;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -129,6 +131,25 @@ class ReportGenerationApplicationServiceTest {
     }
 
     @Test
+    void executeTaskAlsoGeneratesDownloadablePdfForCompletedReport() throws Exception {
+        ReportCreateResponse created = context.service.createReport(request());
+        context.answers.put("var_summary", "二号楼主体结构完成至8层");
+        context.answers.put("var_risk", "塔吊吊装半径与材料堆场交叉，需设置警戒线");
+
+        context.service.executeReportTask(created.getReportId(), created.getTaskId());
+
+        assertThat(context.generatedPdf).isNotEmpty();
+        assertThat(readPdfText(context.generatedPdf))
+                .contains("二号楼主体结构完成至8层", "塔吊吊装半径与材料堆场交叉");
+        assertThat(context.repository.versions.get(0).getWordFileId()).isNotNull();
+        assertThat(context.repository.versions.get(0).getPdfFileId()).isNotNull();
+
+        String downloadUrl = context.service.createDownloadUrl(created.getReportId(), "PDF");
+
+        assertThat(downloadUrl).isEqualTo("http://127.0.0.1/report.pdf");
+    }
+
+    @Test
     void retryKeepsSuccessfulVariablesAndOnlyRegeneratesFailedOnes() {
         ReportCreateResponse created = context.service.createReport(request());
         context.answers.put("var_summary", "已生成摘要");
@@ -207,6 +228,12 @@ class ReportGenerationApplicationServiceTest {
         }
     }
 
+    private String readPdfText(byte[] bytes) throws Exception {
+        try (PDDocument document = PDDocument.load(bytes)) {
+            return new PDFTextStripper().getText(document);
+        }
+    }
+
     private class TestContext {
         private final InMemoryReportRepository repository = new InMemoryReportRepository();
         private final ProjectAccessApplicationService access = mock(ProjectAccessApplicationService.class);
@@ -218,6 +245,7 @@ class ReportGenerationApplicationServiceTest {
         private final Map<String, String> answers = new LinkedHashMap<>();
         private final ReportGenerationApplicationService service;
         private byte[] generatedDocx;
+        private byte[] generatedPdf;
         private String failVariable;
 
         private TestContext() {
@@ -243,10 +271,19 @@ class ReportGenerationApplicationServiceTest {
                     new ByteArrayInputStream(docx("摘要：{{ var_summary }}", "风险：{{ var_risk }}")));
             when(storage.upload(any(), any(), anyLong(), any())).thenAnswer(invocation -> {
                 InputStream input = invocation.getArgument(1);
-                generatedDocx = input.readAllBytes();
-                return new StorageObject(invocation.getArgument(0), "test", invocation.getArgument(3), generatedDocx.length);
+                byte[] bytes = input.readAllBytes();
+                String contentType = invocation.getArgument(3);
+                if ("application/pdf".equals(contentType)) {
+                    generatedPdf = bytes;
+                } else {
+                    generatedDocx = bytes;
+                }
+                return new StorageObject(invocation.getArgument(0), "test", contentType, bytes.length);
             });
-            when(storage.createAccessUrl(any(), any(Duration.class))).thenReturn("http://127.0.0.1/report.docx");
+            when(storage.createAccessUrl(any(), any(Duration.class))).thenAnswer(invocation -> {
+                String objectName = invocation.getArgument(0);
+                return objectName.endsWith(".pdf") ? "http://127.0.0.1/report.pdf" : "http://127.0.0.1/report.docx";
+            });
             when(qa.generateVariableForSystem(any())).thenAnswer(invocation -> {
                 ReportVariableQaRequest request = invocation.getArgument(0);
                 if (request.getVariableName().equals(failVariable)) {
@@ -298,6 +335,7 @@ class ReportGenerationApplicationServiceTest {
         @Override public int updateVersionWordFile(Long versionId, Long wordFileId, String contentHash) { return 1; }
         @Override public Optional<ReportConfig> findConfigById(Long configId) { return configs.stream().filter(value -> configId.equals(value.getId())).findFirst(); }
         @Override public Optional<Long> findCurrentWordFileId(Long reportId) { return versions.stream().filter(value -> reportId.equals(value.getReportId())).map(ReportVersion::getWordFileId).findFirst(); }
+        @Override public Optional<Long> findCurrentPdfFileId(Long reportId) { return versions.stream().filter(value -> reportId.equals(value.getReportId())).map(ReportVersion::getPdfFileId).findFirst(); }
         @Override public Optional<Report> findReportById(Long reportId) { return reports.stream().filter(value -> reportId.equals(value.getId())).findFirst(); }
         @Override public List<Report> findReportPage(Long projectId, List<Long> accessibleProjectIds, String reportType, String status, String keyword) { return reports; }
 
