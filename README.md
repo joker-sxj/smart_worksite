@@ -449,6 +449,7 @@ Review read APIs require `review:view`; submit/retry/delete/archive/update-issue
 
 审查执行失败写入规则：Python Agent 返回失败、空结果或无效 JSON 时，审查记录必须标记为 `FAILED` 并记录错误信息；如果失败状态无法落库，必须直接返回冲突错误，不允许丢失可观测性。
 审查创建写入规则：提交审查记录后必须校验生成 ID 并读回持久化记录；读回失败时不调用 Python Agent，直接返回系统错误。
+审查结果结构规则：Python `COMPLIANCE_REVIEW` Agent 必须依据行业准则或审查模板输出结构化 JSON；每个问题必须包含 `issueId`、`severity`、`location`、`ruleName`、`description`、`suggestion`，缺失时 Java 侧拒绝完成并标记失败。
 
 ### 审计
 

@@ -64,7 +64,7 @@ curl --noproxy '*' -X POST "http://127.0.0.1:8080/api/review/records" \
   -F "file=@/tmp/contract.docx"
 ```
 
-响应重点字段：`recordId`、`projectId`、`templateId`、`fileId`、`taskId`、`status`、`issues`、`summary`、`errorMessage`。
+响应重点字段：`recordId`、`projectId`、`templateId`、`fileId`、`taskId`、`status`、`issues`、`result`、`errorMessage`。
 
 ## 2. 查询审查记录
 
@@ -88,10 +88,9 @@ GET /api/review/records/{recordId}
 ```text
 PENDING
 PROCESSING
-SUCCESS
+COMPLETED
 FAILED
 ARCHIVED
-DELETED
 ```
 
 ## 3. 重试审查
@@ -134,9 +133,33 @@ curl --noproxy '*' -X PUT "http://127.0.0.1:8080/api/review/records/1/issues/ISS
   -d '{"status":"RESOLVED","comment":"已补充整改材料"}'
 ```
 
+## 审查结果结构
+
+Python `COMPLIANCE_REVIEW` Agent 必须返回 JSON 对象：
+
+```json
+{
+  "summary": "施工方案审查发现1项高风险问题",
+  "score": 82,
+  "issues": [
+    {
+      "issueId": "ISSUE-001",
+      "severity": "HIGH",
+      "location": "第3页/临边防护章节",
+      "ruleName": "JGJ 80-2016 建筑施工高处作业安全技术规范",
+      "description": "专项施工方案未说明临边洞口防护栏杆高度、踢脚板和安全网设置要求。",
+      "suggestion": "补充1.2m双道防护栏杆、180mm踢脚板、密目式安全网及验收责任人。",
+      "status": "OPEN"
+    }
+  ]
+}
+```
+
+`issues` 中每个问题必须包含 `issueId`、`severity`、`location`、`ruleName`、`description`、`suggestion`；`severity` 只能是 `LOW`、`MEDIUM`、`HIGH`、`CRITICAL`。缺失必填字段或严重级别非法时，Java 侧拒绝将记录标记为 `COMPLETED`。
+
 ## 执行规则
 
 - 提交审查记录后必须校验生成 ID 并读回持久化记录，失败时不调用 Python Agent。
-- Python Agent 返回失败、空结果或无效 JSON 时，审查记录必须标记为 `FAILED` 并记录错误。
+- Python Agent 返回失败、空结果、无效 JSON 或不完整问题项时，审查记录必须标记为 `FAILED` 并记录错误。
 - 如果失败状态无法落库，必须返回冲突，不能丢失可观测性。
 - 调用 Python Agent 必须记录外部调用日志。

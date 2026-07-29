@@ -83,9 +83,33 @@ class ReviewApplicationServiceTest {
         assertThat(response.getStatus()).isEqualTo("COMPLETED");
         assertThat(response.getIssues()).singleElement().satisfies(issue -> {
             assertThat(issue.get("issueId")).isEqualTo("ISSUE-001");
+            assertThat(issue.get("severity")).isEqualTo("HIGH");
+            assertThat(issue.get("location")).isEqualTo("第3页/临边防护章节");
+            assertThat(issue.get("ruleName")).isEqualTo("JGJ 80-2016 建筑施工高处作业安全技术规范");
+            assertThat(issue.get("description")).isEqualTo("专项施工方案未说明临边洞口防护栏杆高度、踢脚板和安全网设置要求。");
+            assertThat(issue.get("suggestion")).isEqualTo("补充1.2m双道防护栏杆、180mm踢脚板、密目式安全网及验收责任人。");
             assertThat(issue.get("status")).isEqualTo("OPEN");
         });
         assertThat(reviewAiGateway.lastRequest.getParameters()).containsEntry("reviewFileId", 99L);
+        assertThat(reviewAiGateway.lastRequest.getParameters())
+                .containsEntry("reviewBasis", "行业准则与审查模板并行校验")
+                .containsKey("requiredIssueFields");
+    }
+
+
+    @Test
+    void rejectsAgentIssuesWithoutRuleLocationDescriptionOrSuggestion() {
+        reviewAiGateway.resultJson = "{\"summary\":\"invalid review\",\"score\":60,\"issues\":[{\"issueId\":\"ISSUE-002\",\"severity\":\"HIGH\",\"description\":\"缺少依据和建议\"}]}";
+
+        assertThatThrownBy(() -> service.submitReview(submitRequest(1L, 10L)))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(ErrorCode.EXTERNAL_SERVICE_ERROR.getCode());
+                    assertThat(ex.getMessage()).contains("missing required field");
+                });
+        assertThat(reviewRecordRepository.records).singleElement().satisfies(record -> {
+            assertThat(record.getStatus()).isEqualTo("FAILED");
+            assertThat(record.getErrorMessage()).contains("missing required field");
+        });
     }
 
     @Test
@@ -239,6 +263,7 @@ class ReviewApplicationServiceTest {
 
     private static class StubReviewAiGateway implements ReviewAiGateway {
         private boolean fail;
+        private String resultJson = "{\"summary\":\"施工方案安全审查发现1项高风险问题\",\"score\":88,\"issues\":[{\"issueId\":\"ISSUE-001\",\"severity\":\"HIGH\",\"location\":\"第3页/临边防护章节\",\"ruleName\":\"JGJ 80-2016 建筑施工高处作业安全技术规范\",\"description\":\"专项施工方案未说明临边洞口防护栏杆高度、踢脚板和安全网设置要求。\",\"suggestion\":\"补充1.2m双道防护栏杆、180mm踢脚板、密目式安全网及验收责任人。\"}]}";
         private AgentInvokeRequest lastRequest;
 
         @Override
@@ -248,7 +273,7 @@ class ReviewApplicationServiceTest {
                 throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "agent down");
             }
             AgentInvokeResponse response = new AgentInvokeResponse();
-            response.setResult("{\"summary\":\"page 1 safety review\",\"score\":88,\"issues\":[{\"issueId\":\"ISSUE-001\",\"severity\":\"HIGH\",\"location\":\"page 1\",\"ruleName\":\"safety\",\"description\":\"missing guardrail\",\"suggestion\":\"add guardrail\"}]}");
+            response.setResult(resultJson);
             response.setProviderTraceId("review-trace");
             return response;
         }

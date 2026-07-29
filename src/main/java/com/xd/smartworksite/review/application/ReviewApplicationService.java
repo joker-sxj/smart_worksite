@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import com.xd.smartworksite.ai.dto.AgentInvokeRequest;
+import com.xd.smartworksite.ai.dto.AiMessage;
 import com.xd.smartworksite.ai.dto.AgentInvokeResponse;
 import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.result.ErrorCode;
@@ -36,6 +37,9 @@ import java.util.Map;
 @Service
 public class ReviewApplicationService {
     private static final int MAX_ERROR_LENGTH = 2000;
+    private static final List<String> REQUIRED_ISSUE_FIELDS = List.of(
+            "issueId", "severity", "location", "ruleName", "description", "suggestion"
+    );
 
     private final ReviewRecordRepository reviewRecordRepository;
     private final ProjectAccessApplicationService projectAccessApplicationService;
@@ -217,11 +221,17 @@ public class ReviewApplicationService {
         parameters.put("templateType", template.getTemplateType());
         parameters.put("reviewFileId", file.getFileId());
         parameters.put("reviewFileName", file.getFileName());
+        parameters.put("reviewBasis", "行业准则与审查模板并行校验");
+        parameters.put("requiredIssueFields", REQUIRED_ISSUE_FIELDS);
         parameters.put("expectedResultSchema", Map.of(
                 "issues", "array of {issueId,severity,location,ruleName,description,suggestion,status}",
                 "summary", "string",
                 "score", "number"
         ));
+        AiMessage systemMessage = new AiMessage();
+        systemMessage.setRole("system");
+        systemMessage.setContent("你是智慧工地合规审查专家。必须依据行业准则或选定审查模板审查用户上传文档，精准指出问题位置、违反的规则/模板条款、问题描述，并给出可直接修改的建议。只返回JSON，不要返回Markdown。");
+        request.setContextMessages(List.of(systemMessage));
         request.setParameters(parameters);
         return request;
     }
@@ -251,13 +261,24 @@ public class ReviewApplicationService {
             for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
                 issue.put(String.valueOf(entry.getKey()), entry.getValue());
             }
-            if (!issue.containsKey("issueId") || String.valueOf(issue.get("issueId")).isBlank()) {
-                throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "review issue missing issueId");
-            }
+            validateIssue(issue);
             issue.putIfAbsent("status", "OPEN");
             issues.add(issue);
         }
         return issues;
+    }
+
+    private void validateIssue(Map<String, Object> issue) {
+        for (String field : REQUIRED_ISSUE_FIELDS) {
+            if (!issue.containsKey(field) || String.valueOf(issue.get(field)).isBlank()) {
+                throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "review issue missing required field: " + field);
+            }
+        }
+        String severity = String.valueOf(issue.get("severity")).toUpperCase(Locale.ROOT);
+        if (!List.of("LOW", "MEDIUM", "HIGH", "CRITICAL").contains(severity)) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "review issue severity must be LOW, MEDIUM, HIGH or CRITICAL");
+        }
+        issue.put("severity", severity);
     }
 
     private TemplateResponse requireReviewTemplate(Long projectId, Long templateId) {

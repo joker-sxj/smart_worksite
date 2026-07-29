@@ -1,5 +1,6 @@
 from app.models.schemas import Message, ModelInvokeRequest, AgentInvokeRequest, AgentInvokeData, AgentStep
 from .agent_tools import ToolCallingAgent, ToolRegistry
+from .compliance_review_service import ComplianceReviewService
 from .qwen_client import QwenClient
 
 
@@ -22,6 +23,8 @@ class AgentService:
         self.registry = registry or ToolRegistry()
 
     async def invoke(self, request: AgentInvokeRequest) -> tuple[AgentInvokeData, dict]:
+        if request.goal == "COMPLIANCE_REVIEW":
+            return await ComplianceReviewService(self.qwen).review(request)
         if request.tools:
             return await ToolCallingAgent(self.qwen, self.registry).invoke(request)
         system = "你是智慧工地智能体。请进行任务拆解，给出简洁可执行结果，并在信息不足时给出主动追问。"

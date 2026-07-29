@@ -202,6 +202,7 @@ Request IDs are handled by `common.config.RequestIdFilter`. The response header 
 - Login failure counters and temporary account locks must use Redis keys under `RedisKeys`; corrupted counters must fail fast instead of being silently reset.
 - JWT authentication must re-check the current user record on each request; disabled or deleted users must not be authenticated by stale tokens.
 - Logs must not print passwords, tokens, MinIO secrets, or production credentials.
+- Compliance review results must remain structured: each issue requires `issueId`, `severity`, `location`, `ruleName`, `description`, and `suggestion`; incomplete AI output must fail visibly instead of being persisted as completed.
 - Local development seeds `admin / admin123` through Flyway for interface testing only; production deployments must reset or disable the seeded administrator password.
 - Run `mvn test` after adding runnable functionality.
 - P0 backend validation must keep the following gates green: `mvn clean test`, frontend `npm run build` when frontend contracts change, documentation encoding guard, non-OCR route coverage against README and interface docs, frontend non-OCR API route matching, and OCR backend diff check.

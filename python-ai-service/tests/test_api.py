@@ -11,6 +11,7 @@ from app.core.settings import Settings
 from app.services.qwen_client import QwenClient
 from app.services.agent_tools import ToolCallingAgent, ToolRegistry, ToolSpec
 from app.services.rag_service import RagService
+from app.services.model_service import AgentService
 from app.services.vector_store import ChunkRecord
 
 
@@ -85,6 +86,61 @@ def test_tool_calling_agent_executes_registered_tool():
     assert "安全帽" in data.steps[0].result
     assert usage["completion_tokens"] == 1
 
+
+
+def test_compliance_review_agent_returns_structured_issues():
+    class FakeQwen:
+        def __init__(self):
+            self.messages = None
+
+        async def json_chat(self, messages, model=None, parameters=None):
+            self.messages = messages
+            return {
+                "summary": "施工方案审查发现1项高风险问题",
+                "score": 82,
+                "issues": [{
+                    "issueId": "ISSUE-001",
+                    "severity": "high",
+                    "location": "第3页/临边防护章节",
+                    "ruleName": "JGJ 80-2016 建筑施工高处作业安全技术规范",
+                    "description": "专项施工方案未说明临边洞口防护栏杆高度、踢脚板和安全网设置要求。",
+                    "suggestion": "补充1.2m双道防护栏杆、180mm踢脚板、密目式安全网及验收责任人。",
+                }],
+            }, {"prompt_tokens": 10}
+
+    import asyncio
+    qwen = FakeQwen()
+    data, usage = asyncio.run(AgentService(qwen).invoke(AgentInvokeRequest(
+        goal="COMPLIANCE_REVIEW",
+        tools=["document_parse", "compliance_rule_check"],
+        parameters={
+            "templateName": "施工方案审查模板",
+            "reviewFileName": "临边洞口专项施工方案.docx",
+            "requiredIssueFields": ["issueId", "severity", "location", "ruleName", "description", "suggestion"],
+        },
+    )))
+
+    result = __import__("json").loads(data.result)
+    assert usage["prompt_tokens"] == 10
+    assert data.steps[0].step == "COMPLIANCE_REVIEW"
+    assert result["issues"][0]["severity"] == "HIGH"
+    assert result["issues"][0]["status"] == "OPEN"
+    assert "审查模板" in qwen.messages[1].content
+    assert "临边洞口专项施工方案.docx" in qwen.messages[1].content
+
+
+def test_compliance_review_agent_rejects_incomplete_issue():
+    class FakeQwen:
+        async def json_chat(self, messages, model=None, parameters=None):
+            return {"summary": "不完整", "issues": [{"issueId": "ISSUE-001", "severity": "HIGH"}]}, {}
+
+    import asyncio
+    try:
+        asyncio.run(AgentService(FakeQwen()).invoke(AgentInvokeRequest(goal="COMPLIANCE_REVIEW")))
+    except RuntimeError as exc:
+        assert "missing required field" in str(exc)
+    else:
+        raise AssertionError("expected incomplete compliance issue to be rejected")
 
 def test_rag_uses_qwen_rerank_when_configured():
     class FakeSettings:
