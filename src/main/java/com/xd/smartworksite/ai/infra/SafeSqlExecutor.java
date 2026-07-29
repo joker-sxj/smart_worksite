@@ -33,8 +33,12 @@ public class SafeSqlExecutor {
     private static final Pattern MYSQL_LIMIT = Pattern.compile("(?is).*\\blimit\\s+\\d+(\\s*,\\s*\\d+)?\\s*$");
     private static final Pattern FETCH_FIRST = Pattern.compile("(?is).*\\bfetch\\s+first\\s+\\d+\\s+rows\\s+only\\s*$");
     private static final String AES_GCM_PREFIX = "AES_GCM:";
+    private static final String MASKED_VALUE = "[MASKED]";
     private static final int GCM_TAG_BITS = 128;
     private static final int GCM_IV_BYTES = 12;
+    private static final Pattern SENSITIVE_COLUMN = Pattern.compile(
+            "(^|[_-])(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|id[_-]?card|identity|phone|mobile|tel|email|credential|cookie|session)([_-]|$)",
+            Pattern.CASE_INSENSITIVE);
 
     private final AiPythonServiceProperties properties;
 
@@ -54,14 +58,18 @@ public class SafeSqlExecutor {
             try (ResultSet rs = statement.executeQuery(limitedSql)) {
                 ResultSetMetaData metaData = rs.getMetaData();
                 List<String> columns = new ArrayList<>();
+                List<Boolean> sensitiveColumns = new ArrayList<>();
                 for (int i = 1; i <= metaData.getColumnCount(); i++) {
-                    columns.add(metaData.getColumnLabel(i));
+                    String label = metaData.getColumnLabel(i);
+                    columns.add(label);
+                    sensitiveColumns.add(isSensitiveColumn(label, metaData.getColumnName(i)));
                 }
                 List<Map<String, Object>> rows = new ArrayList<>();
                 while (rs.next() && rows.size() < properties.getDatabase().getMaxRows()) {
                     Map<String, Object> row = new LinkedHashMap<>();
-                    for (String column : columns) {
-                        row.put(column, rs.getObject(column));
+                    for (int i = 0; i < columns.size(); i++) {
+                        String column = columns.get(i);
+                        row.put(column, sensitiveColumns.get(i) ? MASKED_VALUE : rs.getObject(column));
                     }
                     rows.add(row);
                 }
@@ -95,6 +103,14 @@ public class SafeSqlExecutor {
         if (DANGEROUS.matcher(normalized).find()) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "数据库问答SQL包含危险操作");
         }
+    }
+
+    private boolean isSensitiveColumn(String label, String columnName) {
+        return matchesSensitiveColumn(label) || matchesSensitiveColumn(columnName);
+    }
+
+    private boolean matchesSensitiveColumn(String name) {
+        return name != null && SENSITIVE_COLUMN.matcher(name).find();
     }
 
     String appendLimit(String sql, int maxRows, String dbType) {

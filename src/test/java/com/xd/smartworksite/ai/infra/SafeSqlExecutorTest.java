@@ -70,6 +70,22 @@ class SafeSqlExecutorTest {
     }
 
 
+
+    @Test
+    void masksSensitiveColumnsFromQueryResults() {
+        DataSourceRecord record = mysqlDataSource();
+        record.setJdbcUrl("jdbc:h2:mem:safe_sql_mask;MODE=MySQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1");
+        record.setUsername("sa");
+        configureEncryptedPassword(record, "");
+
+        SafeSqlExecutor.QueryResult result = executor.execute(record,
+                "select 'root-secret' as password, '13800138000' as phone, '工程A' as project_name");
+
+        assertEquals("[MASKED]", result.rows().get(0).get("password"));
+        assertEquals("[MASKED]", result.rows().get(0).get("phone"));
+        assertEquals("工程A", result.rows().get(0).get("project_name"));
+    }
+
     @Test
     void decryptsAesGcmPassword() throws Exception {
         properties.getSecurity().setDataSourcePasswordKey("base64:" + Base64.getEncoder().encodeToString("0123456789abcdef".getBytes(StandardCharsets.UTF_8)));
