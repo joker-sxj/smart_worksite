@@ -195,11 +195,17 @@ public class KnowledgeBaseApplicationService {
         return toDocumentResponse(document);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = KnowledgeDocumentIndexingFailedException.class)
     public KnowledgeDocumentResponse createIndexTask(Long documentId) {
         KnowledgeDocument document = requireDocumentManage(documentId);
         if (KnowledgeDocumentIndexStatus.INDEXING.name().equals(document.getIndexStatus())) {
             throw new BusinessException(ErrorCode.CONFLICT, "knowledge document is already indexing");
+        }
+        try {
+            requireReadableParsedContent(document);
+        } catch (RuntimeException ex) {
+            markIndexFailedOrThrow(document.getId(), truncateError(ex.getMessage()), SecurityUtils.getCurrentUserId());
+            throw new KnowledgeDocumentIndexingFailedException(truncateError(ex.getMessage()));
         }
         GenerateTask task = new GenerateTask();
         task.setProjectId(document.getProjectId());
@@ -220,7 +226,7 @@ public class KnowledgeBaseApplicationService {
         return getDocument(documentId);
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = KnowledgeDocumentIndexingFailedException.class)
     public void executeIndexTask(Long documentId, Long taskId) {
         KnowledgeDocument document = requireDocument(documentId);
         projectAccessApplicationService.requireProjectWritableForSystem(document.getProjectId());
@@ -232,10 +238,7 @@ public class KnowledgeBaseApplicationService {
             throw new BusinessException(ErrorCode.CONFLICT, "knowledge document indexing state changed");
         }
         try {
-            FileParseRecordResponse parseRecord = fileParseApplicationService.getLatestFileParseRecordForSystem(
-                    document.getFileId(), document.getProjectId());
-            FileParseContentResponse content = fileParseApplicationService.getParseContentForSystem(parseRecord.getRecordId());
-            String parsedContent = normalizeParsedContent(content.getContent());
+            String parsedContent = requireReadableParsedContent(document);
 
             RagIndexResponse response = aiApplicationService.indexKnowledgeForSystem(buildRagIndexRequest(document, parsedContent));
             if (response == null || response.getIndexedDocuments() == null || response.getIndexedDocuments() <= 0) {
@@ -246,11 +249,9 @@ public class KnowledgeBaseApplicationService {
                 throw new BusinessException(ErrorCode.CONFLICT, "knowledge document success state cannot be persisted");
             }
         } catch (RuntimeException ex) {
-            int failed = knowledgeDocumentRepository.markIndexFailed(documentId, truncateError(ex.getMessage()), systemUserId());
-            if (failed == 0) {
-                throw new BusinessException(ErrorCode.CONFLICT, "knowledge document failure state cannot be persisted: " + truncateError(ex.getMessage()));
-            }
-            throw ex;
+            String errorMessage = truncateError(ex.getMessage());
+            markIndexFailedOrThrow(documentId, errorMessage, systemUserId());
+            throw new KnowledgeDocumentIndexingFailedException(errorMessage);
         }
     }
 
@@ -313,6 +314,13 @@ public class KnowledgeBaseApplicationService {
         return request;
     }
 
+    private String requireReadableParsedContent(KnowledgeDocument document) {
+        FileParseRecordResponse parseRecord = fileParseApplicationService.getLatestFileParseRecordForSystem(
+                document.getFileId(), document.getProjectId());
+        FileParseContentResponse content = fileParseApplicationService.getParseContentForSystem(parseRecord.getRecordId());
+        return normalizeParsedContent(content.getContent());
+    }
+
     private String normalizeParsedContent(String content) {
         if (content == null || content.isBlank()) {
             throw new BusinessException(ErrorCode.CONFLICT, "file parse content is empty");
@@ -337,6 +345,20 @@ public class KnowledgeBaseApplicationService {
         }
         String trimmed = message.trim();
         return trimmed.length() <= MAX_ERROR_LENGTH ? trimmed : trimmed.substring(0, MAX_ERROR_LENGTH);
+    }
+
+    private void markIndexFailedOrThrow(Long documentId, String errorMessage, Long updatedBy) {
+        int failed = knowledgeDocumentRepository.markIndexFailed(documentId, errorMessage, updatedBy);
+        if (failed == 0) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "knowledge document failure state cannot be persisted: " + errorMessage);
+        }
+    }
+
+    private static final class KnowledgeDocumentIndexingFailedException extends BusinessException {
+        private KnowledgeDocumentIndexingFailedException(String message) {
+            super(ErrorCode.CONFLICT, message);
+        }
     }
 
     private KnowledgeDocument requireDocumentAccess(Long documentId) {

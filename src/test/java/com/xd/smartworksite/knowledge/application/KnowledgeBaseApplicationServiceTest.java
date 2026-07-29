@@ -217,6 +217,8 @@ class KnowledgeBaseApplicationServiceTest {
     void createIndexTaskCreatesQueuedTaskAndMarksDocumentIndexing() {
         var knowledgeBase = service.createKnowledgeBase(1L, createRequest("安全规范"));
         KnowledgeDocument document = knowledgeDocumentRepository.insert(document(1L, knowledgeBase.getKnowledgeBaseId(), "安全手册"));
+        when(fileParseApplicationService.getLatestFileParseRecordForSystem(99L, 1L)).thenReturn(parseRecord());
+        when(fileParseApplicationService.getParseContentForSystem(700L)).thenReturn(parseContent("解析后的知识内容"));
 
         var response = service.createIndexTask(document.getId());
 
@@ -229,6 +231,25 @@ class KnowledgeBaseApplicationServiceTest {
                         && "QUEUED".equals(task.getStatus())));
         verify(taskOutboxApplicationService).enqueueTask(argThat(task -> Long.valueOf(500L).equals(task.getId())),
                 org.mockito.ArgumentMatchers.eq("knowledge document index requested"));
+    }
+
+    @Test
+    void createIndexTaskMarksFailedAndDoesNotQueueWhenParseRecordIsMissing() {
+        var knowledgeBase = service.createKnowledgeBase(1L, createRequest("安全规范"));
+        KnowledgeDocument document = knowledgeDocumentRepository.insert(document(1L, knowledgeBase.getKnowledgeBaseId(), "安全手册"));
+        when(fileParseApplicationService.getLatestFileParseRecordForSystem(99L, 1L))
+                .thenThrow(new BusinessException(ErrorCode.NOT_FOUND, "file parse record not found"));
+
+        assertThatThrownBy(() -> service.createIndexTask(document.getId()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("file parse record not found");
+
+        KnowledgeDocument failed = knowledgeDocumentRepository.findById(document.getId()).orElseThrow();
+        assertThat(failed.getIndexStatus()).isEqualTo("FAILED");
+        assertThat(failed.getTaskId()).isNull();
+        assertThat(failed.getErrorMessage()).contains("file parse record not found");
+        verify(taskRepository, org.mockito.Mockito.never()).insertTask(any(GenerateTask.class));
+        verify(taskOutboxApplicationService, org.mockito.Mockito.never()).enqueueTask(any(GenerateTask.class), any());
     }
 
     @Test
