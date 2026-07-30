@@ -46,7 +46,10 @@ class QwenClient:
             text = text.strip("`")
             if text.lower().startswith("json"):
                 text = text[4:].strip()
-        return json.loads(text), usage
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError("Qwen JSON response must be an object")
+        return data, usage
 
     async def vision_json_chat(self, prompt: str, file_url: str, content_type: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
         api_key = self.settings.qwen_vl_api_key or self.settings.qwen_api_key

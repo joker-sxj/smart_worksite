@@ -7,6 +7,7 @@ from app.models.schemas import (
     DatabaseSummarizeData,
 )
 from .qwen_client import QwenClient
+from .normalization import as_dict, as_string_list
 
 
 class DatabaseQaService:
@@ -16,6 +17,7 @@ class DatabaseQaService:
     async def generate_query(self, request: DatabaseGenerateQueryRequest) -> tuple[DatabaseGenerateQueryData, dict]:
         system = (
             "你是智慧工地数据库问答SQL生成器。只能返回JSON，字段为sql、parameters、explanation、riskLevel。"
+            "parameters必须是JSON对象，不能返回数组；无参数时返回空对象{}。"
             "只能生成只读SELECT或WITH查询，不允许写入、删除、DDL或多语句。"
         )
         prompt = {
@@ -30,7 +32,7 @@ class DatabaseQaService:
         ])
         return DatabaseGenerateQueryData(
             sql=str(data.get("sql", "")),
-            parameters=data.get("parameters") or {},
+            parameters=as_dict(data.get("parameters")),
             explanation=str(data.get("explanation", "根据问题生成只读查询。")),
             riskLevel=str(data.get("riskLevel", "LOW")),
         ), usage
@@ -44,14 +46,6 @@ class DatabaseQaService:
         ])
         return DatabaseSummarizeData(
             summary=str(data.get("summary", "暂无总结")),
-            insights=_string_list(data.get("insights")),
-            warnings=_string_list(data.get("warnings")),
+            insights=as_string_list(data.get("insights")),
+            warnings=as_string_list(data.get("warnings")),
         ), usage
-
-
-def _string_list(value) -> list[str]:
-    if value is None or value == "":
-        return []
-    if isinstance(value, list):
-        return [str(item) for item in value if str(item).strip()]
-    return [str(value)]

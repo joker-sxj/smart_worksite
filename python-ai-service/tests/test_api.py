@@ -387,6 +387,63 @@ def test_database_summarize_result_fails_fast_when_qwen_fails(monkeypatch):
     assert "summary service down" in body["errorMessage"]
 
 
+def test_database_generate_query_endpoint_accepts_list_parameters(monkeypatch):
+    from app.api import routes
+    from app.services.database_service import DatabaseQaService
+
+    class FakeQwen:
+        async def json_chat(self, messages):
+            return {
+                "sql": "SELECT COUNT(*) AS total FROM project",
+                "parameters": [1],
+                "explanation": "统计项目数量。",
+                "riskLevel": "LOW",
+            }, {"prompt_tokens": 1}
+
+    monkeypatch.setattr(routes, "services", lambda: {"database": DatabaseQaService(FakeQwen())})
+    client = TestClient(app)
+
+    response = client.post("/v1/database/generate-query", json={
+        "question": "查询项目数量",
+        "schemaSummary": "project(id, project_name)",
+        "permissionHints": {},
+        "projectId": 1,
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["parameters"] == {"p1": 1}
+
+
+def test_database_generate_query_normalizes_list_parameters():
+    from app.models.schemas import DatabaseGenerateQueryRequest
+    from app.services.database_service import DatabaseQaService
+
+    class FakeQwen:
+        async def json_chat(self, messages):
+            return {
+                "sql": "SELECT * FROM project WHERE id = ?",
+                "parameters": [1],
+                "explanation": "按项目ID查询。",
+                "riskLevel": "LOW",
+            }, {"prompt_tokens": 1}
+
+    service = DatabaseQaService(FakeQwen())
+    data, usage = asyncio.run(service.generate_query(DatabaseGenerateQueryRequest(
+        question="查询项目1",
+        schemaSummary="project(id, project_name)",
+        permissionHints={},
+        projectId=1,
+    )))
+
+    assert data.sql == "SELECT * FROM project WHERE id = ?"
+    assert data.parameters == {"p1": 1}
+    assert data.explanation == "按项目ID查询。"
+    assert data.riskLevel == "LOW"
+    assert usage["prompt_tokens"] == 1
+
+
 def test_database_summarize_result_normalizes_string_lists():
     from app.models.schemas import DatabaseSummarizeRequest
     from app.services.database_service import DatabaseQaService
@@ -411,3 +468,106 @@ def test_database_summarize_result_normalizes_string_lists():
     assert data.insights == ["项目数量较少。"]
     assert data.warnings == ["样本有限。"]
     assert usage["prompt_tokens"] == 1
+
+def test_route_normalizes_model_list_fields():
+    from app.models.schemas import RouteRequest
+    from app.services.route_context_service import RouteService
+
+    class FakeQwen:
+        async def json_chat(self, messages):
+            return {
+                "routeType": "database",
+                "reason": "需要查库",
+                "requiredResources": {"type": "DATA_SOURCE", "id": 1},
+                "followUpQuestions": "请选择数据源。",
+            }, {"prompt_tokens": 1}
+
+    data, usage = asyncio.run(RouteService(FakeQwen()).route(RouteRequest(
+        question="统计项目数量",
+        availableDataSources=[{"id": 1}],
+    )))
+
+    assert data.routeType == "DATABASE"
+    assert data.requiredResources == [{"type": "DATA_SOURCE", "id": 1}]
+    assert data.followUpQuestions == ["请选择数据源。"]
+    assert usage["prompt_tokens"] == 1
+
+
+def test_tool_agent_normalizes_tool_arguments_and_follow_up_questions():
+    class FakeQwen:
+        def __init__(self):
+            self.calls = 0
+
+        async def json_chat(self, messages, parameters=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {"action": "tool", "tool": "echo_tool", "arguments": ["安全帽"]}, {}
+            return {"action": "follow_up", "answer": "需要补充", "questions": "请补充检查范围。"}, {}
+
+    async def echo_tool(args):
+        assert args == {"p1": "安全帽"}
+        return {"ok": True}
+
+    registry = ToolRegistry()
+    registry.register(ToolSpec(name="echo_tool", description="测试工具", parameters={}, func=echo_tool))
+
+    data, usage = asyncio.run(ToolCallingAgent(FakeQwen(), registry).invoke(AgentInvokeRequest(
+        goal="检查安全帽",
+        tools=["echo_tool"],
+    )))
+
+    assert data.followUpQuestions == ["请补充检查范围。"]
+    assert len(data.steps) == 1
+
+
+def test_ocr_normalizes_optional_field_types():
+    from app.models.schemas import OcrFilePayload, OcrRecognizeRequest
+    from app.services.ocr_service import OcrService
+
+    class FakeQwen:
+        async def vision_json_chat(self, prompt, file_url, content_type):
+            return {
+                "ocrType": "ID_CARD",
+                "confidence": "0.9",
+                "fields": [{
+                    "fieldKey": "name",
+                    "fieldName": "姓名",
+                    "fieldValue": 123,
+                    "confidence": "0.8",
+                    "location": [1, 2],
+                    "pageNo": "2",
+                    "evidence": {"text": "张三"},
+                }],
+                "extras": ["unexpected"],
+            }, {"prompt_tokens": 1}
+
+    data, usage = asyncio.run(OcrService(FakeQwen()).recognize(OcrRecognizeRequest(
+        projectId=1,
+        recordId=1,
+        ocrType="ID_CARD",
+        file=OcrFilePayload(fileId=1, fileName="id.jpg", contentType="image/jpeg", downloadUrl="http://minio/id.jpg"),
+    )))
+
+    assert data.confidence == 0.9
+    assert data.fields[0].fieldValue == "123"
+    assert data.fields[0].location is None
+    assert data.fields[0].pageNo == 2
+    assert data.fields[0].evidence is None
+    assert data.extras == {"p1": "unexpected"}
+    assert usage["prompt_tokens"] == 1
+
+
+def test_qwen_json_chat_rejects_non_object_json():
+    from app.models.schemas import Message
+
+    class FakeQwenClient(QwenClient):
+        async def chat(self, messages, model=None, parameters=None):
+            return "[1]", {}
+
+    client = FakeQwenClient(Settings(qwen_api_key="test-key"))
+
+    try:
+        asyncio.run(client.json_chat([Message(role="user", content="json")]))
+        assert False, "json_chat should reject non-object JSON roots"
+    except ValueError as exc:
+        assert "must be an object" in str(exc)

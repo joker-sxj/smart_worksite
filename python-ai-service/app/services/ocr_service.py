@@ -2,6 +2,7 @@ from typing import Any
 
 from app.models.schemas import OcrRecognizeRequest, OcrRecognizeData, OcrFieldData
 from .qwen_client import QwenClient
+from .normalization import as_dict, optional_int, optional_string
 
 
 STANDARD_FIELDS: dict[str, list[dict[str, str]]] = {
@@ -106,15 +107,15 @@ class OcrService:
                 fieldName=str(item.get("fieldName") or item.get("name") or ""),
                 fieldValue="" if item.get("fieldValue") is None else str(item.get("fieldValue")),
                 confidence=self._confidence(item.get("confidence")),
-                location=item.get("location"),
-                pageNo=item.get("pageNo"),
-                evidence=item.get("evidence"),
+                location=optional_string(item.get("location")),
+                pageNo=optional_int(item.get("pageNo")),
+                evidence=optional_string(item.get("evidence")),
             ))
         return OcrRecognizeData(
             ocrType=str(raw.get("ocrType") or ocr_type),
             confidence=self._confidence(raw.get("confidence")),
             fields=normalized_fields,
-            extras=raw.get("extras") if isinstance(raw.get("extras"), dict) else {},
+            extras=as_dict(raw.get("extras")),
             raw=raw.get("raw") if isinstance(raw.get("raw"), dict) else {"providerJson": raw},
         )
 

@@ -1,6 +1,7 @@
 import json
 from app.models.schemas import Message, RouteRequest, RouteData, ContextPrepareRequest, ContextPrepareData
 from .qwen_client import QwenClient
+from .normalization import as_dict_list, as_string_list
 
 ROUTE_TYPES = {"MODEL", "KNOWLEDGE", "DATABASE", "HYBRID", "NEED_MORE_INFO"}
 
@@ -29,8 +30,8 @@ class RouteService:
             return RouteData(
                 routeType=route_type,
                 reason=str(data.get("reason", "基于问题内容选择默认模型回答。")),
-                requiredResources=data.get("requiredResources") or [],
-                followUpQuestions=data.get("followUpQuestions") or [],
+                requiredResources=as_dict_list(data.get("requiredResources")),
+                followUpQuestions=as_string_list(data.get("followUpQuestions")),
             ), usage
         except Exception:
             route_type = "DATABASE" if request.availableDataSources and any(k in request.question for k in ["统计", "数量", "多少", "列表"]) else "KNOWLEDGE" if request.availableKnowledgeBases else "MODEL"

@@ -6,6 +6,7 @@ from typing import Any, Callable, Awaitable
 
 from app.models.schemas import Message, AgentInvokeRequest, AgentInvokeData, AgentStep
 from .qwen_client import QwenClient
+from .normalization import as_dict, as_string_list
 from .rag_service import RagService
 from .database_service import DatabaseQaService
 
@@ -81,14 +82,14 @@ class ToolCallingAgent:
                 if spec is None:
                     messages.append(Message(role="assistant", content=json.dumps({"error": f"unknown tool {tool_name}"}, ensure_ascii=False)))
                     continue
-                args = decision.get("arguments") or {}
+                args = as_dict(decision.get("arguments"))
                 result = await spec.func(args)
                 steps.append(AgentStep(step=f"TOOL:{tool_name}", result=json.dumps(result, ensure_ascii=False)[:1200]))
                 messages.append(Message(role="assistant", content=json.dumps(decision, ensure_ascii=False)))
                 messages.append(Message(role="user", content="工具返回：" + json.dumps(result, ensure_ascii=False)))
                 continue
             if action == "follow_up":
-                return AgentInvokeData(result=str(decision.get("answer", "需要补充信息。")), steps=steps, followUpQuestions=decision.get("questions") or []), usage_total
+                return AgentInvokeData(result=str(decision.get("answer", "需要补充信息。")), steps=steps, followUpQuestions=as_string_list(decision.get("questions"))), usage_total
             return AgentInvokeData(result=str(decision.get("answer", "")), steps=steps, followUpQuestions=[]), usage_total
         messages.append(Message(role="user", content="请基于已有工具结果给出最终答案。"))
         answer, usage = await self.qwen.chat(messages, parameters=request.parameters)
