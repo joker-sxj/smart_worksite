@@ -1,7 +1,7 @@
 import re
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -107,16 +107,32 @@ def _extract_policy_no(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _looks_like_blocked_page(html: str) -> bool:
+    text = html[:2000]
+    return any(token in text for token in ("zse-ck", "请求存在异常", "Forbidden", "访问受限", "anti-bot"))
+
+
 def _looks_like_article_url(url: str) -> bool:
     lowered = url.lower()
+    parsed = urlparse(lowered)
+    if parsed.netloc.endswith("zhihu.com") and re.fullmatch(r"/p/\d+", parsed.path):
+        return True
     return any(token in lowered for token in (".html", ".htm", "/20"))
+
+
+CRAWLER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 SmartWorksitePolicyCrawler/1.0",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
 
 
 class PolicyCrawlerService:
     async def crawl(self, request: PolicyCrawlRequest) -> tuple[PolicyCrawlData, dict[str, Any]]:
         async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-            response = await client.get(request.url, headers={"User-Agent": "SmartWorksitePolicyCrawler/1.0"})
-            response.raise_for_status()
+            response = await client.get(request.url, headers=CRAWLER_HEADERS)
+            self._ensure_usable_response(response)
             response.encoding = response.encoding or "utf-8"
             root_html = response.text
             links = self._extract_article_links(root_html, str(response.url) if response.url else request.url)
@@ -124,8 +140,8 @@ class PolicyCrawlerService:
                 articles: list[PolicyCrawlArticle] = []
                 for url, fallback_title in links[:20]:
                     try:
-                        article_response = await client.get(url, headers={"User-Agent": "SmartWorksitePolicyCrawler/1.0"})
-                        article_response.raise_for_status()
+                        article_response = await client.get(url, headers=CRAWLER_HEADERS)
+                        self._ensure_usable_response(article_response)
                         article_response.encoding = article_response.encoding or "utf-8"
                         articles.append(self._build_article(article_response.text, str(article_response.url), fallback_title))
                     except Exception:
@@ -134,6 +150,18 @@ class PolicyCrawlerService:
                     return PolicyCrawlData(fetchedCount=len(articles), message="policy list crawled", articles=articles), {"provider": "HTTPX", "fetched": len(articles)}
             article = self._build_article(root_html, str(response.url) if response.url else request.url, request.url)
             return PolicyCrawlData(fetchedCount=1, message="policy page crawled", articles=[article]), {"provider": "HTTPX", "fetched": 1}
+
+    def _ensure_usable_response(self, response: httpx.Response) -> None:
+        if response.status_code < 400:
+            return
+        body = response.text or ""
+        if response.status_code in {401, 403} and _looks_like_blocked_page(body):
+            raise httpx.HTTPStatusError(
+                "policy crawler was blocked by the target site anti-bot page",
+                request=response.request,
+                response=response,
+            )
+        response.raise_for_status()
 
     def _extract_article_links(self, html: str, base_url: str) -> list[tuple[str, str]]:
         extractor = _LinkExtractor(base_url)

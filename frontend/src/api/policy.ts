@@ -3,7 +3,7 @@ import { request } from '../utils/request';
 import type { ID, PageQuery, PageResult, PolicyArticle, PolicyCrawlTask, PolicySource, PolicySourceForm } from './types';
 import { useModuleMock } from './mock';
 
-const useMock = useModuleMock('VITE_USE_POLICY_MOCK', true);
+const useMock = useModuleMock('VITE_USE_POLICY_MOCK', false);
 const sourceState = useMock ? [...mockPolicySources] : [];
 const taskState = useMock ? [...mockPolicyTasks] : [];
 const articleState = useMock ? [...mockPolicyArticles] : [];

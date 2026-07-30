@@ -45,3 +45,29 @@ def test_policy_crawler_single_page_date_formats():
 
     assert article.title == "\u5355\u7bc7\u653f\u7b56"
     assert article.publishDate == "2026-07-12"
+
+
+def test_policy_crawler_zhihu_article_urls_are_supported():
+    service = PolicyCrawlerService()
+
+    assert service._extract_article_links(
+        '<a href="/p/16328033204">智慧工地政策资讯</a>',
+        'https://zhuanlan.zhihu.com/',
+    ) == [('https://zhuanlan.zhihu.com/p/16328033204', '智慧工地政策资讯')]
+
+
+def test_policy_crawler_detects_target_site_block_page():
+    service = PolicyCrawlerService()
+    import httpx
+    response = httpx.Response(
+        403,
+        text='<html><meta id="zh-zse-ck"><body>访问受限</body></html>',
+        request=httpx.Request('GET', 'https://zhuanlan.zhihu.com/p/16328033204'),
+    )
+
+    try:
+        service._ensure_usable_response(response)
+    except httpx.HTTPStatusError as exc:
+        assert 'anti-bot' in str(exc)
+    else:
+        raise AssertionError('expected anti-bot HTTPStatusError')

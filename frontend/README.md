@@ -48,7 +48,7 @@ VITE_USE_MOCK=false
 - `VITE_API_BASE_URL`：后端 API 基础地址，开发代理默认使用 `/api`。
 - `VITE_USE_MOCK`：默认 `false`，请求真实 Java 后端；只有显式设为 `true` 时才允许 API service 使用本地 mock 数据。
 - 模块级 `VITE_USE_xxx_MOCK` 默认也必须为 `false`，仅用于离线演示。
-- `VITE_USE_POLICY_MOCK=true`：政策资讯模块当前为前端演示 Mock；Java 后端政策接口实现前，关闭该开关会显示未实现错误，不向 `/api/policy/**` 发起真实请求。
+- `VITE_USE_POLICY_MOCK=true`：仅用于离线演示政策资讯模块；默认关闭，前端会调用 Java 后端 `/api/policy/**`，由 Java 后端调度 Python `/v1/policy/crawl` 完成真实网页抓取、入库和知识库索引。
 
 ## Mock 模式
 
