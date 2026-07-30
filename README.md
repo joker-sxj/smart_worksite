@@ -1,4 +1,4 @@
-﻿# 智慧工地大模型应用系统
+# 智慧工地大模型应用系统
 
 智慧工地大模型应用系统面向建筑工地管理场景，提供项目资料管理、知识库管理、知识问答、合规审查、报告生成、OCR 识别、任务编排、权限安全和审计追踪等能力。
 
@@ -408,7 +408,7 @@ Knowledge write rule: knowledge-base updates must check affected rows; document 
 | POST | `/api/data-sources/{dataSourceId}/disable` | 停用数据源 |
 | DELETE | `/api/data-sources/{dataSourceId}` | 删除数据源 |
 
-数据源密码使用 AES-GCM 存储，创建或更新密码前必须配置 `AI_DATA_SOURCE_PASSWORD_KEY`，长度为 16、24 或 32 字节，或使用 `base64:` 前缀。
+数据源密码使用 AES-GCM 存储，`AI_DATA_SOURCE_PASSWORD_KEY` 可覆盖本地开发默认 Key；生产环境必须显式配置独立 Key，长度为 16、24 或 32 字节，或使用 `base64:` 前缀。
 数据源写入规则：创建后必须读回持久化记录；修改、启用、停用和删除必须检查数据库影响行数，记录不存在或已变更时直接返回错误，不允许静默成功。
 
 ### QA

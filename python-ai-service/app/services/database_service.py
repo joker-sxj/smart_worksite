@@ -44,6 +44,14 @@ class DatabaseQaService:
         ])
         return DatabaseSummarizeData(
             summary=str(data.get("summary", "暂无总结")),
-            insights=data.get("insights") or [],
-            warnings=data.get("warnings") or [],
+            insights=_string_list(data.get("insights")),
+            warnings=_string_list(data.get("warnings")),
         ), usage
+
+
+def _string_list(value) -> list[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    return [str(value)]

@@ -113,4 +113,4 @@ app:
         max-rows: ${AI_DATABASE_MAX_ROWS:100}
         query-timeout-seconds: ${AI_DATABASE_QUERY_TIMEOUT_SECONDS:15}
       security:
-        data-source-password-key: ${AI_DATA_SOURCE_PASSWORD_KEY:}
+        data-source-password-key: ${AI_DATA_SOURCE_PASSWORD_KEY:0123456789abcdef0123456789abcdef}

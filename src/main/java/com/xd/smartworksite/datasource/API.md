@@ -22,10 +22,10 @@ Authorization: Bearer <accessToken>
 
 ## 前置配置
 
-创建或更新数据源密码前必须配置加密 Key：
+本地开发内置默认加密 Key；生产环境创建或更新数据源密码前必须配置独立 Key：
 
 ```env
-AI_DATA_SOURCE_PASSWORD_KEY=
+AI_DATA_SOURCE_PASSWORD_KEY=0123456789abcdef0123456789abcdef
 ```
 
 Key 长度必须是 16、24 或 32 字节，也可以使用 `base64:` 前缀。API 响应不会返回密码明文或密文。

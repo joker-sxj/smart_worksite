@@ -75,8 +75,13 @@ public class AiPythonServiceProperties {
     }
 
     public static class Security {
-        private String dataSourcePasswordKey = "";
+        private static final String DEFAULT_DEVELOPMENT_DATA_SOURCE_PASSWORD_KEY = "0123456789abcdef0123456789abcdef";
+        private String dataSourcePasswordKey = DEFAULT_DEVELOPMENT_DATA_SOURCE_PASSWORD_KEY;
         public String getDataSourcePasswordKey() { return dataSourcePasswordKey; }
-        public void setDataSourcePasswordKey(String dataSourcePasswordKey) { this.dataSourcePasswordKey = dataSourcePasswordKey; }
+        public void setDataSourcePasswordKey(String dataSourcePasswordKey) {
+            this.dataSourcePasswordKey = dataSourcePasswordKey == null || dataSourcePasswordKey.isBlank()
+                    ? DEFAULT_DEVELOPMENT_DATA_SOURCE_PASSWORD_KEY
+                    : dataSourcePasswordKey;
+        }
     }
 }

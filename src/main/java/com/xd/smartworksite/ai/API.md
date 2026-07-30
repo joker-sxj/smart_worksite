@@ -32,10 +32,10 @@ AI_PYTHON_READ_TIMEOUT_MS=120000
 AI_PYTHON_RETRY_COUNT=1
 ```
 
-数据源问答如果需要解密数据源密码，还必须配置：
+数据源问答如果需要解密数据源密码，本地开发可使用默认 Key，生产环境必须配置独立 Key：
 
 ```env
-AI_DATA_SOURCE_PASSWORD_KEY=
+AI_DATA_SOURCE_PASSWORD_KEY=0123456789abcdef0123456789abcdef
 ```
 
 Qwen Key 只能配置在 `python-ai-service/.env` 或运行环境变量中，不要写入 Java 配置、SQL、文档或日志。

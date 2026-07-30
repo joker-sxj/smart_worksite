@@ -1,4 +1,5 @@
 import os
+import asyncio
 import json
 os.environ["AI_SERVICE_API_KEY"] = ""
 os.environ["EMBEDDING_PROVIDER"] = "LOCAL_HASH"
@@ -384,3 +385,29 @@ def test_database_summarize_result_fails_fast_when_qwen_fails(monkeypatch):
     assert body["success"] is False
     assert body["errorCode"] == "RuntimeError"
     assert "summary service down" in body["errorMessage"]
+
+
+def test_database_summarize_result_normalizes_string_lists():
+    from app.models.schemas import DatabaseSummarizeRequest
+    from app.services.database_service import DatabaseQaService
+
+    class FakeQwen:
+        async def json_chat(self, messages):
+            return {
+                "summary": "共有 1 个项目。",
+                "insights": "项目数量较少。",
+                "warnings": "样本有限。",
+            }, {"prompt_tokens": 1}
+
+    service = DatabaseQaService(FakeQwen())
+    data, usage = asyncio.run(service.summarize_result(DatabaseSummarizeRequest(
+        question="统计项目数量",
+        sql="select count(*) as total from project",
+        columns=["total"],
+        rows=[{"total": 1}],
+    )))
+
+    assert data.summary == "共有 1 个项目。"
+    assert data.insights == ["项目数量较少。"]
+    assert data.warnings == ["样本有限。"]
+    assert usage["prompt_tokens"] == 1
