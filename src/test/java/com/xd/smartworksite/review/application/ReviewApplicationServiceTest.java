@@ -9,6 +9,7 @@ import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.common.security.UserPrincipal;
 import com.xd.smartworksite.file.application.FileObjectApplicationService;
+import com.xd.smartworksite.file.application.FileObjectContent;
 import com.xd.smartworksite.file.dto.FileObjectResponse;
 import com.xd.smartworksite.file.dto.FileUploadRequest;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
@@ -57,6 +58,9 @@ class ReviewApplicationServiceTest {
         FileObjectApplicationService fileService = mock(FileObjectApplicationService.class);
         when(fileService.upload(any(FileUploadRequest.class))).thenReturn(fileResponse(99L, 1L, "plan.pdf"));
         when(fileService.getFile(99L)).thenReturn(fileResponse(99L, 1L, "plan.pdf"));
+        ReviewDocumentTextExtractor extractor = mock(ReviewDocumentTextExtractor.class);
+        when(extractor.extract(any(FileObjectContent.class))).thenReturn(new ReviewDocumentTextExtractor.ExtractedText("施工方案内容：临边未设置防护栏杆。", false));
+        when(fileService.openFileContent(99L, 1L, null)).thenReturn(new FileObjectContent(99L, 1L, null, "plan.pdf", "application/pdf", 7L, java.io.InputStream.nullInputStream()));
         TemplateApplicationService templateService = mock(TemplateApplicationService.class);
         when(templateService.getTemplate(10L)).thenReturn(template(10L, 1L, "REVIEW", "ENABLED"));
         when(templateService.getTemplate(20L)).thenReturn(template(20L, 2L, "REVIEW", "ENABLED"));
@@ -67,6 +71,7 @@ class ReviewApplicationServiceTest {
                 fileService,
                 templateService,
                 reviewAiGateway,
+                extractor,
                 new ObjectMapper()
         );
     }
@@ -86,12 +91,14 @@ class ReviewApplicationServiceTest {
             assertThat(issue.get("status")).isEqualTo("OPEN");
         });
         assertThat(reviewAiGateway.lastRequest.getParameters()).containsEntry("reviewFileId", 99L);
+        assertThat(reviewAiGateway.lastRequest.getTools()).isEmpty();
+        assertThat(reviewAiGateway.lastRequest.getParameters()).containsEntry("reviewFileContent", "施工方案内容：临边未设置防护栏杆。");
     }
 
 
     @Test
     void submitReviewAcceptsJsonResultWrappedInMarkdownFence() {
-        reviewAiGateway.result = "```json\n{\"summary\":\"wrapped json\",\"score\":92,\"issues\":[]}\n```";
+        reviewAiGateway.result = "模型审查结果：```json\n{\"summary\":\"wrapped json\",\"score\":92,\"issues\":[]}\n``` 请查收";
 
         var response = service.submitReview(submitRequest(1L, 10L));
 

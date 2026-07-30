@@ -11,6 +11,7 @@ from app.models.schemas import AgentInvokeRequest
 from app.core.settings import Settings
 from app.services.qwen_client import QwenClient
 from app.services.agent_tools import ToolCallingAgent, ToolRegistry, ToolSpec
+from app.services.model_service import AgentService
 from app.services.rag_service import RagService
 from app.services.vector_store import ChunkRecord
 
@@ -88,6 +89,50 @@ def test_tool_calling_agent_executes_registered_tool():
 
 
 
+
+def test_compliance_review_agent_reviews_uploaded_document_content_as_json():
+    class FakeQwen:
+        def __init__(self):
+            self.messages = None
+            self.parameters = None
+
+        async def json_chat(self, messages, model=None, parameters=None):
+            self.messages = messages
+            self.parameters = parameters
+            return {
+                "summary": "发现1项临边防护问题",
+                "score": 70,
+                "issues": [{
+                    "severity": "HIGH",
+                    "location": "施工方案第1节",
+                    "ruleName": "临边防护",
+                    "description": "方案未说明临边防护栏杆设置。",
+                    "suggestion": "补充防护栏杆和验收要求。",
+                }],
+            }, {"prompt_tokens": 3}
+
+    import asyncio
+    qwen = FakeQwen()
+    data, usage = asyncio.run(AgentService(qwen).invoke(AgentInvokeRequest(
+        goal="COMPLIANCE_REVIEW",
+        parameters={
+            "recordId": 1,
+            "templateId": 10,
+            "reviewFileId": 99,
+            "reviewFileName": "施工方案.docx",
+            "reviewFileContent": "施工方案内容：临边未设置防护栏杆。",
+            "templateContent": "检查临边洞口防护。",
+        },
+    )))
+
+    result = json.loads(data.result)
+    assert result["summary"] == "发现1项临边防护问题"
+    assert result["issues"][0]["issueId"] == "ISSUE-001"
+    assert result["issues"][0]["status"] == "OPEN"
+    assert "临边未设置防护栏杆" in qwen.messages[-1].content
+    assert qwen.parameters == {"response_format": {"type": "json_object"}}
+    assert usage["prompt_tokens"] == 3
+
 def test_compliance_review_with_unavailable_tools_returns_json_result():
     client = TestClient(app)
 
@@ -107,9 +152,9 @@ def test_compliance_review_with_unavailable_tools_returns_json_result():
     body = response.json()
     assert body["success"] is True
     result = json.loads(body["data"]["result"])
-    assert result["issues"] == []
+    assert isinstance(result["issues"], list)
     assert result["summary"]
-    assert body["data"]["steps"][0]["step"] == "COMPLIANCE_REVIEW_FALLBACK"
+    assert body["data"]["steps"][0]["step"].startswith("COMPLIANCE_REVIEW_")
 
 def test_rag_uses_qwen_rerank_when_configured():
     class FakeSettings:

@@ -42,6 +42,7 @@ public class ReviewApplicationService {
     private final FileObjectApplicationService fileObjectApplicationService;
     private final TemplateApplicationService templateApplicationService;
     private final ReviewAiGateway reviewAiGateway;
+    private final ReviewDocumentTextExtractor documentTextExtractor;
     private final ObjectMapper objectMapper;
 
     public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
@@ -49,12 +50,14 @@ public class ReviewApplicationService {
                                     FileObjectApplicationService fileObjectApplicationService,
                                     TemplateApplicationService templateApplicationService,
                                     ReviewAiGateway reviewAiGateway,
+                                    ReviewDocumentTextExtractor documentTextExtractor,
                                     ObjectMapper objectMapper) {
         this.reviewRecordRepository = reviewRecordRepository;
         this.projectAccessApplicationService = projectAccessApplicationService;
         this.fileObjectApplicationService = fileObjectApplicationService;
         this.templateApplicationService = templateApplicationService;
         this.reviewAiGateway = reviewAiGateway;
+        this.documentTextExtractor = documentTextExtractor;
         this.objectMapper = objectMapper;
     }
 
@@ -184,7 +187,9 @@ public class ReviewApplicationService {
         try {
             TemplateResponse template = requireReviewTemplate(record.getProjectId(), record.getTemplateId());
             FileObjectResponse file = fileObjectApplicationService.getFile(record.getFileId());
-            AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgent(buildAgentRequest(record, template, file));
+            ReviewDocumentTextExtractor.ExtractedText reviewText = extractReviewFileText(record, file);
+            ReviewDocumentTextExtractor.ExtractedText templateText = extractTemplateText(template);
+            AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgent(buildAgentRequest(record, template, file, reviewText, templateText));
             Map<String, Object> result = parseAgentResult(aiResponse);
             result.put("providerTraceId", aiResponse.getProviderTraceId());
             if (aiResponse.getSteps() != null && !aiResponse.getSteps().isEmpty()) {
@@ -205,11 +210,29 @@ public class ReviewApplicationService {
         }
     }
 
-    private AgentInvokeRequest buildAgentRequest(ReviewRecord record, TemplateResponse template, FileObjectResponse file) {
+    private ReviewDocumentTextExtractor.ExtractedText extractReviewFileText(ReviewRecord record, FileObjectResponse file) {
+        return documentTextExtractor.extract(fileObjectApplicationService.openFileContent(file.getFileId(), record.getProjectId(), null));
+    }
+
+    private ReviewDocumentTextExtractor.ExtractedText extractTemplateText(TemplateResponse template) {
+        if (template.getFileId() == null) {
+            return new ReviewDocumentTextExtractor.ExtractedText("", false);
+        }
+        try {
+            return documentTextExtractor.extract(fileObjectApplicationService.openFileContent(
+                    template.getFileId(), template.getProjectId(), template.getTemplateId()));
+        } catch (BusinessException ex) {
+            return new ReviewDocumentTextExtractor.ExtractedText("", false);
+        }
+    }
+
+    private AgentInvokeRequest buildAgentRequest(ReviewRecord record, TemplateResponse template, FileObjectResponse file,
+                                                 ReviewDocumentTextExtractor.ExtractedText reviewText,
+                                                 ReviewDocumentTextExtractor.ExtractedText templateText) {
         AgentInvokeRequest request = new AgentInvokeRequest();
         request.setProjectId(record.getProjectId());
         request.setGoal("COMPLIANCE_REVIEW");
-        request.setTools(List.of("document_parse", "compliance_rule_check"));
+        request.setTools(List.of());
         Map<String, Object> parameters = new LinkedHashMap<>();
         parameters.put("recordId", record.getId());
         parameters.put("templateId", template.getTemplateId());
@@ -217,6 +240,11 @@ public class ReviewApplicationService {
         parameters.put("templateType", template.getTemplateType());
         parameters.put("reviewFileId", file.getFileId());
         parameters.put("reviewFileName", file.getFileName());
+        parameters.put("reviewFileContent", reviewText.text());
+        parameters.put("reviewFileContentTruncated", reviewText.truncated());
+        parameters.put("templateContent", templateText.text());
+        parameters.put("templateContentTruncated", templateText.truncated());
+        parameters.put("instruction", "请基于审查模板和被审查文件内容进行合规审查，只返回合法JSON对象，不要输出Markdown或解释文字。");
         parameters.put("expectedResultSchema", Map.of(
                 "issues", "array of {issueId,severity,location,ruleName,description,suggestion,status}",
                 "summary", "string",
@@ -246,15 +274,46 @@ public class ReviewApplicationService {
                 text = text.substring(4).trim();
             }
         }
-        if (text.startsWith("{")) {
-            return text;
-        }
+        String objectText = extractFirstJsonObject(text);
+        return objectText == null ? text : objectText;
+    }
+
+
+    private String extractFirstJsonObject(String text) {
         int start = text.indexOf('{');
-        int end = text.lastIndexOf('}');
-        if (start >= 0 && end > start) {
-            return text.substring(start, end + 1);
+        if (start < 0) {
+            return null;
         }
-        return text;
+        boolean inString = false;
+        boolean escaped = false;
+        int depth = 0;
+        for (int i = start; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (ch == '\\') {
+                escaped = inString;
+                continue;
+            }
+            if (ch == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+            if (ch == '{') {
+                depth++;
+            } else if (ch == '}') {
+                depth--;
+                if (depth == 0) {
+                    return text.substring(start, i + 1);
+                }
+            }
+        }
+        return null;
     }
 
     private List<Map<String, Object>> extractIssues(Map<String, Object> result) {
