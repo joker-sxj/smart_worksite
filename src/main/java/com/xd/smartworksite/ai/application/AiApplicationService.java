@@ -135,8 +135,9 @@ public class AiApplicationService {
         AiProviderResponse generated = pythonClient.post(properties.getPaths().getDatabaseGenerateQuery(), "DATABASE_GENERATE_QUERY", request.getProjectId(), generatePayload);
         Map<String, Object> generatedData = generated.getData();
         String sql = String.valueOf(generatedData.getOrDefault("sql", ""));
+        Map<String, Object> parameters = extractSqlParameters(generatedData.get("parameters"));
         safeSqlExecutor.validate(dataSource, sql);
-        SafeSqlExecutor.QueryResult queryResult = safeSqlExecutor.execute(dataSource, sql);
+        SafeSqlExecutor.QueryResult queryResult = safeSqlExecutor.execute(dataSource, sql, parameters);
 
         Map<String, Object> summarizePayload = new LinkedHashMap<>();
         summarizePayload.put("question", request.getQuestion());
@@ -176,8 +177,18 @@ public class AiApplicationService {
         return new PageResult<>(request.getPageNo(), request.getPageSize(), page.getTotal(), responses);
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> extractSqlParameters(Object parameters) {
+        if (parameters instanceof Map<?, ?> map) {
+            return (Map<String, Object>) map;
+        }
+        return Map.of();
+    }
+
     private String buildSchemaSummary(DataSourceRecord dataSource, String context) {
+        String schema = safeSqlExecutor.describeSchema(dataSource);
         return "数据源名称:" + dataSource.getName() + "; 数据库类型:" + dataSource.getDbType()
+                + "; " + schema
                 + (context == null || context.isBlank() ? "" : "; 业务上下文:" + context);
     }
 

@@ -6,10 +6,11 @@ import com.xd.smartworksite.common.result.ErrorCode;
 import org.springframework.stereotype.Component;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
-import java.sql.Statement;
+import java.sql.PreparedStatement;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
@@ -19,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Comparator;
 import java.util.regex.Pattern;
 
 import javax.crypto.Cipher;
@@ -43,29 +45,24 @@ public class SafeSqlExecutor {
     }
 
     public QueryResult execute(DataSourceRecord dataSource, String sql) {
+        return execute(dataSource, sql, Map.of());
+    }
+
+    public QueryResult execute(DataSourceRecord dataSource, String sql, Map<String, Object> parameters) {
         validate(dataSource, sql);
         String dbType = normalizedDbType(dataSource);
-        String limitedSql = appendLimit(sql, properties.getDatabase().getMaxRows(), dbType);
+        String limitedSql = appendLimit(stripSingleTrailingSemicolon(sql), properties.getDatabase().getMaxRows(), dbType);
         String password = decryptPassword(dataSource.getPasswordCipher());
         try (Connection connection = DriverManager.getConnection(dataSource.getJdbcUrl(), dataSource.getUsername(), password);
-             Statement statement = connection.createStatement()) {
+             PreparedStatement statement = connection.prepareStatement(limitedSql)) {
             connection.setReadOnly(true);
             statement.setQueryTimeout(properties.getDatabase().getQueryTimeoutSeconds());
-            try (ResultSet rs = statement.executeQuery(limitedSql)) {
-                ResultSetMetaData metaData = rs.getMetaData();
-                List<String> columns = new ArrayList<>();
-                for (int i = 1; i <= metaData.getColumnCount(); i++) {
-                    columns.add(metaData.getColumnLabel(i));
-                }
-                List<Map<String, Object>> rows = new ArrayList<>();
-                while (rs.next() && rows.size() < properties.getDatabase().getMaxRows()) {
-                    Map<String, Object> row = new LinkedHashMap<>();
-                    for (String column : columns) {
-                        row.put(column, rs.getObject(column));
-                    }
-                    rows.add(row);
-                }
-                return new QueryResult(columns, rows);
+            List<Object> orderedParameters = orderedParameters(parameters);
+            for (int i = 0; i < orderedParameters.size(); i++) {
+                statement.setObject(i + 1, orderedParameters.get(i));
+            }
+            try (ResultSet rs = statement.executeQuery()) {
+                return readResult(rs);
             }
         } catch (BusinessException ex) {
             throw ex;
@@ -74,18 +71,53 @@ public class SafeSqlExecutor {
         }
     }
 
+    public String describeSchema(DataSourceRecord dataSource) {
+        validateDataSourceType(dataSource);
+        String password = decryptPassword(dataSource.getPasswordCipher());
+        try (Connection connection = DriverManager.getConnection(dataSource.getJdbcUrl(), dataSource.getUsername(), password)) {
+            connection.setReadOnly(true);
+            DatabaseMetaData metaData = connection.getMetaData();
+            String catalog = connection.getCatalog();
+            String schema = "MYSQL".equals(normalizedDbType(dataSource)) ? null : connection.getSchema();
+            StringBuilder builder = new StringBuilder("可用表结构:");
+            int tableCount = 0;
+            try (ResultSet tables = metaData.getTables(catalog, schema, "%", new String[]{"TABLE", "VIEW"})) {
+                while (tables.next() && tableCount < 50) {
+                    String tableName = tables.getString("TABLE_NAME");
+                    builder.append(' ').append(tableName).append('(');
+                    int columnCount = 0;
+                    try (ResultSet columns = metaData.getColumns(catalog, schema, tableName, "%")) {
+                        while (columns.next() && columnCount < 40) {
+                            if (columnCount > 0) {
+                                builder.append(", ");
+                            }
+                            builder.append(columns.getString("COLUMN_NAME"))
+                                    .append(' ')
+                                    .append(columns.getString("TYPE_NAME"));
+                            columnCount++;
+                        }
+                    }
+                    builder.append(");");
+                    tableCount++;
+                }
+            }
+            return builder.toString();
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "data source schema inspection failed: " + ex.getMessage());
+        }
+    }
+
     public void validate(DataSourceRecord dataSource, String sql) {
         if (dataSource == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "数据源不存在或未启用");
         }
-        String dbType = normalizedDbType(dataSource);
-        if (!("MYSQL".equals(dbType) || "POSTGRESQL".equals(dbType) || "KINGBASE".equals(dbType) || "KINGBASE8".equals(dbType))) {
-            throw new BusinessException(ErrorCode.PARAM_ERROR, "当前仅支持MySQL、PostgreSQL、人大金仓数据源问答");
-        }
+        validateDataSourceType(dataSource);
         if (sql == null || sql.isBlank()) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "SQL不能为空");
         }
-        String normalized = sql.trim().toLowerCase(Locale.ROOT);
+        String normalized = stripSingleTrailingSemicolon(sql).trim().toLowerCase(Locale.ROOT);
         if (!(normalized.startsWith("select") || normalized.startsWith("with"))) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "数据库问答仅允许只读SELECT查询");
         }
@@ -98,12 +130,52 @@ public class SafeSqlExecutor {
     }
 
     String appendLimit(String sql, int maxRows, String dbType) {
-        String normalized = sql.trim().toLowerCase(Locale.ROOT);
+        String sanitizedSql = stripSingleTrailingSemicolon(sql);
+        String normalized = sanitizedSql.trim().toLowerCase(Locale.ROOT);
         if (MYSQL_LIMIT.matcher(normalized).matches() || FETCH_FIRST.matcher(normalized).matches()) {
-            return sql;
+            return sanitizedSql;
         }
         // MySQL, PostgreSQL, and Kingbase all accept LIMIT for the read-only queries generated here.
-        return sql + limitClause(maxRows);
+        return sanitizedSql + limitClause(maxRows);
+    }
+
+    String stripSingleTrailingSemicolon(String sql) {
+        String trimmed = sql.trim();
+        if (trimmed.endsWith(";") && trimmed.indexOf(';') == trimmed.length() - 1) {
+            return trimmed.substring(0, trimmed.length() - 1).trim();
+        }
+        return sql;
+    }
+
+    List<Object> orderedParameters(Map<String, Object> parameters) {
+        if (parameters == null || parameters.isEmpty()) {
+            return List.of();
+        }
+        boolean positionalKeys = parameters.keySet().stream().allMatch(key -> key != null && key.matches("p\\d+"));
+        if (!positionalKeys) {
+            return new ArrayList<>(parameters.values());
+        }
+        return parameters.entrySet().stream()
+                .sorted(Comparator.comparingInt(entry -> Integer.parseInt(entry.getKey().substring(1))))
+                .map(Map.Entry::getValue)
+                .toList();
+    }
+
+    private QueryResult readResult(ResultSet rs) throws Exception {
+        ResultSetMetaData metaData = rs.getMetaData();
+        List<String> columns = new ArrayList<>();
+        for (int i = 1; i <= metaData.getColumnCount(); i++) {
+            columns.add(metaData.getColumnLabel(i));
+        }
+        List<Map<String, Object>> rows = new ArrayList<>();
+        while (rs.next() && rows.size() < properties.getDatabase().getMaxRows()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            for (String column : columns) {
+                row.put(column, rs.getObject(column));
+            }
+            rows.add(row);
+        }
+        return new QueryResult(columns, rows);
     }
 
     private String limitClause(int maxRows) {
@@ -139,6 +211,16 @@ public class SafeSqlExecutor {
             throw ex;
         } catch (Exception ex) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "data source password decrypt failed");
+        }
+    }
+
+    private void validateDataSourceType(DataSourceRecord dataSource) {
+        if (dataSource == null) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "数据源不存在或未启用");
+        }
+        String dbType = normalizedDbType(dataSource);
+        if (!("MYSQL".equals(dbType) || "POSTGRESQL".equals(dbType) || "KINGBASE".equals(dbType) || "KINGBASE8".equals(dbType))) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "当前仅支持MySQL、PostgreSQL、人大金仓数据源问答");
         }
     }
 

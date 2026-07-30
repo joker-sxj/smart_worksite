@@ -17,7 +17,7 @@ class DatabaseQaService:
     async def generate_query(self, request: DatabaseGenerateQueryRequest) -> tuple[DatabaseGenerateQueryData, dict]:
         system = (
             "你是智慧工地数据库问答SQL生成器。只能返回JSON，字段为sql、parameters、explanation、riskLevel。"
-            "parameters必须是JSON对象，不能返回数组；无参数时返回空对象{}。"
+            "parameters必须是JSON对象，不能返回数组；无参数时返回空对象{}；使用?占位符时按顺序使用p1、p2等键名。"
             "只能生成只读SELECT或WITH查询，不允许写入、删除、DDL或多语句。"
         )
         prompt = {

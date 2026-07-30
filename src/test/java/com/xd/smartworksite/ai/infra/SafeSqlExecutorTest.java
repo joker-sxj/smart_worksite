@@ -9,9 +9,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.sql.Driver;
 import java.sql.DriverManager;
+import java.sql.Connection;
+import java.sql.Statement;
 import java.util.Base64;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
@@ -22,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 class SafeSqlExecutorTest {
 
@@ -71,6 +76,12 @@ class SafeSqlExecutorTest {
 
 
     @Test
+    void allowsSingleTrailingSemicolonButBlocksMultipleStatements() {
+        assertDoesNotThrow(() -> executor.validate(mysqlDataSource(), "select count(*) as total from project;"));
+        assertEquals("select count(*) as total from project limit 100", executor.appendLimit("select count(*) as total from project;", 100, "MYSQL"));
+        assertThrows(BusinessException.class, () -> executor.validate(mysqlDataSource(), "select count(*) from project; select * from user_account"));
+    }
+    @Test
     void decryptsAesGcmPassword() throws Exception {
         properties.getSecurity().setDataSourcePasswordKey("base64:" + Base64.getEncoder().encodeToString("0123456789abcdef".getBytes(StandardCharsets.UTF_8)));
         String cipher = encryptPassword("db-secret", "0123456789abcdef".getBytes(StandardCharsets.UTF_8));
@@ -93,6 +104,54 @@ class SafeSqlExecutorTest {
                 .toList();
         assertTrue(names.contains("org.postgresql.Driver"));
         assertTrue(names.contains("com.kingbase8.Driver"));
+    }
+
+    @Test
+    void executesParameterizedQueryWithGeneratedParameters() throws Exception {
+        String jdbcUrl = "jdbc:h2:mem:database_qa_params;MODE=MySQL;DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, "sa", "");
+             Statement statement = connection.createStatement()) {
+            statement.execute("create table safety_issue (id int primary key, project_id int, status varchar(32))");
+            statement.execute("insert into safety_issue values (1, 1, 'OPEN'), (2, 1, 'CLOSED'), (3, 2, 'OPEN')");
+        }
+
+        DataSourceRecord record = new DataSourceRecord();
+        record.setDbType("MYSQL");
+        record.setJdbcUrl(jdbcUrl);
+        record.setUsername("sa");
+        configureEncryptedPassword(record, "");
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("p2", "CLOSED");
+        parameters.put("p1", 1);
+
+        SafeSqlExecutor.QueryResult result = executor.execute(
+                record,
+                "select count(*) as open_count from safety_issue where project_id = ? and status <> ?;",
+                parameters);
+
+        assertEquals(List.of("OPEN_COUNT"), result.columns());
+        assertEquals(1L, result.rows().get(0).get("OPEN_COUNT"));
+    }
+
+    @Test
+    void describesAvailableTablesAndColumnsForPromptSchema() throws Exception {
+        String jdbcUrl = "jdbc:h2:mem:database_qa_schema;MODE=MySQL;DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, "sa", "");
+             Statement statement = connection.createStatement()) {
+            statement.execute("create table safety_issue (id int primary key, project_id int, status varchar(32), created_at timestamp)");
+        }
+
+        DataSourceRecord record = new DataSourceRecord();
+        record.setDbType("MYSQL");
+        record.setJdbcUrl(jdbcUrl);
+        record.setUsername("sa");
+        configureEncryptedPassword(record, "");
+
+        String schema = executor.describeSchema(record);
+
+        assertThat(schema).contains("SAFETY_ISSUE");
+        assertThat(schema).contains("PROJECT_ID");
+        assertThat(schema).contains("STATUS");
     }
 
     @Test
