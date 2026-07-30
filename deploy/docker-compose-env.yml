@@ -78,6 +78,38 @@ services:
       "
     restart: "no"
 
+  python-ai-service:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.python-ai-service
+    container_name: smart-worksite-python-ai-service
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      AI_SERVICE_HOST: 0.0.0.0
+      AI_SERVICE_PORT: 8015
+      AI_SERVICE_API_KEY: ${AI_PYTHON_API_KEY:-dev-ai-service-key}
+      QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      QWEN_MODEL: ${QWEN_MODEL:-qwen-plus}
+      QWEN_VL_ENDPOINT: ${QWEN_VL_ENDPOINT:-https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions}
+      QWEN_VL_API_KEY: ${QWEN_VL_API_KEY:-}
+      QWEN_VL_MODEL: ${QWEN_VL_MODEL:-qwen-vl-plus}
+      QWEN_EMBEDDING_MODEL: ${QWEN_EMBEDDING_MODEL:-text-embedding-v4}
+      RAG_PROVIDER: ${RAG_PROVIDER:-LOCAL}
+      RAG_DATA_DIR: /app/data/rag
+      MILVUS_URI: ${MILVUS_URI:-http://milvus:19530}
+      PGVECTOR_DSN: ${PGVECTOR_DSN:-}
+    ports:
+      - "${AI_SERVICE_PORT:-8015}:8015"
+    volumes:
+      - python-ai-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8015/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   pgvector:
     image: pgvector/pgvector:${PGVECTOR_VERSION:-pg16}
     container_name: smart-worksite-pgvector
@@ -148,6 +180,7 @@ volumes:
   mysql-data:
   redis-data:
   minio-data:
+  python-ai-data:
   pgvector-data:
   milvus-etcd-data:
   milvus-minio-data:

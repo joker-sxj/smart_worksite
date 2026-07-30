@@ -43,7 +43,7 @@
 
 ### Python 智能算法服务
 
-Python 智能算法服务属于整体架构的一部分，位于 `python-ai-service/`。
+Python 智能算法服务属于整体架构的一部分，位于 `python-ai-service/`。 Java 本地启动时会自动检测 `AI_PYTHON_BASE_URL` 指向的本机服务；如果未启动，会使用 `python-ai-service/.venv` 自动拉起，不需要再单独打开脚本。Docker 部署时 `deploy/docker-compose-env.yml` 会统一启动 `python-ai-service` 容器。
 
 | 技术方向 | 用途 |
 | --- | --- |

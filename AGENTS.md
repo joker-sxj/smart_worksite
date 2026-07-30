@@ -79,7 +79,7 @@ copy .env.example .env
 docker compose -f docker-compose-env.yml --env-file .env up -d
 ```
 
-Docker starts MySQL, Redis, and MinIO only. Business tables are created by Flyway. Do not create business tables through Docker initialization SQL. Vector retrieval components such as Milvus or pgvector are planned separately and are not part of the current local Docker dependency set unless explicitly added.
+Docker starts MySQL, Redis, MinIO, and the Python intelligent algorithm service. Business tables are created by Flyway. Do not create business tables through Docker initialization SQL. Vector retrieval components such as Milvus or pgvector are planned separately and are not part of the current local Docker dependency set unless explicitly added.
 
 ## Package Structure
 

@@ -14,6 +14,7 @@ public class AiPythonServiceProperties {
     private Paths paths = new Paths();
     private Database database = new Database();
     private Security security = new Security();
+    private AutoStart autoStart = new AutoStart();
 
     public String getBaseUrl() { return baseUrl; }
     public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
@@ -31,6 +32,23 @@ public class AiPythonServiceProperties {
     public void setDatabase(Database database) { this.database = database; }
     public Security getSecurity() { return security; }
     public void setSecurity(Security security) { this.security = security; }
+    public AutoStart getAutoStart() { return autoStart; }
+    public void setAutoStart(AutoStart autoStart) { this.autoStart = autoStart; }
+
+    public static class AutoStart {
+        private boolean enabled = true;
+        private String workingDirectory = "python-ai-service";
+        private String pythonExecutable = "";
+        private int startupTimeoutSeconds = 45;
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getWorkingDirectory() { return workingDirectory; }
+        public void setWorkingDirectory(String workingDirectory) { this.workingDirectory = workingDirectory; }
+        public String getPythonExecutable() { return pythonExecutable; }
+        public void setPythonExecutable(String pythonExecutable) { this.pythonExecutable = pythonExecutable; }
+        public int getStartupTimeoutSeconds() { return startupTimeoutSeconds; }
+        public void setStartupTimeoutSeconds(int startupTimeoutSeconds) { this.startupTimeoutSeconds = startupTimeoutSeconds; }
+    }
 
     public static class Paths {
         private String modelInvoke = "/v1/model/invoke";

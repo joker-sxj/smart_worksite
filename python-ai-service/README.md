@@ -11,6 +11,8 @@ python -m venv .venv
 pip install -r requirements.txt
 copy .env.example .env
 # set QWEN_API_KEY and QWEN_VL_API_KEY in .env when using provider-backed features
+# Usually started automatically by Java local startup or deploy/docker-compose-env.yml.
+# For standalone debugging only:
 uvicorn app.main:app --host 0.0.0.0 --port 8015
 ```
 

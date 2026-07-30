@@ -9,7 +9,7 @@ os.environ["RAG_DATA_DIR"] = "data/test-rag"
 from fastapi.testclient import TestClient
 from app.main import app
 from app.models.schemas import AgentInvokeRequest
-from app.core.settings import Settings
+from app.core.settings import Settings, get_settings
 from app.services.qwen_client import QwenClient
 from app.services.agent_tools import ToolCallingAgent, ToolRegistry, ToolSpec
 from app.services.model_service import AgentService
@@ -24,6 +24,19 @@ def test_health_without_key_when_not_configured():
     body = response.json()
     assert body["success"] is True
     assert body["data"]["status"] == "UP"
+
+
+def test_health_without_key_when_service_key_is_configured(monkeypatch):
+    monkeypatch.setenv("AI_SERVICE_API_KEY", "configured-key")
+    get_settings.cache_clear()
+    try:
+        client = TestClient(app)
+        response = client.get("/v1/health")
+        assert response.status_code == 200
+        assert response.json()["data"]["status"] == "UP"
+    finally:
+        monkeypatch.setenv("AI_SERVICE_API_KEY", "")
+        get_settings.cache_clear()
 
 
 def test_rag_index_and_search_local_hash():

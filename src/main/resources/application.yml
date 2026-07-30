@@ -98,6 +98,11 @@ app:
       read-timeout-ms: ${AI_PYTHON_READ_TIMEOUT_MS:120000}
       retry-count: ${AI_PYTHON_RETRY_COUNT:1}
       api-key: ${AI_PYTHON_API_KEY:dev-ai-service-key}
+      auto-start:
+        enabled: ${AI_PYTHON_AUTO_START_ENABLED:true}
+        working-directory: ${AI_PYTHON_AUTO_START_WORKDIR:python-ai-service}
+        python-executable: ${AI_PYTHON_AUTO_START_PYTHON:}
+        startup-timeout-seconds: ${AI_PYTHON_AUTO_START_TIMEOUT_SECONDS:45}
       paths:
         model-invoke: /v1/model/invoke
         agent-invoke: /v1/agent/invoke
