@@ -236,7 +236,7 @@ class KnowledgeBaseApplicationServiceTest {
         var knowledgeBase = service.createKnowledgeBase(1L, createRequest("安全规范"));
         KnowledgeDocument document = knowledgeDocumentRepository.insert(document(1L, knowledgeBase.getKnowledgeBaseId(), "安全手册"));
         knowledgeDocumentRepository.markIndexQueued(document.getId(), 500L, 2L);
-        when(fileParseApplicationService.getLatestFileParseRecordForSystem(99L, 1L)).thenReturn(parseRecord());
+        when(fileParseApplicationService.getLatestSuccessfulFileParseRecordForSystem(99L, 1L)).thenReturn(parseRecord());
         when(fileParseApplicationService.getParseContentForSystem(700L)).thenReturn(parseContent("解析后的知识内容"));
         RagIndexResponse ragResponse = new RagIndexResponse();
         ragResponse.setIndexedDocuments(1);
@@ -271,7 +271,7 @@ class KnowledgeBaseApplicationServiceTest {
         var knowledgeBase = service.createKnowledgeBase(1L, createRequest("安全规范"));
         KnowledgeDocument document = knowledgeDocumentRepository.insert(document(1L, knowledgeBase.getKnowledgeBaseId(), "安全手册"));
         knowledgeDocumentRepository.markIndexQueued(document.getId(), 500L, 2L);
-        when(fileParseApplicationService.getLatestFileParseRecordForSystem(99L, 1L)).thenReturn(parseRecord());
+        when(fileParseApplicationService.getLatestSuccessfulFileParseRecordForSystem(99L, 1L)).thenReturn(parseRecord());
         when(fileParseApplicationService.getParseContentForSystem(700L)).thenReturn(parseContent("解析后的知识内容"));
         RagIndexResponse ragResponse = new RagIndexResponse();
         ragResponse.setIndexedDocuments(1);
@@ -288,7 +288,7 @@ class KnowledgeBaseApplicationServiceTest {
         var knowledgeBase = service.createKnowledgeBase(1L, createRequest("安全规范"));
         KnowledgeDocument document = knowledgeDocumentRepository.insert(document(1L, knowledgeBase.getKnowledgeBaseId(), "安全手册"));
         knowledgeDocumentRepository.markIndexQueued(document.getId(), 500L, 2L);
-        when(fileParseApplicationService.getLatestFileParseRecordForSystem(99L, 1L)).thenReturn(parseRecord());
+        when(fileParseApplicationService.getLatestSuccessfulFileParseRecordForSystem(99L, 1L)).thenReturn(parseRecord());
         when(fileParseApplicationService.getParseContentForSystem(700L)).thenReturn(parseContent(" "));
 
         assertThatThrownBy(() -> service.executeIndexTask(document.getId(), 500L))
@@ -305,7 +305,7 @@ class KnowledgeBaseApplicationServiceTest {
         var knowledgeBase = service.createKnowledgeBase(1L, createRequest("安全规范"));
         KnowledgeDocument document = knowledgeDocumentRepository.insert(document(1L, knowledgeBase.getKnowledgeBaseId(), "安全手册"));
         knowledgeDocumentRepository.markIndexQueued(document.getId(), 500L, 2L);
-        when(fileParseApplicationService.getLatestFileParseRecordForSystem(99L, 1L)).thenReturn(parseRecord());
+        when(fileParseApplicationService.getLatestSuccessfulFileParseRecordForSystem(99L, 1L)).thenReturn(parseRecord());
         when(fileParseApplicationService.getParseContentForSystem(700L)).thenReturn(parseContent(" "));
         knowledgeDocumentRepository.failMarkFailed = true;
 

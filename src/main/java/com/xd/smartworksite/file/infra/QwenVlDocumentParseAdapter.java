@@ -33,11 +33,8 @@ public class QwenVlDocumentParseAdapter implements DocumentParseModelAdapter {
     @Override
     public ParsedDocument parse(DocumentParseRequest request) {
         FileProperties.QwenVl qwenVl = fileProperties.getParse().getQwenVl();
-        if (qwenVl.getEndpoint() == null || qwenVl.getEndpoint().isBlank()) {
-            throw new IllegalStateException("qwen vl endpoint is not configured");
-        }
-        if (qwenVl.getApiKey() == null || qwenVl.getApiKey().isBlank()) {
-            throw new IllegalStateException("qwen vl api key is not configured");
+        if (!isQwenConfigured(qwenVl)) {
+            return parsePreparedTextLocally(request);
         }
 
         try {
@@ -81,6 +78,39 @@ public class QwenVlDocumentParseAdapter implements DocumentParseModelAdapter {
         } catch (Exception ex) {
             throw new IllegalStateException("qwen vl parse failed", ex);
         }
+    }
+
+    private boolean isQwenConfigured(FileProperties.QwenVl qwenVl) {
+        return qwenVl.getEndpoint() != null && !qwenVl.getEndpoint().isBlank()
+                && qwenVl.getApiKey() != null && !qwenVl.getApiKey().isBlank();
+    }
+
+    private ParsedDocument parsePreparedTextLocally(DocumentParseRequest request) {
+        if (request.getImageDataUrl() != null && !request.getImageDataUrl().isBlank()) {
+            throw new IllegalStateException("qwen vl api key is not configured");
+        }
+        if (request.getTextContent() == null || request.getTextContent().isBlank()) {
+            throw new IllegalStateException("document text content is empty");
+        }
+        String content = normalizeLocalMarkdown(request.getTextContent());
+        try {
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("provider", "LOCAL_TEXT");
+            metadata.put("reason", "qwen vl credentials are not configured");
+            return new ParsedDocument(
+                    content, request.getTargetFormat(), "LOCAL_TEXT", objectMapper.writeValueAsString(metadata));
+        } catch (Exception ex) {
+            throw new IllegalStateException("local text parse failed", ex);
+        }
+    }
+
+    private String normalizeLocalMarkdown(String text) {
+        String normalized = text.replace("\r\n", "\n").replace('\r', '\n').trim();
+        return normalized.lines()
+                .map(String::stripTrailing)
+                .filter(line -> !line.isBlank())
+                .reduce((left, right) -> left + "\n" + right)
+                .orElseThrow(() -> new IllegalStateException("document text content is empty"));
     }
 
     private Map<String, Object> buildRequestBody(DocumentParseRequest request, String model) {

@@ -230,11 +230,31 @@ public class ReviewApplicationService {
         if (response.getResult() == null || response.getResult().isBlank()) {
             throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "review agent returned empty result");
         }
+        String resultText = normalizeAgentJsonText(response.getResult());
         try {
-            return objectMapper.readValue(response.getResult(), new TypeReference<Map<String, Object>>() {});
+            return objectMapper.readValue(resultText, new TypeReference<Map<String, Object>>() {});
         } catch (JsonProcessingException ex) {
             throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "review agent result must be valid JSON");
         }
+    }
+
+    private String normalizeAgentJsonText(String raw) {
+        String text = raw.trim();
+        if (text.startsWith("```") && text.endsWith("```")) {
+            text = text.substring(3, text.length() - 3).trim();
+            if (text.toLowerCase(Locale.ROOT).startsWith("json")) {
+                text = text.substring(4).trim();
+            }
+        }
+        if (text.startsWith("{")) {
+            return text;
+        }
+        int start = text.indexOf('{');
+        int end = text.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return text.substring(start, end + 1);
+        }
+        return text;
     }
 
     private List<Map<String, Object>> extractIssues(Map<String, Object> result) {

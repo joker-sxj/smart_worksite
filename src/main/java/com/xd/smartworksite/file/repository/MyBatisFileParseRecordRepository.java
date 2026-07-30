@@ -41,6 +41,11 @@ public class MyBatisFileParseRecordRepository implements FileParseRecordReposito
     }
 
     @Override
+    public Optional<FileParseRecord> findLatestSuccessfulByFileId(Long projectId, Long fileId) {
+        return Optional.ofNullable(fileParseRecordMapper.selectLatestSuccessfulByFileId(projectId, fileId));
+    }
+
+    @Override
     public Optional<FileParseRecord> findReusable(Long projectId, Long fileId, String sourceFileHash, String resultFormat) {
         return Optional.ofNullable(fileParseRecordMapper.selectReusable(projectId, fileId, sourceFileHash, resultFormat));
     }

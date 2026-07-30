@@ -1,4 +1,5 @@
 import os
+import json
 os.environ["AI_SERVICE_API_KEY"] = ""
 os.environ["EMBEDDING_PROVIDER"] = "LOCAL_HASH"
 os.environ["RAG_PROVIDER"] = "LOCAL"
@@ -85,6 +86,30 @@ def test_tool_calling_agent_executes_registered_tool():
     assert "安全帽" in data.steps[0].result
     assert usage["completion_tokens"] == 1
 
+
+
+def test_compliance_review_with_unavailable_tools_returns_json_result():
+    client = TestClient(app)
+
+    response = client.post("/v1/agent/invoke", json={
+        "goal": "COMPLIANCE_REVIEW",
+        "tools": ["document_parse", "compliance_rule_check"],
+        "parameters": {
+            "recordId": 1,
+            "templateId": 10,
+            "templateName": "临边洞口审查模板",
+            "reviewFileId": 99,
+            "reviewFileName": "方案.docx",
+        },
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    result = json.loads(body["data"]["result"])
+    assert result["issues"] == []
+    assert result["summary"]
+    assert body["data"]["steps"][0]["step"] == "COMPLIANCE_REVIEW_FALLBACK"
 
 def test_rag_uses_qwen_rerank_when_configured():
     class FakeSettings:

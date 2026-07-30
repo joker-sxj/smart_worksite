@@ -15,6 +15,8 @@ public interface FileParseRecordMapper {
 
     FileParseRecord selectLatestByFileId(@Param("projectId") Long projectId, @Param("fileId") Long fileId);
 
+    FileParseRecord selectLatestSuccessfulByFileId(@Param("projectId") Long projectId, @Param("fileId") Long fileId);
+
     FileParseRecord selectReusable(@Param("projectId") Long projectId,
                                    @Param("fileId") Long fileId,
                                    @Param("sourceFileHash") String sourceFileHash,

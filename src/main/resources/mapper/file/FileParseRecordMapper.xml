@@ -70,6 +70,18 @@
         limit 1
     </select>
 
+    <select id="selectLatestSuccessfulByFileId" resultMap="FileParseRecordResultMap">
+        select <include refid="FileParseRecordColumns"/>
+        from file_parse_record
+        where project_id = #{projectId}
+          and file_id = #{fileId}
+          and status = 'SUCCESS'
+          and result_object_name is not null
+          and deleted = 0
+        order by finished_at desc, id desc
+        limit 1
+    </select>
+
     <select id="selectReusable" resultMap="FileParseRecordResultMap">
         select <include refid="FileParseRecordColumns"/>
         from file_parse_record

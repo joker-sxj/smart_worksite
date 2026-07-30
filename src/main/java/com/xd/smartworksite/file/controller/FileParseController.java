@@ -46,6 +46,12 @@ public class FileParseController {
         return ApiResponse.success(fileParseApplicationService.getLatestFileParseRecord(fileId, projectId));
     }
 
+    @GetMapping("/api/files/{fileId}/parse-records/latest-successful")
+    public ApiResponse<FileParseRecordResponse> getLatestSuccessfulFileParseRecord(@PathVariable Long fileId,
+                                                                                   @NotNull @RequestParam Long projectId) {
+        return ApiResponse.success(fileParseApplicationService.getLatestSuccessfulFileParseRecord(fileId, projectId));
+    }
+
     @GetMapping("/api/file-parse-records/{recordId}")
     public ApiResponse<FileParseRecordResponse> getParseRecord(@PathVariable Long recordId) {
         return ApiResponse.success(fileParseApplicationService.getParseRecord(recordId));

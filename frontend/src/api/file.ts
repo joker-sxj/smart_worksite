@@ -98,6 +98,10 @@ export async function fetchLatestFileParseRecord(fileId: ID, projectId: ID) {
   return request.get<FileParseRecord>(`/files/${fileId}/parse-records/latest`, { params: { projectId } });
 }
 
+export async function fetchLatestSuccessfulFileParseRecord(fileId: ID, projectId: ID) {
+  return request.get<FileParseRecord>(`/files/${fileId}/parse-records/latest-successful`, { params: { projectId } });
+}
+
 export async function fetchFileParseRecord(recordId: ID) {
   return request.get<FileParseRecord>(`/file-parse-records/${recordId}`);
 }

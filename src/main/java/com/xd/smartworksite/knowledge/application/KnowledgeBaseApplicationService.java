@@ -232,7 +232,7 @@ public class KnowledgeBaseApplicationService {
             throw new BusinessException(ErrorCode.CONFLICT, "knowledge document indexing state changed");
         }
         try {
-            FileParseRecordResponse parseRecord = fileParseApplicationService.getLatestFileParseRecordForSystem(
+            FileParseRecordResponse parseRecord = fileParseApplicationService.getLatestSuccessfulFileParseRecordForSystem(
                     document.getFileId(), document.getProjectId());
             FileParseContentResponse content = fileParseApplicationService.getParseContentForSystem(parseRecord.getRecordId());
             String parsedContent = normalizeParsedContent(content.getContent());

@@ -118,6 +118,7 @@ class FileParseApplicationServiceTest {
         @Override public Optional<FileParseRecord> findById(Long recordId) { return Optional.empty(); }
         @Override public List<FileParseRecord> findByFileId(Long projectId, Long fileId) { return List.of(); }
         @Override public Optional<FileParseRecord> findLatestByFileId(Long projectId, Long fileId) { return Optional.empty(); }
+        @Override public Optional<FileParseRecord> findLatestSuccessfulByFileId(Long projectId, Long fileId) { return Optional.empty(); }
         @Override public Optional<FileParseRecord> findReusable(Long projectId, Long fileId, String sourceFileHash, String resultFormat) { return Optional.empty(); }
         @Override public int updateRunning(Long recordId, String stage, int progress) { return 0; }
         @Override public int updateSucceeded(FileParseRecord record) { return 0; }

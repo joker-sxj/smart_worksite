@@ -88,6 +88,18 @@ class ReviewApplicationServiceTest {
         assertThat(reviewAiGateway.lastRequest.getParameters()).containsEntry("reviewFileId", 99L);
     }
 
+
+    @Test
+    void submitReviewAcceptsJsonResultWrappedInMarkdownFence() {
+        reviewAiGateway.result = "```json\n{\"summary\":\"wrapped json\",\"score\":92,\"issues\":[]}\n```";
+
+        var response = service.submitReview(submitRequest(1L, 10L));
+
+        assertThat(response.getStatus()).isEqualTo("COMPLETED");
+        assertThat(response.getIssues()).isEmpty();
+        assertThat(response.getResult()).containsEntry("summary", "wrapped json");
+    }
+
     @Test
     void submitReviewFailsFastWhenInsertedRecordCannotBeReadBack() {
         reviewRecordRepository.hideInsertedRecord = true;
@@ -239,6 +251,7 @@ class ReviewApplicationServiceTest {
 
     private static class StubReviewAiGateway implements ReviewAiGateway {
         private boolean fail;
+        private String result = "{\"summary\":\"page 1 safety review\",\"score\":88,\"issues\":[{\"issueId\":\"ISSUE-001\",\"severity\":\"HIGH\",\"location\":\"page 1\",\"ruleName\":\"safety\",\"description\":\"missing guardrail\",\"suggestion\":\"add guardrail\"}]}";
         private AgentInvokeRequest lastRequest;
 
         @Override
@@ -248,7 +261,7 @@ class ReviewApplicationServiceTest {
                 throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "agent down");
             }
             AgentInvokeResponse response = new AgentInvokeResponse();
-            response.setResult("{\"summary\":\"page 1 safety review\",\"score\":88,\"issues\":[{\"issueId\":\"ISSUE-001\",\"severity\":\"HIGH\",\"location\":\"page 1\",\"ruleName\":\"safety\",\"description\":\"missing guardrail\",\"suggestion\":\"add guardrail\"}]}");
+            response.setResult(result);
             response.setProviderTraceId("review-trace");
             return response;
         }

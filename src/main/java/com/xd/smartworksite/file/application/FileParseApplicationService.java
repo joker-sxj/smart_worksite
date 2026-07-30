@@ -118,10 +118,22 @@ public class FileParseApplicationService {
         return getLatestFileParseRecordForSystem(fileId, projectId);
     }
 
+    public FileParseRecordResponse getLatestSuccessfulFileParseRecord(Long fileId, Long projectId) {
+        FileObject fileObject = findActiveFile(fileId);
+        verifyProject(fileObject, projectId);
+        return getLatestSuccessfulFileParseRecordForSystem(fileId, projectId);
+    }
+
     public FileParseRecordResponse getLatestFileParseRecordForSystem(Long fileId, Long projectId) {
         return fileParseRecordRepository.findLatestByFileId(projectId, fileId)
                 .map(this::toResponse)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "file parse record not found"));
+    }
+
+    public FileParseRecordResponse getLatestSuccessfulFileParseRecordForSystem(Long fileId, Long projectId) {
+        return fileParseRecordRepository.findLatestSuccessfulByFileId(projectId, fileId)
+                .map(this::toResponse)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "successful file parse record not found"));
     }
 
     public FileParseRecordResponse getParseRecord(Long recordId) {

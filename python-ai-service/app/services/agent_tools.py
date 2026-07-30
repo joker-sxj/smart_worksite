@@ -50,6 +50,8 @@ class ToolCallingAgent:
         usage_total: dict[str, Any] = {}
         tool_schemas = self.registry.schemas(request.tools)
         if request.tools and not tool_schemas:
+            if str(request.goal).upper() == "COMPLIANCE_REVIEW":
+                return self._compliance_review_fallback(request), usage_total
             return AgentInvokeData(
                 result="请求的工具当前不可用，请检查工具名称或服务配置。",
                 steps=[AgentStep(step="TOOL_SELECTION", result="未找到可用工具：" + ",".join(request.tools))],
@@ -92,3 +94,24 @@ class ToolCallingAgent:
         answer, usage = await self.qwen.chat(messages, parameters=request.parameters)
         usage_total.update(usage or {})
         return AgentInvokeData(result=answer, steps=steps, followUpQuestions=[]), usage_total
+
+    def _compliance_review_fallback(self, request: AgentInvokeRequest) -> AgentInvokeData:
+        parameters = request.parameters or {}
+        result = {
+            "summary": "审查智能体已接收审查任务，但当前文档解析/规则校验工具未注册，已返回可入库的空审查结果，请检查Python工具配置后重试以获得详细问题。",
+            "score": 0,
+            "issues": [],
+            "metadata": {
+                "recordId": parameters.get("recordId"),
+                "templateId": parameters.get("templateId"),
+                "templateName": parameters.get("templateName"),
+                "reviewFileId": parameters.get("reviewFileId"),
+                "reviewFileName": parameters.get("reviewFileName"),
+                "fallbackReason": "requested compliance tools are unavailable",
+            },
+        }
+        return AgentInvokeData(
+            result=json.dumps(result, ensure_ascii=False),
+            steps=[AgentStep(step="COMPLIANCE_REVIEW_FALLBACK", result="document_parse/compliance_rule_check tools unavailable; returned valid JSON result")],
+            followUpQuestions=[],
+        )

@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import AppUpload from '../../components/common/AppUpload.vue';
 import AppTable from '../../components/common/AppTable.vue';
 import StatusTag from '../../components/common/StatusTag.vue';
 import EmptyState from '../../components/common/EmptyState.vue';
 import { createKnowledgeBase, deleteKnowledgeBase, deleteKnowledgeDocument, disableKnowledgeBase, enableKnowledgeBase, fetchKnowledgeBaseDetail, fetchKnowledgeBases, fetchKnowledgeDocumentDetail, fetchKnowledgeDocuments, triggerDocumentIndex, updateKnowledgeBase, uploadKnowledgeDocument } from '../../api/knowledge';
-import { createFileParse, fetchLatestFileParseRecord } from '../../api/file';
+import { createFileParse, fetchLatestSuccessfulFileParseRecord } from '../../api/file';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, KnowledgeBase, KnowledgeDocument } from '../../api/types';
@@ -36,6 +36,7 @@ const knowledgeManageTip = '当前账号没有知识库管理权限';
 const indexableStatuses = new Set(['PENDING', 'FAILED']);
 const uploadableExts = new Set(['png', 'jpg', 'jpeg', 'webp', 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'csv']);
 const parseableExts = new Set(['png', 'jpg', 'jpeg', 'webp', 'pdf', 'doc', 'docx']);
+let docsRefreshTimer: number | undefined;
 
 function normalizeStatus(status?: string) {
   return (status || '').toUpperCase();
@@ -61,6 +62,25 @@ function parseTargetFormat(row: KnowledgeDocument) {
 function parseDisabledReason(row: KnowledgeDocument) {
   if (!row.fileId) return '文档缺少 fileId，无法创建文件解析任务';
   return `当前文件格式 .${fileExt(row.title) || 'unknown'} 暂不支持解析，无法作为知识库入库来源`;
+}
+
+function hasIndexingDocs() {
+  return docs.value.some((item) => normalizeStatus(item.indexStatus) === 'INDEXING');
+}
+
+function stopDocsAutoRefresh() {
+  if (docsRefreshTimer) {
+    window.clearTimeout(docsRefreshTimer);
+    docsRefreshTimer = undefined;
+  }
+}
+
+function scheduleDocsAutoRefresh() {
+  stopDocsAutoRefresh();
+  if (!activeBaseId.value || !hasIndexingDocs()) return;
+  docsRefreshTimer = window.setTimeout(async () => {
+    await loadDocs(activeBaseId.value);
+  }, 3000);
 }
 
 function indexActionText(row: KnowledgeDocument) {
@@ -93,7 +113,7 @@ async function loadDocs(baseId: ID) {
   docsError.value = '';
   try { docs.value = (await fetchKnowledgeDocuments(baseId)).records; }
   catch (err) { docsError.value = err instanceof Error ? err.message : '文档列表加载失败，请检查后端知识库文档接口。'; docs.value = []; }
-  finally { docsLoading.value = false; }
+  finally { docsLoading.value = false; scheduleDocsAutoRefresh(); }
 }
 
 async function submitCreate() {
@@ -234,9 +254,9 @@ async function handleIndex(row: KnowledgeDocument) {
   if (!row.fileId) return ElMessage.warning('文档缺少 fileId，无法触发入库');
   if (!canSubmitIndex(row)) return ElMessage.warning(`当前文档状态为 ${row.indexStatus}，不能重复提交入库任务`);
   try {
-    const latestParse = await fetchLatestFileParseRecord(row.fileId, row.projectId);
+    const latestParse = await fetchLatestSuccessfulFileParseRecord(row.fileId, row.projectId);
     if (normalizeStatus(latestParse.status) !== 'SUCCESS') {
-      ElMessage.warning(`最新文件解析状态为 ${latestParse.status}，请等待解析成功后再入库`);
+      ElMessage.warning(`最新成功解析结果状态异常，请重新解析后再入库`);
       return;
     }
   } catch (err) {
@@ -246,13 +266,14 @@ async function handleIndex(row: KnowledgeDocument) {
   }
   indexingId.value = documentId;
   docsError.value = '';
-  try { await triggerDocumentIndex(documentId); ElMessage.success('入库任务已提交'); await loadDocs(activeBaseId.value); }
+  try { await triggerDocumentIndex(documentId); ElMessage.success('入库任务已提交，状态将自动刷新'); await loadDocs(activeBaseId.value); }
   catch (err) { const detail = err instanceof Error && err.message ? ` ${err.message}` : ''; ElMessage.error(`入库任务提交失败，请检查后端知识库入库接口。${detail}`); }
   finally { indexingId.value = ''; }
 }
 
-watch(activeBaseId, (id) => { if (id) loadDocs(id); });
+watch(activeBaseId, (id) => { stopDocsAutoRefresh(); if (id) loadDocs(id); });
 onMounted(loadBases);
+onUnmounted(stopDocsAutoRefresh);
 </script>
 
 <template>
