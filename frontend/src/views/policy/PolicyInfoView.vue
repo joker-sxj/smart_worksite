@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Search } from '@element-plus/icons-vue';
 import AppTable from '../../components/common/AppTable.vue';
@@ -25,7 +25,8 @@ const articles = ref<PolicyArticle[]>([]);
 const articlePager = reactive({ pageNo: 1, pageSize: 10, total: 0, keyword: '', sourceId: '' as ID | '', indexStatus: '' });
 const form = reactive({ sourceId: '' as ID | '', name: '', url: '', crawlFrequency: 'DAILY', description: '' });
 const projectId = computed(() => projectStore.currentProject?.projectId || '');
-const activeCrawlSourceIds = computed(() => new Set(tasks.value.filter((task) => ['QUEUED', 'RUNNING', 'RETRYING'].includes(String(task.status))).map((task) => task.sourceId || 'ALL')));
+const activeCrawlSourceIds = computed(() => new Set(tasks.value.filter((task) => isActiveTaskStatus(task.status)).map((task) => task.sourceId || 'ALL')));
+let crawlPollTimer: ReturnType<typeof window.setInterval> | null = null;
 
 function resetForm() {
   Object.assign(form, { sourceId: '', name: '', url: '', crawlFrequency: 'DAILY', description: '' });
@@ -49,42 +50,83 @@ function validateForm() {
   return '';
 }
 
-async function loadSources() {
-  sourceLoading.value = true;
+function isActiveTaskStatus(status: unknown) {
+  return ['QUEUED', 'RUNNING', 'RETRYING'].includes(String(status));
+}
+
+function hasActiveCrawlTasks() {
+  return tasks.value.some((task) => isActiveTaskStatus(task.status));
+}
+
+async function ensureProjectSelected() {
+  if (!projectStore.currentProject) await projectStore.fetchProjects();
+  if (!projectId.value) throw new Error('请先选择项目');
+}
+
+function stopCrawlPolling() {
+  if (!crawlPollTimer) return;
+  window.clearInterval(crawlPollTimer);
+  crawlPollTimer = null;
+}
+
+function syncCrawlPolling() {
+  if (!hasActiveCrawlTasks()) {
+    stopCrawlPolling();
+    return;
+  }
+  if (crawlPollTimer) return;
+  crawlPollTimer = window.setInterval(() => {
+    void pollCrawlProgress();
+  }, 3000);
+}
+
+async function pollCrawlProgress() {
+  const hadActiveTasks = hasActiveCrawlTasks();
+  await loadTasks({ silent: true, managePolling: false });
+  if (hadActiveTasks && !hasActiveCrawlTasks()) {
+    await Promise.all([loadSources({ silent: true }), loadArticles({ silent: true })]);
+  } else if (hasActiveCrawlTasks()) {
+    await loadArticles({ silent: true });
+  }
+  syncCrawlPolling();
+}
+
+async function loadSources(options: { silent?: boolean } = {}) {
+  if (!options.silent) sourceLoading.value = true;
   sourceError.value = '';
   try {
-    if (!projectStore.currentProject) await projectStore.fetchProjects();
-    if (!projectId.value) throw new Error('请先选择项目');
+    await ensureProjectSelected();
     const page = await fetchPolicySources({ projectId: projectId.value, pageNo: 1, pageSize: 100 });
     sources.value = page.records;
   } catch (err) {
     sources.value = [];
     sourceError.value = err instanceof Error ? err.message : '政策源加载失败';
   } finally {
-    sourceLoading.value = false;
+    if (!options.silent) sourceLoading.value = false;
   }
 }
 
-async function loadTasks() {
-  taskLoading.value = true;
+async function loadTasks(options: { silent?: boolean; managePolling?: boolean } = {}) {
+  if (!options.silent) taskLoading.value = true;
   taskError.value = '';
   try {
-    if (!projectId.value) throw new Error('请先选择项目');
+    await ensureProjectSelected();
     const page = await fetchPolicyCrawlTasks({ projectId: projectId.value, pageNo: 1, pageSize: 5 });
     tasks.value = page.records;
   } catch (err) {
     tasks.value = [];
     taskError.value = err instanceof Error ? err.message : '爬取任务加载失败';
   } finally {
-    taskLoading.value = false;
+    if (!options.silent) taskLoading.value = false;
+    if (options.managePolling !== false) syncCrawlPolling();
   }
 }
 
-async function loadArticles() {
-  articleLoading.value = true;
+async function loadArticles(options: { silent?: boolean } = {}) {
+  if (!options.silent) articleLoading.value = true;
   articleError.value = '';
   try {
-    if (!projectId.value) throw new Error('请先选择项目');
+    await ensureProjectSelected();
     const page = await fetchPolicyArticles({
       projectId: projectId.value,
       pageNo: articlePager.pageNo,
@@ -100,11 +142,12 @@ async function loadArticles() {
     articlePager.total = 0;
     articleError.value = err instanceof Error ? err.message : '政策资讯加载失败';
   } finally {
-    articleLoading.value = false;
+    if (!options.silent) articleLoading.value = false;
   }
 }
 
 async function refreshAll() {
+  await ensureProjectSelected();
   await Promise.all([loadSources(), loadTasks(), loadArticles()]);
 }
 
@@ -143,7 +186,7 @@ async function crawl(sourceId?: ID) {
   crawlingId.value = sourceId || 'ALL';
   try {
     await createPolicyCrawlTask({ projectId: projectId.value, sourceId });
-    ElMessage.success('政策资讯爬取任务已提交');
+    ElMessage.success('政策资讯爬取任务已提交，页面将自动刷新进度');
     await refreshAll();
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '政策资讯爬取任务提交失败');
@@ -161,7 +204,19 @@ function searchArticles() {
   void loadArticles();
 }
 
-onMounted(refreshAll);
+onMounted(() => {
+  void refreshAll();
+});
+
+onBeforeUnmount(stopCrawlPolling);
+
+watch(projectId, () => {
+  stopCrawlPolling();
+  tasks.value = [];
+  articles.value = [];
+  articlePager.total = 0;
+  if (projectId.value) void refreshAll();
+});
 </script>
 
 <template>
@@ -169,7 +224,7 @@ onMounted(refreshAll);
     <div class="page-header">
       <div>
         <h2 class="page-title">政策资讯</h2>
-        <p class="page-desc">配置互联网政策资讯来源，模拟爬取任务和知识更新状态，支撑知识问答的政策来源演示。</p>
+        <p class="page-desc">配置互联网政策资讯来源，提交真实爬取任务并自动刷新知识更新状态，支撑知识问答的政策来源。</p>
       </div>
       <div class="header-actions">
         <el-button :icon="Refresh" :loading="crawlingId === 'ALL'" :disabled="activeCrawlSourceIds.has('ALL')" @click="crawl()">爬取全部</el-button>
