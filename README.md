@@ -79,7 +79,7 @@ Python 智能算法服务
 
 - Java 后端负责统一鉴权、项目隔离、业务编排、状态记录、文件保存、下载 URL、审计追踪和外部调用日志。
 - Python 服务负责大模型、Agent、RAG、Embedding、OCR 和文档解析等智能算法能力。
-- Qwen API Key 只允许配置在 `python-ai-service/`，Java 配置、SQL、文档和日志中不得写入 Qwen 密钥。
+- Qwen API Key 只允许进入 Python 服务运行环境；本地 Python 进程可使用 `python-ai-service/.env`，当前 Docker Compose 使用 `deploy/.env` 注入。Java 配置、SQL、文档和日志中不得写入密钥。
 
 ## 当前实现状态
 
@@ -169,29 +169,102 @@ com.xd.smartworksite
 
 ## 本地启动
 
-AI/audit observability rule: AI external-call logs and audit logs must check affected rows and generated IDs. Python service failures keep the original error while attaching log-persistence failures for diagnosis; successful AI/audit operations must not be reported as successful when required trace records cannot be persisted.
+推荐使用仓库内的生命周期脚本。Docker Compose 统一启动 MySQL、Redis、MinIO 和 Python AI 服务；Java 后端与 Vue 前端作为宿主机后台进程运行，PID 和日志写入已忽略的 `logs/` 目录。
 
-### 1. 启动本地依赖
+首次运行前确认：
+
+- Docker Desktop（Windows）或 Docker Engine + Compose v2（Linux）已启动。
+- 已安装 Java 17、Maven、Node.js 和 npm。
+- `deploy/.env` 已存在并完成本地配置。脚本不会覆盖已有文件；缺失时会从 `.env.example` 创建后停止，等待用户配置。
+- 当前 Compose 部署从 `deploy/.env` 向 Python AI 容器注入 `QWEN_API_KEY` 等运行环境变量，脚本不会输出这些值。
+
+### Windows PowerShell
+
+```powershell
+# 只检查依赖和配置，不启动服务
+.\scripts\start-all.ps1 -Check
+
+# 启动完整项目
+.\scripts\start-all.ps1
+
+# 查看完整状态
+.\scripts\status.ps1
+
+# 停止完整项目，保留 Docker volumes
+.\scripts\stop-all.ps1
+```
+
+如果系统禁止执行本地 PowerShell 脚本，可以使用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1
+```
+
+### Linux Bash
+
+```bash
+# 首次克隆后确保脚本可执行
+chmod +x scripts/start-all.sh scripts/status.sh scripts/stop-all.sh
+
+# 只检查依赖和配置，不启动服务
+./scripts/start-all.sh --check
+
+# 启动完整项目
+./scripts/start-all.sh
+
+# 查看完整状态
+./scripts/status.sh
+
+# 停止完整项目，保留 Docker volumes
+./scripts/stop-all.sh
+```
+
+### 地址和日志
+
+| 服务 | 默认地址 |
+| --- | --- |
+| 前端 | `http://localhost:5173` |
+| Java 健康检查 | `http://127.0.0.1:8080/actuator/health` |
+| Python AI 健康检查 | `http://127.0.0.1:8015/v1/health` |
+| MinIO 控制台 | `http://127.0.0.1:19001`（以 `deploy/.env` 为准） |
+
+后台日志：
+
+```text
+logs/backend.out.log
+logs/backend.err.log
+logs/frontend.out.log
+logs/frontend.err.log
+```
+
+进程 PID 文件：
+
+```text
+logs/run/backend.pid
+logs/run/frontend.pid
+```
+
+本地开发默认管理员账号为 `admin / admin123`。Flyway 迁移 `V8__reset_default_admin_password.sql` 会重置该密码，仅用于本地联调和演示；生产环境必须重置或禁用默认管理员密码。
+
+### 手动故障排查启动
+
+正常使用不需要执行以下命令。只有在排查脚本或单个服务问题时，才分别启动组件。
+
+启动 Docker Compose（其中已经包含 Python AI 服务，不要再重复启动 `uvicorn`）：
 
 ```powershell
 cd deploy
-copy .env.example .env
 docker compose -f docker-compose-env.yml --env-file .env up -d
+docker compose -f docker-compose-env.yml --env-file .env ps
 ```
 
-Docker 只启动 MySQL、Redis、MinIO。业务表由 Flyway 自动迁移创建，不通过 Docker 初始化 SQL 创建。
-
-### 2. 启动后端
+手动启动 Java 前，必须先将 `deploy/.env` 加载到当前终端环境，否则 Java 会连接默认端口，而不是 Compose 映射端口。推荐优先使用 `scripts/start-all.ps1` 或 `scripts/start-all.sh` 完成该步骤。
 
 ```powershell
 mvn spring-boot:run
 ```
 
-后端默认地址：`http://localhost:8080`
-
-本地开发默认管理员账号：`admin / admin123`。Flyway 迁移 `V8__reset_default_admin_password.sql` 会重置该密码，仅用于本地联调和演示；生产环境必须重置或禁用默认管理员密码。
-
-### 3. 启动前端
+手动启动前端：
 
 ```powershell
 cd frontend
@@ -199,22 +272,7 @@ npm install
 npm run dev
 ```
 
-前端默认地址：`http://localhost:5173`
-
-### 4. 启动 Python 智能算法服务
-
-```powershell
-cd python-ai-service
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-copy .env.example .env
-# Configure QWEN_API_KEY and AI_SERVICE_API_KEY in .env
-uvicorn app.main:app --host 0.0.0.0 --port 8015
-```
-
 Java 后端通过 `AI_PYTHON_BASE_URL` 和 `AI_PYTHON_API_KEY` 调用 Python 服务。
-
 ## 当前接口
 
 除 `/api/auth/login`、`/api/system/ping`、`/actuator/health`、`/actuator/info` 外，当前接口默认需要 `Authorization: Bearer <accessToken>`。
