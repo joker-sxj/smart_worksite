@@ -584,3 +584,33 @@ def test_qwen_json_chat_rejects_non_object_json():
         assert False, "json_chat should reject non-object JSON roots"
     except ValueError as exc:
         assert "must be an object" in str(exc)
+
+
+def test_route_does_not_select_unavailable_knowledge_base():
+    from app.models.schemas import RouteRequest
+    from app.services.route_context_service import RouteService
+
+    class FakeQwen:
+        async def json_chat(self, messages):
+            return {
+                "routeType": "KNOWLEDGE",
+                "reason": "法规问题应查询知识库",
+            }, {}
+
+    data, _ = asyncio.run(RouteService(FakeQwen()).route(RouteRequest(
+        question="未取得资格证书从事建筑施工特种作业会承担什么法律责任？",
+        availableKnowledgeBases=[],
+        availableDataSources=[{"id": 7}],
+    )))
+
+    assert data.routeType == "MODEL"
+    assert "知识库" in data.reason
+
+
+def test_docker_and_local_python_use_the_same_rag_data_directory():
+    from pathlib import Path
+
+    compose_file = Path(__file__).resolve().parents[2] / "deploy" / "docker-compose-env.yml"
+    compose = compose_file.read_text(encoding="utf-8")
+
+    assert "../python-ai-service/data:/app/data" in compose

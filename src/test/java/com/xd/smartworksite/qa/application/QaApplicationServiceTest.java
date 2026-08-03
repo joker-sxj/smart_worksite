@@ -145,6 +145,19 @@ class QaApplicationServiceTest {
     }
 
     @Test
+    void autoRouteFallsBackToModelWhenSelectedResourceIsUnavailable() {
+        aiGateway.nextRoute = "KNOWLEDGE";
+        var session = service.createSession(createSessionRequest(1L, "auto-route"));
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("未取得资格证书从事建筑施工特种作业会承担什么法律责任");
+        request.setDataSourceIds(List.of(100L));
+
+        var message = service.sendMessage(session.getSessionId(), request);
+
+        assertThat(message.getRouteMode()).isEqualTo("MODEL");
+        assertThat(aiGateway.lastRagRequest).isNull();
+    }
+    @Test
     void sendMessageRejectsForeignKnowledgeBaseBeforeCallingAi() {
         var session = service.createSession(createSessionRequest(1L, "current-project"));
         QaMessageSendRequest request = new QaMessageSendRequest();

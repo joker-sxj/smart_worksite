@@ -120,6 +120,9 @@ async function loadResources(projectId: ID) {
     knowledgeBases.value = bases;
     dataSources.value = sources.records;
     selectedKnowledgeBaseIds.value = selectedKnowledgeBaseIds.value.filter((id) => enabledKnowledgeBases.value.some((item) => String(item.knowledgeBaseId) === String(id)));
+    if (selectedKnowledgeBaseIds.value.length === 0) {
+      selectedKnowledgeBaseIds.value = enabledKnowledgeBases.value.map((item) => item.knowledgeBaseId);
+    }
     if (selectedDataSourceId.value && !enabledDataSources.value.some((item) => String(item.dataSourceId) === String(selectedDataSourceId.value))) {
       selectedDataSourceId.value = '';
     }

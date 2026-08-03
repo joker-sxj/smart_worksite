@@ -103,7 +103,7 @@ services:
     ports:
       - "${AI_SERVICE_PORT:-8015}:8015"
     volumes:
-      - python-ai-data:/app/data
+      - ../python-ai-service/data:/app/data
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8015/v1/health', timeout=3)"]
       interval: 10s
@@ -180,7 +180,6 @@ volumes:
   mysql-data:
   redis-data:
   minio-data:
-  python-ai-data:
   pgvector-data:
   milvus-etcd-data:
   milvus-minio-data:

@@ -233,6 +233,7 @@ public class QaApplicationService {
             routeRequest.setContextMessages(contextMessages);
             routeResponse = aiGateway.route(routeRequest);
             route = normalizeRouteMode(routeResponse.getRouteType());
+            route = constrainRouteToAvailableResources(route, knowledgeBaseIds, dataSourceIds);
         }
         return switch (route) {
             case NEED_MORE_INFO -> clarificationResponse(message, routeResponse);
@@ -240,6 +241,20 @@ public class QaApplicationService {
             case DATABASE -> answerWithDatabase(session, message, dataSourceIds);
             case MIXED -> answerWithMixed(session, message, knowledgeBaseIds, dataSourceIds, contextMessages);
             case MODEL, AUTO -> answerWithModel(session, message, contextMessages, List.of(), null);
+        };
+    }
+
+    private QaRouteMode constrainRouteToAvailableResources(QaRouteMode route, List<Long> knowledgeBaseIds, List<Long> dataSourceIds) {
+        boolean hasKnowledge = knowledgeBaseIds != null && !knowledgeBaseIds.isEmpty();
+        boolean hasDatabase = dataSourceIds != null && !dataSourceIds.isEmpty();
+        return switch (route) {
+            case KNOWLEDGE -> hasKnowledge ? route : QaRouteMode.MODEL;
+            case DATABASE -> hasDatabase ? route : QaRouteMode.MODEL;
+            case MIXED -> hasKnowledge && hasDatabase ? route
+                    : hasKnowledge ? QaRouteMode.KNOWLEDGE
+                    : hasDatabase ? QaRouteMode.DATABASE
+                    : QaRouteMode.MODEL;
+            default -> route;
         };
     }
 
