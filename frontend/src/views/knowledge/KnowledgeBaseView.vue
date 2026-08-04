@@ -6,10 +6,13 @@ import AppTable from '../../components/common/AppTable.vue';
 import StatusTag from '../../components/common/StatusTag.vue';
 import EmptyState from '../../components/common/EmptyState.vue';
 import { createKnowledgeBase, deleteKnowledgeBase, deleteKnowledgeDocument, disableKnowledgeBase, enableKnowledgeBase, fetchKnowledgeBaseDetail, fetchKnowledgeBases, fetchKnowledgeDocumentDetail, fetchKnowledgeDocuments, triggerDocumentIndex, updateKnowledgeBase, uploadKnowledgeDocument } from '../../api/knowledge';
-import { createFileParse, fetchLatestSuccessfulFileParseRecord } from '../../api/file';
+import { createFileParse, fetchLatestFileParseRecord, fetchLatestSuccessfulFileParseRecord, type FileParseRecord } from '../../api/file';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, KnowledgeBase, KnowledgeDocument } from '../../api/types';
+import { createFileParsePolling } from '../file/fileParsePolling';
+import { fileParseStatusText } from '../file/fileParseStatus';
+import { documentParseActionText, documentParseRecord, setDocumentParseRecord, type DocumentParseRecords } from './knowledgeDocumentParseState';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -21,6 +24,7 @@ const error = ref('');
 const docsError = ref('');
 const bases = ref<KnowledgeBase[]>([]);
 const docs = ref<KnowledgeDocument[]>([]);
+const documentParseRecords = ref<DocumentParseRecords>({});
 const activeBaseId = ref<ID>('');
 const dialogVisible = ref(false);
 const detailDrawerVisible = ref(false);
@@ -51,8 +55,33 @@ function fileExt(name?: string) {
   return matched?.[1] || '';
 }
 
+function isParseableDocument(row: KnowledgeDocument) {
+  return Boolean(row.fileId && parseableExts.has(fileExt(row.title)));
+}
+
 function canParseDocument(row: KnowledgeDocument) {
-  return canManageKnowledge.value && Boolean(row.fileId && parseableExts.has(fileExt(row.title)));
+  return canManageKnowledge.value && isParseableDocument(row);
+}
+
+function latestParse(row: KnowledgeDocument) {
+  return documentParseRecord(documentParseRecords.value, row.documentId);
+}
+
+function isDocumentParsing(row: KnowledgeDocument) {
+  return ['PENDING', 'RUNNING'].includes(normalizeStatus(latestParse(row)?.status));
+}
+
+function canStartParse(row: KnowledgeDocument) {
+  return canParseDocument(row) && !isDocumentParsing(row);
+}
+
+function parseActionText(row: KnowledgeDocument) {
+  return documentParseActionText(latestParse(row));
+}
+
+function parseStatusText(row: KnowledgeDocument) {
+  const record = latestParse(row);
+  return record ? fileParseStatusText(record.status) : '未解析';
 }
 
 function parseTargetFormat(row: KnowledgeDocument) {
@@ -60,9 +89,31 @@ function parseTargetFormat(row: KnowledgeDocument) {
 }
 
 function parseDisabledReason(row: KnowledgeDocument) {
+  if (!canManageKnowledge.value) return knowledgeManageTip;
+  if (isDocumentParsing(row)) return '文件正在解析，请等待当前任务完成';
   if (!row.fileId) return '文档缺少 fileId，无法创建文件解析任务';
   return `当前文件格式 .${fileExt(row.title) || 'unknown'} 暂不支持解析，无法作为知识库入库来源`;
 }
+
+async function refreshDocumentParseRecords(baseId: ID) {
+  const currentDocs = docs.value.filter((row) => row.fileId && isParseableDocument(row));
+  const results = await Promise.all(currentDocs.map(async (row) => {
+    try {
+      const record = await fetchLatestFileParseRecord(row.fileId!, row.projectId);
+      return [String(row.documentId), record] as const;
+    } catch {
+      return null;
+    }
+  }));
+  if (String(activeBaseId.value) !== String(baseId)) return false;
+  documentParseRecords.value = Object.fromEntries(results.filter((item): item is readonly [string, FileParseRecord] => Boolean(item)));
+  return Object.values(documentParseRecords.value).some((record) => ['PENDING', 'RUNNING'].includes(normalizeStatus(record.status)));
+}
+
+const parsePolling = createFileParsePolling(async () => {
+  if (!activeBaseId.value) return false;
+  return refreshDocumentParseRecords(activeBaseId.value);
+});
 
 function hasIndexingDocs() {
   return docs.value.some((item) => normalizeStatus(item.indexStatus) === 'INDEXING');
@@ -109,10 +160,14 @@ async function loadBases(selectId?: ID) {
 }
 
 async function loadDocs(baseId: ID) {
+  parsePolling.stop();
   docsLoading.value = true;
   docsError.value = '';
-  try { docs.value = (await fetchKnowledgeDocuments(baseId)).records; }
-  catch (err) { docsError.value = err instanceof Error ? err.message : '文档列表加载失败，请检查后端知识库文档接口。'; docs.value = []; }
+  try {
+    docs.value = (await fetchKnowledgeDocuments(baseId)).records;
+    await parsePolling.start();
+  }
+  catch (err) { docsError.value = err instanceof Error ? err.message : '文档列表加载失败，请检查后端知识库文档接口。'; docs.value = []; documentParseRecords.value = {}; }
   finally { docsLoading.value = false; scheduleDocsAutoRefresh(); }
 }
 
@@ -237,8 +292,10 @@ async function handleParse(row: KnowledgeDocument) {
   parsingId.value = row.documentId;
   docsError.value = '';
   try {
-    await createFileParse(row.fileId, { projectId: row.projectId, targetFormat: parseTargetFormat(row) });
+    const record = await createFileParse(row.fileId, { projectId: row.projectId, targetFormat: parseTargetFormat(row) });
+    documentParseRecords.value = setDocumentParseRecord(documentParseRecords.value, row.documentId, record);
     ElMessage.success('文件解析任务已提交，解析成功后再执行入库');
+    void parsePolling.start();
   } catch (err) {
     const detail = err instanceof Error && err.message ? ` ${err.message}` : '';
     ElMessage.error(`文件解析任务提交失败。${detail}`);
@@ -271,9 +328,9 @@ async function handleIndex(row: KnowledgeDocument) {
   finally { indexingId.value = ''; }
 }
 
-watch(activeBaseId, (id) => { stopDocsAutoRefresh(); if (id) loadDocs(id); });
+watch(activeBaseId, (id) => { stopDocsAutoRefresh(); parsePolling.stop(); documentParseRecords.value = {}; if (id) loadDocs(id); });
 onMounted(loadBases);
-onUnmounted(stopDocsAutoRefresh);
+onUnmounted(() => { stopDocsAutoRefresh(); parsePolling.stop(); });
 </script>
 
 <template>
@@ -284,7 +341,7 @@ onUnmounted(stopDocsAutoRefresh);
     <template v-else>
       <el-card class="work-card"><div class="base-list"><div v-for="base in bases" :key="base.knowledgeBaseId" class="base-card" :class="{ active: String(activeBaseId) === String(base.knowledgeBaseId) }" @click="activeBaseId = base.knowledgeBaseId"><strong>{{ base.name }}</strong><span>{{ base.description || '暂无描述' }}</span><small>领域：{{ base.domain || '-' }} / <StatusTag :status="base.status" /></small><div v-if="canManageKnowledge" class="base-actions"><el-button link type="primary" @click.stop="openEditBase(base)">编辑</el-button><el-button link :type="['ENABLED','ACTIVE'].includes(String(base.status).toUpperCase()) ? 'warning' : 'success'" @click.stop="setBaseStatus(base, !['ENABLED','ACTIVE'].includes(String(base.status).toUpperCase()))">{{ ['ENABLED','ACTIVE'].includes(String(base.status).toUpperCase()) ? '停用' : '启用' }}</el-button><el-button link type="danger" @click.stop="removeBase(base)">删除</el-button></div></div></div><p v-if="activeBase" class="muted">当前知识库：{{ activeBase.name }} / <StatusTag :status="activeBase.status" /></p></el-card>
       <el-card class="work-card"><h3 class="panel-title">上传文档</h3><el-alert title="可上传 Word、PPT、Excel/CSV、PDF 和图片。" type="info" show-icon :closable="false" style="margin-bottom: 12px" /><div class="upload-title required-label">知识库文档</div><AppUpload v-model="selectedFiles" accept=".doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.pdf,.jpg,.jpeg,.png,.webp" tip="支持 Word、PPT、Excel/CSV、PDF 和图片；入库前需完成可解析文件内容抽取" :uploading="uploading"  /><el-button type="primary" style="margin-top: 12px" :loading="uploading" :disabled="!activeBaseId" @click="uploadDocs">上传到当前知识库</el-button></el-card>
-      <el-card class="work-card"><h3 class="panel-title">文档处理状态</h3><el-alert v-if="docsError" :title="docsError" type="error" show-icon :closable="false" style="margin-bottom: 12px" /><AppTable :loading="docsLoading" :data="docs" :columns="[{ prop: 'title', label: '文档名称' }, { prop: 'sourceType', label: '来源类型', width: 120 }, { prop: 'indexStatus', label: '入库状态', slot: 'index', width: 110 }, { prop: 'errorMessage', label: '说明' }, { prop: 'createdAt', label: '创建时间', width: 180 }]"><template #empty><EmptyState description="暂无知识库文档，可先上传项目资料。" /></template><template #index="{ row }"><StatusTag :status="row.indexStatus" /></template><el-table-column label="操作" width="330"><template #default="{ row }"><el-button link type="primary" @click="openDocumentDetail(row)">详情</el-button><el-tooltip :disabled="canParseDocument(row)" :content="parseDisabledReason(row)"><span><el-button link type="primary" :loading="String(parsingId) === String(row.documentId)" :disabled="!canParseDocument(row)" @click="handleParse(row)">解析文件</el-button></span></el-tooltip><el-button link type="primary" :loading="String(indexingId) === String(row.documentId)" :disabled="!canSubmitIndex(row)" @click="handleIndex(row)">{{ indexActionText(row) }}</el-button><el-button v-if="canManageKnowledge" link type="danger" @click="removeDocument(row)">删除</el-button></template></el-table-column></AppTable></el-card>
+      <el-card class="work-card"><h3 class="panel-title">文档处理状态</h3><el-alert v-if="docsError" :title="docsError" type="error" show-icon :closable="false" style="margin-bottom: 12px" /><AppTable :loading="docsLoading" :data="docs" :columns="[{ prop: 'title', label: '文档名称' }, { prop: 'sourceType', label: '来源类型', width: 120 }, { prop: 'parseStatus', label: '解析状态', slot: 'parseStatus', width: 110 }, { prop: 'indexStatus', label: '入库状态', slot: 'index', width: 110 }, { prop: 'errorMessage', label: '说明' }, { prop: 'createdAt', label: '创建时间', width: 180 }]"><template #empty><EmptyState description="暂无知识库文档，可先上传项目资料。" /></template><template #parseStatus="{ row }"><StatusTag :status="latestParse(row)?.status" :text="parseStatusText(row)" /></template><template #index="{ row }"><StatusTag :status="row.indexStatus" /></template><el-table-column label="操作" width="350"><template #default="{ row }"><el-button link type="primary" @click="openDocumentDetail(row)">详情</el-button><el-tooltip :disabled="canStartParse(row)" :content="parseDisabledReason(row)"><span><el-button link type="primary" :loading="String(parsingId) === String(row.documentId)" :disabled="!canStartParse(row)" @click="handleParse(row)">{{ parseActionText(row) }}</el-button></span></el-tooltip><el-button link type="primary" :loading="String(indexingId) === String(row.documentId)" :disabled="!canSubmitIndex(row)" @click="handleIndex(row)">{{ indexActionText(row) }}</el-button><el-button v-if="canManageKnowledge" link type="danger" @click="removeDocument(row)">删除</el-button></template></el-table-column></AppTable></el-card>
     </template>
     <el-dialog v-model="dialogVisible" :title="form.knowledgeBaseId ? '编辑知识库' : '新建知识库'" width="520px"><el-form label-width="96px"><el-form-item label="知识库名称" required><el-input v-model="form.name" placeholder="请输入知识库名称" /></el-form-item><el-form-item label="领域"><el-input v-model="form.domain" placeholder="如 SAFETY、QUALITY" /></el-form-item><el-form-item label="描述"><el-input v-model="form.description" type="textarea" placeholder="请输入知识库描述" /></el-form-item></el-form><template #footer><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" :loading="creating" @click="submitCreate">保存</el-button></template></el-dialog>
     <el-drawer v-model="detailDrawerVisible" title="知识文档详情" size="520px">
@@ -295,6 +352,7 @@ onUnmounted(stopDocsAutoRefresh);
           <el-descriptions-item label="文件ID">{{ selectedDocument.fileId || '-' }}</el-descriptions-item>
           <el-descriptions-item label="标题">{{ selectedDocument.title }}</el-descriptions-item>
           <el-descriptions-item label="来源">{{ selectedDocument.sourceType || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="解析状态"><StatusTag :status="latestParse(selectedDocument)?.status" :text="parseStatusText(selectedDocument)" /></el-descriptions-item>
           <el-descriptions-item label="入库状态"><StatusTag :status="selectedDocument.indexStatus" /></el-descriptions-item>
           <el-descriptions-item label="任务ID">{{ selectedDocument.taskId || '-' }}</el-descriptions-item>
           <el-descriptions-item label="错误信息">{{ selectedDocument.errorMessage || '-' }}</el-descriptions-item>
