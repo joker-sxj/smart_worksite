@@ -45,6 +45,9 @@ public class ReportQaApplicationService {
         if (!projectId.equals(knowledgeBase.getProjectId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "知识库不属于当前项目");
         }
+        if ("POLICY".equals(knowledgeBase.getKnowledgeBaseType())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "报告仅支持项目资料知识库");
+        }
         if (!KnowledgeBaseStatus.ENABLED.name().equals(knowledgeBase.getStatus())) {
             throw new BusinessException(ErrorCode.CONFLICT, "知识库未启用");
         }

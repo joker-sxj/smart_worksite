@@ -70,6 +70,21 @@ class ReportQaApplicationServiceTest {
     }
 
     @Test
+    void policyKnowledgeBaseFailsBeforeRagCall() {
+        KnowledgeBase policy = new KnowledgeBase();
+        policy.setId(10L);
+        policy.setProjectId(1L);
+        policy.setKnowledgeBaseType("POLICY");
+        policy.setStatus("ENABLED");
+        when(knowledgeBases.findById(10L)).thenReturn(Optional.of(policy));
+
+        assertThatThrownBy(() -> service.generateVariableForSystem(request()))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("报告仅支持项目资料知识库");
+        verify(gateway, never()).searchKnowledgeForSystem(any());
+    }
+
+    @Test
     void disabledKnowledgeBaseFailsBeforeRagCall() {
         KnowledgeBase disabled = new KnowledgeBase();
         disabled.setId(10L);
