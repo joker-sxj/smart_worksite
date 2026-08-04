@@ -12,6 +12,8 @@ from app.models.schemas import (
     RagSearchData,
     RagIndexRequest,
     RagIndexData,
+    RagDeleteRequest,
+    RagDeleteData,
     RouteRequest,
     RouteData,
     ContextPrepareRequest,
@@ -111,6 +113,12 @@ async def rag_search(request: RagSearchRequest):
 async def rag_index(request: RagIndexRequest):
     data, usage = await services()["rag"].index(request)
     return ok(data, usage)
+
+
+@router.post("/rag/delete", response_model=StandardResponse[RagDeleteData])
+async def rag_delete(request: RagDeleteRequest):
+    data = await services()["rag"].delete(request)
+    return ok(data)
 
 
 @router.post("/route", response_model=StandardResponse[RouteData])

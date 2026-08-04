@@ -5,7 +5,8 @@ import re
 from typing import Any
 
 from app.core.settings import Settings
-from app.models.schemas import RagIndexRequest, RagIndexData, RagSearchRequest, RagSearchData, RagRecord
+from app.models.schemas import (RagIndexRequest, RagIndexData, RagSearchRequest, RagSearchData, RagRecord,
+                                RagDeleteRequest, RagDeleteData)
 from .qwen_client import QwenClient
 from .vector_store import ChunkRecord, LocalJsonVectorStore, PgVectorStore, MilvusVectorStore, VectorStore
 
@@ -67,6 +68,12 @@ class RagService:
                 ))
         await self.store.upsert(chunk_records)
         return RagIndexData(indexedDocuments=len(request.documents), indexedChunks=len(chunk_records), provider=self.settings.rag_provider.upper()), usage_total
+
+    async def delete(self, request: RagDeleteRequest) -> RagDeleteData:
+        deleted = await self.store.delete_sources(
+            request.projectId, request.sourceType, request.sourceIds, request.excludeKnowledgeBaseId
+        )
+        return RagDeleteData(deletedChunks=deleted, provider=self.settings.rag_provider.upper())
 
     async def search(self, request: RagSearchRequest) -> tuple[RagSearchData, dict[str, Any]]:
         vectors, usage = await self.embed([request.query])

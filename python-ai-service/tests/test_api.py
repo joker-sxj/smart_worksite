@@ -61,6 +61,25 @@ def test_rag_index_and_search_local_hash():
     assert len(body["data"]["records"]) == 1
 
 
+def test_local_rag_delete_removes_matching_old_policy_chunks_only(tmp_path):
+    from app.services.vector_store import LocalJsonVectorStore
+
+    store = LocalJsonVectorStore(str(tmp_path))
+    chunks = [
+        ChunkRecord("old", 1, 4, "10", "old", "policy", "POLICY_ARTICLE", "10", {}, [1.0]),
+        ChunkRecord("kept-policy", 1, 6, "10", "new", "policy", "POLICY_ARTICLE", "10", {}, [1.0]),
+        ChunkRecord("kept-doc", 1, 4, "10", "doc", "document", "DOCUMENT", "10", {}, [1.0]),
+        ChunkRecord("other-project", 2, 4, "10", "other", "policy", "POLICY_ARTICLE", "10", {}, [1.0]),
+    ]
+    asyncio.run(store.upsert(chunks))
+
+    deleted = asyncio.run(store.delete_sources(1, "POLICY_ARTICLE", ["10"], 6))
+    deleted_again = asyncio.run(store.delete_sources(1, "POLICY_ARTICLE", ["10"], 6))
+
+    assert deleted == 1
+    assert deleted_again == 0
+    assert {record.id for record in store._load()} == {"kept-policy", "kept-doc", "other-project"}
+
 def test_tool_calling_agent_executes_registered_tool():
     class FakeQwen:
         def __init__(self):

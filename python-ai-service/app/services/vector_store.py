@@ -26,6 +26,7 @@ class ChunkRecord:
 class VectorStore(Protocol):
     async def upsert(self, chunks: list[ChunkRecord]) -> None: ...
     async def search(self, query_embedding: list[float], project_id: int | None, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]: ...
+    async def delete_sources(self, project_id: int, source_type: str, source_ids: list[str], exclude_knowledge_base_id: int | None) -> int: ...
 
 
 def cosine(a: list[float], b: list[float]) -> float:
@@ -57,6 +58,20 @@ class LocalJsonVectorStore:
             existing[chunk.id] = chunk
         text = "\n".join(json.dumps(asdict(item), ensure_ascii=False) for item in existing.values())
         self.path.write_text(text + ("\n" if text else ""), encoding="utf-8")
+
+    async def delete_sources(self, project_id: int, source_type: str, source_ids: list[str], exclude_knowledge_base_id: int | None) -> int:
+        source_filter = set(source_ids)
+        records = self._load()
+        kept = [item for item in records if not (
+            item.projectId == project_id
+            and item.sourceType == source_type
+            and item.sourceId in source_filter
+            and (exclude_knowledge_base_id is None or item.knowledgeBaseId != exclude_knowledge_base_id)
+        )]
+        deleted = len(records) - len(kept)
+        text = "\n".join(json.dumps(asdict(item), ensure_ascii=False) for item in kept)
+        self.path.write_text(text + ("\n" if text else ""), encoding="utf-8")
+        return deleted
 
     async def search(self, query_embedding: list[float], project_id: int | None, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]:
         results: list[tuple[ChunkRecord, float]] = []
@@ -110,6 +125,24 @@ class PgVectorStore:
                          chunk.sourceType, chunk.sourceId, json.dumps(chunk.metadata, ensure_ascii=False), chunk.embedding),
                     )
             conn.commit()
+
+    async def delete_sources(self, project_id: int, source_type: str, source_ids: list[str], exclude_knowledge_base_id: int | None) -> int:
+        import psycopg
+        if not self.dsn:
+            raise RuntimeError("PGVECTOR_DSN is not configured")
+        if not source_ids:
+            return 0
+        filters = ["project_id = %s", "source_type = %s", "source_id = any(%s)"]
+        params: list[Any] = [project_id, source_type, source_ids]
+        if exclude_knowledge_base_id is not None:
+            filters.append("knowledge_base_id is distinct from %s")
+            params.append(exclude_knowledge_base_id)
+        with psycopg.connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"delete from {self.table} where " + " and ".join(filters), params)
+                deleted = cur.rowcount
+            conn.commit()
+        return deleted
 
     async def search(self, query_embedding: list[float], project_id: int | None, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]:
         import psycopg
@@ -176,6 +209,20 @@ class MilvusVectorStore:
         client.upsert(collection_name=self.collection, data=data)
         client.flush(collection_name=self.collection)
         client.load_collection(collection_name=self.collection)
+
+    async def delete_sources(self, project_id: int, source_type: str, source_ids: list[str], exclude_knowledge_base_id: int | None) -> int:
+        from pymilvus import MilvusClient
+        if not source_ids:
+            return 0
+        client = MilvusClient(uri=self.uri, token=self.token or None)
+        if not client.has_collection(self.collection):
+            return 0
+        quoted_ids = ",".join(json.dumps(value) for value in source_ids)
+        expr = f'projectId == {project_id} and sourceType == {json.dumps(source_type)} and sourceId in [{quoted_ids}]'
+        if exclude_knowledge_base_id is not None:
+            expr += f" and knowledgeBaseId != {exclude_knowledge_base_id}"
+        result = client.delete(collection_name=self.collection, filter=expr)
+        return int((result or {}).get("delete_count", 0))
 
     async def search(self, query_embedding: list[float], project_id: int | None, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]:
         from pymilvus import MilvusClient

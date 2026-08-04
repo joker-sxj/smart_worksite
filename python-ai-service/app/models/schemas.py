@@ -96,6 +96,18 @@ class RagIndexData(BaseModel):
     provider: str
 
 
+class RagDeleteRequest(BaseModel):
+    projectId: int
+    sourceType: str
+    sourceIds: list[str] = Field(default_factory=list)
+    excludeKnowledgeBaseId: int | None = None
+
+
+class RagDeleteData(BaseModel):
+    deletedChunks: int
+    provider: str
+
+
 class RouteRequest(BaseModel):
     question: str
     availableKnowledgeBases: list[dict[str, Any]] = Field(default_factory=list)
