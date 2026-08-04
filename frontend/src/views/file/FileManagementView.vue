@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import AppTable from '../../components/common/AppTable.vue';
 import AppUpload from '../../components/common/AppUpload.vue';
@@ -9,6 +9,8 @@ import { createFileParse, deleteFile, downloadByFileId, fetchFileParseContent, f
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { FileObject } from '../../api/types';
+import { createFileParsePolling } from './fileParsePolling';
+import { fileParseStatusText, hasActiveFileParse } from './fileParseStatus';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -135,16 +137,32 @@ function onBizTypeChange() {
   void loadFiles();
 }
 
-async function selectFile(row: FileObject) {
-  selected.value = row;
-  parseError.value = '';
+async function loadSelectedFileParses() {
+  const file = selected.value;
+  if (!file) return false;
+
   try {
-    parses.value = await fetchFileParseRecords(row.fileId, row.projectId);
+    const records = await fetchFileParseRecords(file.fileId, file.projectId);
+    if (String(selected.value?.fileId) !== String(file.fileId)) return false;
+    parses.value = records;
+    parseError.value = '';
+    return hasActiveFileParse(records);
   } catch (err) {
-    parses.value = [];
+    if (String(selected.value?.fileId) !== String(file.fileId)) return false;
     const detail = err instanceof Error && err.message ? ` ${err.message}` : '';
     parseError.value = `解析记录加载失败，请检查后端文件解析接口。${detail}`;
+    return false;
   }
+}
+
+const parsePolling = createFileParsePolling(loadSelectedFileParses);
+
+async function selectFile(row: FileObject) {
+  parsePolling.stop();
+  selected.value = row;
+  parses.value = [];
+  parseError.value = '';
+  await parsePolling.start();
 }
 
 async function parseFile(row: FileObject) {
@@ -156,7 +174,8 @@ async function parseFile(row: FileObject) {
   try {
     await createFileParse(row.fileId, { projectId: row.projectId, targetFormat: parseTargetFormat(row) });
     ElMessage.success('解析任务已提交');
-    await selectFile(row);
+    selected.value = row;
+    await parsePolling.start();
   } catch (err) {
     const detail = err instanceof Error && err.message ? ` ${err.message}` : '';
     ElMessage.error(`解析任务提交失败，请检查后端解析服务配置。${detail}`);
@@ -193,6 +212,12 @@ async function removeFile(row: FileObject) {
     deletingId.value = row.fileId;
     await deleteFile(row.fileId);
     ElMessage.success('删除成功');
+    if (String(selected.value?.fileId) === String(row.fileId)) {
+      parsePolling.stop();
+      selected.value = null;
+      parses.value = [];
+      parseError.value = '';
+    }
     await loadFiles();
   } catch (err) {
     if (err === 'cancel' || err === 'close') return;
@@ -211,7 +236,7 @@ async function retryParse(record: FileParseRecord) {
   try {
     await retryFileParse(record.recordId);
     ElMessage.success('解析任务已重新提交');
-    if (selected.value) await selectFile(selected.value);
+    if (selected.value) await parsePolling.start();
   } catch (err) {
     const detail = err instanceof Error && err.message ? ` ${err.message}` : '';
     ElMessage.error(`解析任务提交失败，请检查后端解析服务配置。${detail}`);
@@ -224,6 +249,8 @@ onMounted(async () => {
   if (!projectStore.currentProject) await projectStore.fetchProjects();
   await loadFiles();
 });
+
+onBeforeUnmount(() => parsePolling.stop());
 </script>
 
 <template>
@@ -254,7 +281,7 @@ onMounted(async () => {
       <el-alert v-if="parseError" :title="parseError" type="warning" show-icon :closable="false" style="margin-bottom: 12px" />
       <AppTable :data="parses" :columns="[{ prop: 'recordId', label: '记录ID', width: 100 }, { prop: 'parseType', label: '解析类型' }, { prop: 'status', label: '状态', slot: 'status' }, { prop: 'progress', label: '进度' }]">
         <template #empty><EmptyState description="选择文件后查看解析记录" /></template>
-        <template #status="{ row }"><StatusTag :status="row.status" /></template>
+        <template #status="{ row }"><StatusTag :status="row.status" :text="fileParseStatusText(row.status)" /></template>
         <el-table-column label="操作" width="150"><template #default="{ row }"><el-button link type="primary" :disabled="!canShowParseContent(row)" @click="showContent(row)">内容</el-button><el-button link :loading="retryingId === row.recordId" :disabled="!canManageFile || !canRetryParse(row)" @click="retryParse(row)">重试解析</el-button></template></el-table-column>
       </AppTable>
     </el-card>
