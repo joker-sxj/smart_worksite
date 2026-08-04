@@ -95,6 +95,7 @@ export interface ProjectStatistics {
 export interface ProjectSettings {
   projectId?: ID;
   defaultKnowledgeBaseId?: ID | null;
+  policyKnowledgeBaseId?: ID | null;
   defaultReportTemplateId?: ID | null;
   dataRetentionDays?: number;
   uploadMaxSizeMb?: number;
@@ -133,6 +134,7 @@ export interface KnowledgeBase {
   knowledgeBaseId: ID;
   projectId: ID;
   domain?: string;
+  knowledgeBaseType?: 'PROJECT' | 'POLICY' | string;
   name: string;
   description: string;
   status: Status;

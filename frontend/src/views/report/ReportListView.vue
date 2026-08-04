@@ -92,7 +92,8 @@ async function openCreateDialog() {
     templates.value = await fetchReportTemplates(currentProjectId.value);
     if (templates.value[0]) form.templateId = templates.value[0].templateId;
     const bases = await fetchKnowledgeBases(currentProjectId.value, { status: 'ENABLED', pageNo: 1, pageSize: 100 });
-    knowledgeBases.value = bases.filter((item) => String(item.status).toUpperCase() === 'ENABLED');
+    knowledgeBases.value = bases.filter((item) => String(item.status).toUpperCase() === 'ENABLED'
+      && String(item.knowledgeBaseType || 'PROJECT').toUpperCase() === 'PROJECT');
     if (knowledgeBases.value[0]) form.knowledgeBaseId = knowledgeBases.value[0].knowledgeBaseId;
     if (!knowledgeBases.value.length) {
       knowledgeWarning.value = '当前项目暂无已启用的知识库，请先创建、启用知识库并完成文档入库。';

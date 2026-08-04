@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import EmptyState from '../../components/common/EmptyState.vue';
 import { fetchDataSources } from '../../api/datasource';
@@ -37,6 +37,7 @@ const routeMode = ref<'AUTO' | 'MODEL' | 'KNOWLEDGE' | 'DATABASE' | 'MIXED'>('AU
 const knowledgeBases = ref<KnowledgeBase[]>([]);
 const dataSources = ref<DataSourceItem[]>([]);
 const selectedKnowledgeBaseIds = ref<ID[]>([]);
+const knowledgeScope = ref<'PROJECT' | 'POLICY' | 'ALL'>('PROJECT');
 const selectedDataSourceId = ref<ID | ''>('');
 const resourceLoading = ref(false);
 const resourceError = ref('');
@@ -44,6 +45,16 @@ const activeSend = ref<{ token: string; userMessageId: ID; pendingMessageId: ID;
 
 const activeSession = computed(() => sessions.value.find((item) => String(item.sessionId) === String(activeSessionId.value)) || null);
 const enabledKnowledgeBases = computed(() => knowledgeBases.value.filter((item) => ['ENABLED', 'ACTIVE'].includes(String(item.status).toUpperCase())));
+const scopedKnowledgeBases = computed(() => enabledKnowledgeBases.value.filter((item) => {
+  const type = String(item.knowledgeBaseType || 'PROJECT').toUpperCase();
+  return knowledgeScope.value === 'ALL' || type === knowledgeScope.value;
+}));
+
+function selectScopeKnowledgeBases() {
+  selectedKnowledgeBaseIds.value = scopedKnowledgeBases.value.map((item) => item.knowledgeBaseId);
+}
+
+watch(knowledgeScope, selectScopeKnowledgeBases);
 const enabledDataSources = computed(() => dataSources.value.filter((item) => ['ENABLED', 'ACTIVE'].includes(String(item.status).toUpperCase())));
 const canManageQa = computed(() => userStore.hasPermission('qa:manage'));
 const qaManageTip = '当前账号没有问答操作权限';
@@ -119,10 +130,7 @@ async function loadResources(projectId: ID) {
     ]);
     knowledgeBases.value = bases;
     dataSources.value = sources.records;
-    selectedKnowledgeBaseIds.value = selectedKnowledgeBaseIds.value.filter((id) => enabledKnowledgeBases.value.some((item) => String(item.knowledgeBaseId) === String(id)));
-    if (selectedKnowledgeBaseIds.value.length === 0) {
-      selectedKnowledgeBaseIds.value = enabledKnowledgeBases.value.map((item) => item.knowledgeBaseId);
-    }
+    selectScopeKnowledgeBases();
     if (selectedDataSourceId.value && !enabledDataSources.value.some((item) => String(item.dataSourceId) === String(selectedDataSourceId.value))) {
       selectedDataSourceId.value = '';
     }
@@ -377,8 +385,13 @@ onMounted(() => loadSessions());
             <el-option label="数据库问答" value="DATABASE" />
             <el-option label="混合问答" value="MIXED" />
           </el-select>
-          <el-select v-if="['AUTO', 'KNOWLEDGE', 'MIXED'].includes(routeMode)" v-model="selectedKnowledgeBaseIds" multiple collapse-tags collapse-tags-tooltip style="min-width: 240px" placeholder="选择已启用知识库">
-            <el-option v-for="item in enabledKnowledgeBases" :key="item.knowledgeBaseId" :label="item.name" :value="item.knowledgeBaseId" />
+          <el-select v-if="['AUTO', 'KNOWLEDGE', 'MIXED'].includes(routeMode)" v-model="knowledgeScope" style="width: 150px" aria-label="知识范围">
+            <el-option label="项目资料" value="PROJECT" />
+            <el-option label="政策资讯" value="POLICY" />
+            <el-option label="项目 + 政策" value="ALL" />
+          </el-select>
+          <el-select v-if="['AUTO', 'KNOWLEDGE', 'MIXED'].includes(routeMode)" v-model="selectedKnowledgeBaseIds" multiple collapse-tags collapse-tags-tooltip style="min-width: 240px" placeholder="当前范围暂无已启用知识库">
+            <el-option v-for="item in scopedKnowledgeBases" :key="item.knowledgeBaseId" :label="item.name" :value="item.knowledgeBaseId" />
           </el-select>
           <el-select v-if="['AUTO', 'DATABASE', 'MIXED'].includes(routeMode)" v-model="selectedDataSourceId" clearable style="min-width: 220px" placeholder="选择一个已启用数据源">
             <el-option v-for="item in enabledDataSources" :key="item.dataSourceId" :label="item.name" :value="item.dataSourceId" />
