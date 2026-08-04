@@ -1,5 +1,6 @@
 package com.xd.smartworksite.knowledge.application;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xd.smartworksite.auth.domain.ProjectMember;
 import com.xd.smartworksite.auth.mapper.ProjectMemberMapper;
 import com.xd.smartworksite.common.exception.BusinessException;
@@ -89,7 +90,8 @@ class KnowledgeBaseApplicationServiceTest {
                 aiApplicationService,
                 taskRepository,
                 taskOutboxApplicationService,
-                new ProjectAccessApplicationService(projectRepository, memberMapper)
+                new ProjectAccessApplicationService(projectRepository, memberMapper),
+                new ObjectMapper()
         );
     }
 
@@ -127,6 +129,37 @@ class KnowledgeBaseApplicationServiceTest {
 
         assertThat(disabled.getStatus()).isEqualTo("DISABLED");
         assertThat(knowledgeBaseRepository.findById(created.getKnowledgeBaseId())).isEmpty();
+    }
+
+    @Test
+    void defaultKnowledgeBaseCannotBeDisabled() {
+        var created = service.createKnowledgeBase(1L, createRequest("默认知识库"));
+        projectRepository.findById(1L).orElseThrow().setSettings(
+                "{\"defaultKnowledgeBaseId\":" + created.getKnowledgeBaseId() + "}"
+        );
+
+        assertThatThrownBy(() -> service.disableKnowledgeBase(created.getKnowledgeBaseId()))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(ErrorCode.CONFLICT.getCode());
+                    assertThat(ex.getMessage()).contains("default knowledge base");
+                });
+        assertThat(knowledgeBaseRepository.findById(created.getKnowledgeBaseId()))
+                .get().extracting(KnowledgeBase::getStatus).isEqualTo("ENABLED");
+    }
+
+    @Test
+    void defaultKnowledgeBaseCannotBeDeleted() {
+        var created = service.createKnowledgeBase(1L, createRequest("默认知识库"));
+        projectRepository.findById(1L).orElseThrow().setSettings(
+                "{\"defaultKnowledgeBaseId\":" + created.getKnowledgeBaseId() + "}"
+        );
+
+        assertThatThrownBy(() -> service.deleteKnowledgeBase(created.getKnowledgeBaseId()))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(ErrorCode.CONFLICT.getCode());
+                    assertThat(ex.getMessage()).contains("default knowledge base");
+                });
+        assertThat(knowledgeBaseRepository.findById(created.getKnowledgeBaseId())).isPresent();
     }
 
     @Test

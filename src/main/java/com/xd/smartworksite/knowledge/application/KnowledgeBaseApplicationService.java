@@ -1,5 +1,6 @@
 package com.xd.smartworksite.knowledge.application;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import com.xd.smartworksite.common.exception.BusinessException;
@@ -30,6 +31,8 @@ import com.xd.smartworksite.knowledge.dto.KnowledgeDocumentUploadRequest;
 import com.xd.smartworksite.knowledge.repository.KnowledgeBaseRepository;
 import com.xd.smartworksite.knowledge.repository.KnowledgeDocumentRepository;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
+import com.xd.smartworksite.project.domain.Project;
+import com.xd.smartworksite.project.dto.ProjectSettingsResponse;
 import com.xd.smartworksite.task.application.TaskOutboxApplicationService;
 import com.xd.smartworksite.task.domain.GenerateTask;
 import com.xd.smartworksite.task.domain.TaskStatus;
@@ -57,6 +60,7 @@ public class KnowledgeBaseApplicationService {
     private final TaskRepository taskRepository;
     private final TaskOutboxApplicationService taskOutboxApplicationService;
     private final ProjectAccessApplicationService projectAccessApplicationService;
+    private final ObjectMapper objectMapper;
 
     public KnowledgeBaseApplicationService(KnowledgeBaseRepository knowledgeBaseRepository,
                                            KnowledgeDocumentRepository knowledgeDocumentRepository,
@@ -65,7 +69,8 @@ public class KnowledgeBaseApplicationService {
                                            AiApplicationService aiApplicationService,
                                            TaskRepository taskRepository,
                                            TaskOutboxApplicationService taskOutboxApplicationService,
-                                           ProjectAccessApplicationService projectAccessApplicationService) {
+                                           ProjectAccessApplicationService projectAccessApplicationService,
+                                           ObjectMapper objectMapper) {
         this.knowledgeBaseRepository = knowledgeBaseRepository;
         this.knowledgeDocumentRepository = knowledgeDocumentRepository;
         this.fileObjectApplicationService = fileObjectApplicationService;
@@ -74,6 +79,7 @@ public class KnowledgeBaseApplicationService {
         this.taskRepository = taskRepository;
         this.taskOutboxApplicationService = taskOutboxApplicationService;
         this.projectAccessApplicationService = projectAccessApplicationService;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -139,7 +145,8 @@ public class KnowledgeBaseApplicationService {
 
     @Transactional
     public void deleteKnowledgeBase(Long knowledgeBaseId) {
-        requireKnowledgeBaseManage(knowledgeBaseId);
+        KnowledgeBase knowledgeBase = requireKnowledgeBaseManage(knowledgeBaseId);
+        ensureNotProjectDefault(knowledgeBase, "deleted");
         int updated = knowledgeBaseRepository.softDelete(knowledgeBaseId, SecurityUtils.getCurrentUserId());
         if (updated == 0) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "knowledge base not found");
@@ -264,12 +271,34 @@ public class KnowledgeBaseApplicationService {
     }
 
     private KnowledgeBaseResponse updateStatus(Long knowledgeBaseId, KnowledgeBaseStatus status) {
-        requireKnowledgeBaseManage(knowledgeBaseId);
+        KnowledgeBase knowledgeBase = requireKnowledgeBaseManage(knowledgeBaseId);
+        if (status == KnowledgeBaseStatus.DISABLED) {
+            ensureNotProjectDefault(knowledgeBase, "disabled");
+        }
         int updated = knowledgeBaseRepository.updateStatus(knowledgeBaseId, status.name(), SecurityUtils.getCurrentUserId());
         if (updated == 0) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "knowledge base not found");
         }
         return getKnowledgeBase(knowledgeBaseId);
+    }
+
+    private void ensureNotProjectDefault(KnowledgeBase knowledgeBase, String action) {
+        Project project = projectAccessApplicationService.requireProjectWritableManage(knowledgeBase.getProjectId());
+        if (project.getSettings() == null || project.getSettings().isBlank()) {
+            return;
+        }
+        try {
+            Long defaultKnowledgeBaseId = objectMapper.readValue(project.getSettings(), ProjectSettingsResponse.class)
+                    .getDefaultKnowledgeBaseId();
+            if (knowledgeBase.getId().equals(defaultKnowledgeBaseId)) {
+                throw new BusinessException(ErrorCode.CONFLICT,
+                        "default knowledge base cannot be " + action + "; choose another project default first");
+            }
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "project settings json parse failed");
+        }
     }
 
     private KnowledgeBase requireKnowledgeBaseAccess(Long knowledgeBaseId) {
