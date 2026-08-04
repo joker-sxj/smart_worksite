@@ -108,6 +108,7 @@ app:
         agent-invoke: /v1/agent/invoke
         rag-search: /v1/rag/search
         rag-index: /v1/rag/index
+        rag-delete: /v1/rag/delete
         route: /v1/route
         context-prepare: /v1/context/prepare
         database-generate-query: /v1/database/generate-query

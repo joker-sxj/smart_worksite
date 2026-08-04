@@ -55,6 +55,7 @@ public class AiPythonServiceProperties {
         private String agentInvoke = "/v1/agent/invoke";
         private String ragSearch = "/v1/rag/search";
         private String ragIndex = "/v1/rag/index";
+        private String ragDelete = "/v1/rag/delete";
         private String route = "/v1/route";
         private String contextPrepare = "/v1/context/prepare";
         private String databaseGenerateQuery = "/v1/database/generate-query";
@@ -69,6 +70,8 @@ public class AiPythonServiceProperties {
         public void setRagSearch(String ragSearch) { this.ragSearch = ragSearch; }
         public String getRagIndex() { return ragIndex; }
         public void setRagIndex(String ragIndex) { this.ragIndex = ragIndex; }
+        public String getRagDelete() { return ragDelete; }
+        public void setRagDelete(String ragDelete) { this.ragDelete = ragDelete; }
         public String getRoute() { return route; }
         public void setRoute(String route) { this.route = route; }
         public String getContextPrepare() { return contextPrepare; }

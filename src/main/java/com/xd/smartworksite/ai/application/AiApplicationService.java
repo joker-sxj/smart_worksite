@@ -98,6 +98,14 @@ public class AiApplicationService {
         return result;
     }
 
+    public RagDeleteResponse deleteKnowledgeForSystem(RagDeleteRequest request) {
+        projectAccessApplicationService.requireProjectWritableForSystem(request.getProjectId());
+        AiProviderResponse response = pythonClient.post(properties.getPaths().getRagDelete(), "RAG_DELETE", request.getProjectId(), request);
+        RagDeleteResponse result = pythonClient.convertData(response, RagDeleteResponse.class);
+        result.setProviderTraceId(response.getTraceId());
+        return result;
+    }
+
     public RouteResponse route(RouteRequest request) {
         projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
         Map<String, Object> payload = pythonClient.toMap(request);

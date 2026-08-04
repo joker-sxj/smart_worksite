@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import com.xd.smartworksite.ai.application.AiApplicationService;
+import com.xd.smartworksite.ai.dto.RagDeleteRequest;
 import com.xd.smartworksite.ai.dto.RagDocumentRequest;
 import com.xd.smartworksite.ai.dto.RagIndexRequest;
 import com.xd.smartworksite.ai.dto.RagIndexResponse;
@@ -411,6 +412,12 @@ public class PolicyApplicationService {
             if (response == null || response.getIndexedDocuments() == null || response.getIndexedDocuments() <= 0) {
                 throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "RAG index returned no indexed documents");
             }
+            RagDeleteRequest deleteRequest = new RagDeleteRequest();
+            deleteRequest.setProjectId(article.getProjectId());
+            deleteRequest.setSourceType("POLICY_ARTICLE");
+            deleteRequest.setSourceIds(List.of(String.valueOf(article.getId())));
+            deleteRequest.setExcludeKnowledgeBaseId(knowledgeBaseId);
+            aiApplicationService.deleteKnowledgeForSystem(deleteRequest);
             requireUpdated(policyRepository.markArticleIndexSuccess(article.getId(), SYSTEM_USER_ID), "policy article index success update failed");
         } catch (RuntimeException ex) {
             String error = truncateError(ex.getMessage());
