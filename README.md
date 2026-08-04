@@ -169,64 +169,135 @@ com.xd.smartworksite
 
 ## 本地启动
 
-推荐使用仓库内的生命周期脚本。Docker Compose 统一启动 MySQL、Redis、MinIO 和 Python AI 服务；Java 后端与 Vue 前端作为宿主机后台进程运行，PID 和日志写入已忽略的 `logs/` 目录。
+推荐使用仓库内的跨平台生命周期脚本启动完整项目。脚本会统一管理以下服务：
 
-首次运行前确认：
+- Docker Compose：MySQL、Redis、MinIO、Python AI 服务
+- 宿主机后台进程：Java Spring Boot 后端、Vue 前端
+- 运行日志和 PID：统一写入已忽略的 `logs/` 目录
 
-- Docker Desktop（Windows）或 Docker Engine + Compose v2（Linux）已启动。
-- 已安装 Java 17、Maven、Node.js 和 npm。
-- `deploy/.env` 已存在并完成本地配置。脚本不会覆盖已有文件；缺失时会从 `.env.example` 创建后停止，等待用户配置。
-- 当前 Compose 部署从 `deploy/.env` 向 Python AI 容器注入 `QWEN_API_KEY` 等运行环境变量，脚本不会输出这些值。
+### 启动前准备
 
-### Windows PowerShell
+请先安装并启动：
+
+- Docker Desktop（Windows）或 Docker Engine + Compose v2（Linux）
+- Java 17 或更高版本
+- Maven
+- Node.js 和 npm
+
+完整项目必须在 `deploy/.env` 中配置有效的 `QWEN_API_KEY`。脚本不会输出密钥，也不会覆盖已经存在的 `deploy/.env`。
+
+### Windows：复制后直接执行
+
+首次启动：
 
 ```powershell
-# 只检查依赖和配置，不启动服务
+cd smart_worksite
+
+# 首次运行时创建本地配置；已有 deploy/.env 时不会覆盖
+if (-not (Test-Path .\deploy\.env)) {
+    Copy-Item .\deploy\.env.example .\deploy\.env
+}
+
+# 打开配置文件，至少填写 QWEN_API_KEY
+notepad .\deploy\.env
+
+# 检查 Docker、Java、Maven、Node.js、npm 和配置，不启动服务
 .\scripts\start-all.ps1 -Check
 
-# 启动完整项目
+# 一键启动 MySQL、Redis、MinIO、Python AI、Java 后端和 Vue 前端
 .\scripts\start-all.ps1
 
-# 查看完整状态
+# 查看所有服务状态
 .\scripts\status.ps1
+```
 
-# 停止完整项目，保留 Docker volumes
+后续日常启动只需：
+
+```powershell
+cd smart_worksite
+.\scripts\start-all.ps1
+```
+
+停止完整项目并保留数据库、MinIO 等 Docker volumes：
+
+```powershell
 .\scripts\stop-all.ps1
 ```
 
-如果系统禁止执行本地 PowerShell 脚本，可以使用：
+如果 PowerShell 禁止执行本地脚本，可以使用：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-all.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-all.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\status.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\stop-all.ps1
 ```
 
-### Linux Bash
+### Linux：复制后直接执行
+
+首次启动：
 
 ```bash
-# 首次克隆后确保脚本可执行
+cd smart_worksite
+
+# 首次运行时创建本地配置；已有 deploy/.env 时不会覆盖
+cp -n deploy/.env.example deploy/.env
+
+# 使用你习惯的编辑器填写 QWEN_API_KEY
+${EDITOR:-vi} deploy/.env
+
+# 首次克隆后赋予脚本执行权限
 chmod +x scripts/start-all.sh scripts/status.sh scripts/stop-all.sh
 
-# 只检查依赖和配置，不启动服务
+# 检查依赖和配置，不启动服务
 ./scripts/start-all.sh --check
 
-# 启动完整项目
+# 一键启动完整项目
 ./scripts/start-all.sh
 
-# 查看完整状态
+# 查看所有服务状态
 ./scripts/status.sh
+```
 
-# 停止完整项目，保留 Docker volumes
+后续日常启动只需：
+
+```bash
+cd smart_worksite
+./scripts/start-all.sh
+```
+
+停止完整项目并保留数据库、MinIO 等 Docker volumes：
+
+```bash
 ./scripts/stop-all.sh
 ```
 
-### 地址和日志
+### 脚本行为
+
+| 脚本 | Windows | Linux | 说明 |
+| --- | --- | --- | --- |
+| 启动 | `scripts/start-all.ps1` | `scripts/start-all.sh` | 启动完整项目；已健康的服务不会重复启动 |
+| 环境检查 | `start-all.ps1 -Check` | `start-all.sh --check` | 只检查依赖、Java 版本和 `deploy/.env` |
+| 状态检查 | `scripts/status.ps1` | `scripts/status.sh` | 检查容器、PID、端口和健康接口；异常时返回非零退出码 |
+| 停止 | `scripts/stop-all.ps1` | `scripts/stop-all.sh` | 停止项目进程和容器，但不删除 Docker volumes |
+
+启动脚本具有幂等性：项目已经运行时可以再次执行，不会重复启动由脚本管理的 Java 或 Vue 进程。首次缺少 `deploy/.env` 时，脚本会从 `.env.example` 创建文件并停止，配置完成后再次运行即可。
+
+### 默认地址和账号
 
 | 服务 | 默认地址 |
 | --- | --- |
 | 前端 | `http://localhost:5173` |
+| Java 后端 | `http://127.0.0.1:8080` |
 | Java 健康检查 | `http://127.0.0.1:8080/actuator/health` |
 | Python AI 健康检查 | `http://127.0.0.1:8015/v1/health` |
-| MinIO 控制台 | `http://127.0.0.1:19001`（以 `deploy/.env` 为准） |
+| MySQL | `127.0.0.1:13306` |
+| Redis | `127.0.0.1:16379` |
+| MinIO API | `http://127.0.0.1:19000` |
+| MinIO 控制台 | `http://127.0.0.1:19001` |
+
+端口以 `deploy/.env` 的实际配置为准。默认管理员账号为 `admin / admin123`，仅用于本地联调和演示；生产环境必须修改或禁用默认账号。
+
+### 日志与状态排查
 
 后台日志：
 
@@ -244,35 +315,72 @@ logs/run/backend.pid
 logs/run/frontend.pid
 ```
 
-本地开发默认管理员账号为 `admin / admin123`。Flyway 迁移 `V8__reset_default_admin_password.sql` 会重置该密码，仅用于本地联调和演示；生产环境必须重置或禁用默认管理员密码。
+推荐按以下顺序排查启动问题：
+
+```powershell
+# Windows
+.\scripts\start-all.ps1 -Check
+.\scripts\status.ps1
+Get-Content .\logs\backend.err.log -Tail 100
+Get-Content .\logs\frontend.err.log -Tail 100
+```
+
+```bash
+# Linux
+./scripts/start-all.sh --check
+./scripts/status.sh
+tail -n 100 logs/backend.err.log
+tail -n 100 logs/frontend.err.log
+```
+
+常见问题：
+
+- 提示 `QWEN_API_KEY is empty`：编辑 `deploy/.env`，填写有效的 `QWEN_API_KEY` 后重新启动。
+- 前端显示 502：先运行状态脚本，确认 Java 后端 `8080` 和 Python AI `8015` 均正常。
+- 文件解析或问答失败：检查 `scripts/status.*` 输出、`logs/backend.err.log`，以及 Python AI 容器日志。
+- 端口被占用：状态脚本会显示异常端口；停止冲突进程或修改 `deploy/.env` 后重启。
+- 再次启动时提示已运行：这是正常的幂等保护，可直接访问前端或运行状态脚本确认。
 
 ### 手动故障排查启动
 
 正常使用不需要执行以下命令。只有在排查脚本或单个服务问题时，才分别启动组件。
 
-启动 Docker Compose（其中已经包含 Python AI 服务，不要再重复启动 `uvicorn`）：
+先启动 Docker Compose。该 Compose 已包含 Python AI 服务，不要再重复启动本地 `uvicorn`：
 
 ```powershell
 cd deploy
 docker compose -f docker-compose-env.yml --env-file .env up -d
 docker compose -f docker-compose-env.yml --env-file .env ps
+cd ..
 ```
 
-手动启动 Java 前，必须先将 `deploy/.env` 加载到当前终端环境，否则 Java 会连接默认端口，而不是 Compose 映射端口。推荐优先使用 `scripts/start-all.ps1` 或 `scripts/start-all.sh` 完成该步骤。
+Windows 手动启动 Java 前，需要先加载 `deploy/.env`：
 
 ```powershell
+. .\scripts\lib\lifecycle.ps1
+Import-DotEnv -Path .\deploy\.env
+mvn spring-boot:run
+```
+
+Linux 手动启动 Java 前，需要先导出 `deploy/.env`：
+
+```bash
+set -a
+source deploy/.env
+set +a
 mvn spring-boot:run
 ```
 
 手动启动前端：
 
-```powershell
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
 Java 后端通过 `AI_PYTHON_BASE_URL` 和 `AI_PYTHON_API_KEY` 调用 Python 服务。
+
 ## 当前接口
 
 除 `/api/auth/login`、`/api/system/ping`、`/actuator/health`、`/actuator/info` 外，当前接口默认需要 `Authorization: Bearer <accessToken>`。
