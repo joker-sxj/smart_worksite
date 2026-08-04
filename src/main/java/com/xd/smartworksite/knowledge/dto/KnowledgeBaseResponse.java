@@ -7,6 +7,7 @@ public class KnowledgeBaseResponse {
     private Long projectId;
     private String name;
     private String domain;
+    private String knowledgeBaseType;
     private String status;
     private String description;
     private LocalDateTime createdAt;
@@ -20,6 +21,8 @@ public class KnowledgeBaseResponse {
     public void setName(String name) { this.name = name; }
     public String getDomain() { return domain; }
     public void setDomain(String domain) { this.domain = domain; }
+    public String getKnowledgeBaseType() { return knowledgeBaseType; }
+    public void setKnowledgeBaseType(String knowledgeBaseType) { this.knowledgeBaseType = knowledgeBaseType; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public String getDescription() { return description; }

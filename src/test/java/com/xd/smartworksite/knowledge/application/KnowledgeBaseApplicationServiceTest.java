@@ -107,6 +107,9 @@ class KnowledgeBaseApplicationServiceTest {
         assertThat(response.getKnowledgeBaseId()).isEqualTo(1L);
         assertThat(response.getProjectId()).isEqualTo(1L);
         assertThat(response.getStatus()).isEqualTo("ENABLED");
+        assertThat(response.getKnowledgeBaseType()).isEqualTo("PROJECT");
+        assertThat(knowledgeBaseRepository.findById(response.getKnowledgeBaseId()))
+                .get().extracting(KnowledgeBase::getKnowledgeBaseType).isEqualTo("PROJECT");
     }
 
     @Test

@@ -5,6 +5,7 @@ import java.util.List;
 public class ProjectSettingsResponse {
     private Long projectId;
     private Long defaultKnowledgeBaseId;
+    private Long policyKnowledgeBaseId;
     private Long defaultReportTemplateId;
     private Integer dataRetentionDays;
     private Long uploadMaxSizeMb;
@@ -18,6 +19,8 @@ public class ProjectSettingsResponse {
     public void setProjectId(Long projectId) { this.projectId = projectId; }
     public Long getDefaultKnowledgeBaseId() { return defaultKnowledgeBaseId; }
     public void setDefaultKnowledgeBaseId(Long defaultKnowledgeBaseId) { this.defaultKnowledgeBaseId = defaultKnowledgeBaseId; }
+    public Long getPolicyKnowledgeBaseId() { return policyKnowledgeBaseId; }
+    public void setPolicyKnowledgeBaseId(Long policyKnowledgeBaseId) { this.policyKnowledgeBaseId = policyKnowledgeBaseId; }
     public Long getDefaultReportTemplateId() { return defaultReportTemplateId; }
     public void setDefaultReportTemplateId(Long defaultReportTemplateId) { this.defaultReportTemplateId = defaultReportTemplateId; }
     public Integer getDataRetentionDays() { return dataRetentionDays; }

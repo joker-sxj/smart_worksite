@@ -90,6 +90,7 @@ public class KnowledgeBaseApplicationService {
         knowledgeBase.setName(normalizeRequired(request.getName(), "name is required"));
         knowledgeBase.setDomain(trimToNull(request.getDomain()));
         knowledgeBase.setDescription(trimToNull(request.getDescription()));
+        knowledgeBase.setKnowledgeBaseType("PROJECT");
         knowledgeBase.setStatus(KnowledgeBaseStatus.ENABLED.name());
         knowledgeBase.setCreatedBy(SecurityUtils.getCurrentUserId());
         knowledgeBase.setUpdatedBy(SecurityUtils.getCurrentUserId());
@@ -438,6 +439,7 @@ public class KnowledgeBaseApplicationService {
         response.setProjectId(knowledgeBase.getProjectId());
         response.setName(knowledgeBase.getName());
         response.setDomain(knowledgeBase.getDomain());
+        response.setKnowledgeBaseType(knowledgeBase.getKnowledgeBaseType());
         response.setStatus(knowledgeBase.getStatus());
         response.setDescription(knowledgeBase.getDescription());
         response.setCreatedAt(knowledgeBase.getCreatedAt());

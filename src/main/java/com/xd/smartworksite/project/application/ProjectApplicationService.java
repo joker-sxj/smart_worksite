@@ -299,6 +299,9 @@ public class ProjectApplicationService {
         if (!projectId.equals(knowledgeBase.getProjectId())) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "default knowledge base does not belong to project");
         }
+        if (!"PROJECT".equals(knowledgeBase.getKnowledgeBaseType())) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "default knowledge base must be a project knowledge base");
+        }
         if (!"ENABLED".equals(knowledgeBase.getStatus())) {
             throw new BusinessException(ErrorCode.CONFLICT, "default knowledge base is not enabled");
         }
@@ -365,6 +368,7 @@ public class ProjectApplicationService {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("projectId", settings.getProjectId());
             payload.put("defaultKnowledgeBaseId", settings.getDefaultKnowledgeBaseId());
+            payload.put("policyKnowledgeBaseId", settings.getPolicyKnowledgeBaseId());
             payload.put("defaultReportTemplateId", settings.getDefaultReportTemplateId());
             payload.put("dataRetentionDays", settings.getDataRetentionDays());
             payload.put("uploadMaxSizeMb", settings.getUploadMaxSizeMb());

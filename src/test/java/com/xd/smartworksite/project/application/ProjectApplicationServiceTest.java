@@ -220,6 +220,27 @@ class ProjectApplicationServiceTest {
     }
 
     @Test
+    void updateProjectSettingsPreservesReadOnlyPolicyKnowledgeBaseId() {
+        InMemoryProjectRepository repository = new InMemoryProjectRepository();
+        InMemoryProjectMemberMapper memberMapper = new InMemoryProjectMemberMapper();
+        ProjectApplicationService service = newProjectService(repository, memberMapper);
+        ProjectResponse created = service.createProject(createRequest("测试项目", "SITE-001"));
+        repository.findById(created.getProjectId()).orElseThrow().setSettings(
+                "{\"policyKnowledgeBaseId\":66,\"defaultQaRouteMode\":\"AUTO\"}"
+        );
+
+        assertThat(service.getProjectSettings(created.getProjectId()).getPolicyKnowledgeBaseId()).isEqualTo(66L);
+
+        ProjectSettingsRequest request = new ProjectSettingsRequest();
+        request.setDefaultQaRouteMode("knowledge");
+
+        var settings = service.updateProjectSettings(created.getProjectId(), request);
+
+        assertThat(settings.getPolicyKnowledgeBaseId()).isEqualTo(66L);
+        assertThat(service.getProjectSettings(created.getProjectId()).getPolicyKnowledgeBaseId()).isEqualTo(66L);
+    }
+
+    @Test
     void updateProjectSettingsAcceptsEnabledSameProjectDefaults() {
         InMemoryProjectRepository repository = new InMemoryProjectRepository();
         InMemoryProjectMemberMapper memberMapper = new InMemoryProjectMemberMapper();
@@ -356,6 +377,7 @@ class ProjectApplicationServiceTest {
         knowledgeBase.setId(id);
         knowledgeBase.setProjectId(projectId);
         knowledgeBase.setName("default knowledge base " + id);
+        knowledgeBase.setKnowledgeBaseType("PROJECT");
         knowledgeBase.setStatus(status);
         return knowledgeBase;
     }
