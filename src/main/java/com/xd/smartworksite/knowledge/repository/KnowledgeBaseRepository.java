@@ -12,6 +12,12 @@ public interface KnowledgeBaseRepository {
 
     List<KnowledgeBase> findPage(Long projectId, String status, String domain, String keyword);
 
+    default Optional<KnowledgeBase> findByProjectIdAndType(Long projectId, String knowledgeBaseType) {
+        return findPage(projectId, null, null, null).stream()
+                .filter(value -> knowledgeBaseType.equals(value.getKnowledgeBaseType()))
+                .findFirst();
+    }
+
     int update(KnowledgeBase knowledgeBase);
 
     int updateStatus(Long knowledgeBaseId, String status, Long updatedBy);

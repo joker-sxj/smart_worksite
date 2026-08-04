@@ -54,8 +54,7 @@ public class PolicyApplicationService {
     private final TaskOutboxApplicationService taskOutboxApplicationService;
     private final PolicyCrawlerClient policyCrawlerClient;
     private final AiApplicationService aiApplicationService;
-    private final KnowledgeBaseRepository knowledgeBaseRepository;
-    private final ObjectMapper objectMapper;
+    private final PolicyKnowledgeBaseApplicationService policyKnowledgeBaseApplicationService;
 
     public PolicyApplicationService(PolicyRepository policyRepository,
                                     ProjectAccessApplicationService projectAccessApplicationService,
@@ -63,16 +62,14 @@ public class PolicyApplicationService {
                                     TaskOutboxApplicationService taskOutboxApplicationService,
                                     PolicyCrawlerClient policyCrawlerClient,
                                     AiApplicationService aiApplicationService,
-                                    KnowledgeBaseRepository knowledgeBaseRepository,
-                                    ObjectMapper objectMapper) {
+                                    PolicyKnowledgeBaseApplicationService policyKnowledgeBaseApplicationService) {
         this.policyRepository = policyRepository;
         this.projectAccessApplicationService = projectAccessApplicationService;
         this.taskRepository = taskRepository;
         this.taskOutboxApplicationService = taskOutboxApplicationService;
         this.policyCrawlerClient = policyCrawlerClient;
         this.aiApplicationService = aiApplicationService;
-        this.knowledgeBaseRepository = knowledgeBaseRepository;
-        this.objectMapper = objectMapper;
+        this.policyKnowledgeBaseApplicationService = policyKnowledgeBaseApplicationService;
     }
 
     public PageResult<PolicySourceResponse> querySources(PolicySourceQueryRequest request) {
@@ -141,7 +138,7 @@ public class PolicyApplicationService {
     @Transactional
     public PolicyCrawlTaskResponse createCrawlTask(PolicyCrawlTaskCreateRequest request) {
         Project project = projectAccessApplicationService.requireProjectWritableManage(request.getProjectId());
-        ensureDefaultKnowledgeBase(project);
+        policyKnowledgeBaseApplicationService.resolve(project);
         PolicySource source = null;
         if (request.getSourceId() != null) {
             source = requireSourceManage(request.getSourceId());
@@ -229,7 +226,7 @@ public class PolicyApplicationService {
                     continue;
                 }
                 Project project = projectAccessApplicationService.requireProjectWritableForSystem(source.getProjectId());
-                ensureDefaultKnowledgeBase(project);
+                policyKnowledgeBaseApplicationService.resolve(project);
                 GenerateTask task = new GenerateTask();
                 task.setProjectId(source.getProjectId());
                 task.setTaskType(TASK_TYPE_POLICY_CRAWL);
@@ -283,7 +280,7 @@ public class PolicyApplicationService {
 
     private void doExecuteCrawlTask(PolicyCrawlTask task) {
         Project project = projectAccessApplicationService.requireProjectWritableForSystem(task.getProjectId());
-        Long knowledgeBaseId = ensureDefaultKnowledgeBase(project);
+        Long knowledgeBaseId = policyKnowledgeBaseApplicationService.resolve(project);
         List<PolicySource> sources = task.getSourceId() == null
                 ? policyRepository.findEnabledSourcesByProject(task.getProjectId())
                 : List.of(requireEnabledSourceForSystem(task.getSourceId(), task.getProjectId()));
@@ -425,33 +422,6 @@ public class PolicyApplicationService {
     private void failTask(Long taskId, String error) {
         requireUpdated(policyRepository.updateCrawlTaskProgress(taskId, TaskStatus.FAILED.name(), 100, 0, 0, 1,
                 "policy crawl failed", truncateError(error), SYSTEM_USER_ID), "policy crawl task failure state update failed");
-    }
-
-    private Long ensureDefaultKnowledgeBase(Project project) {
-        Long knowledgeBaseId = parseDefaultKnowledgeBaseId(project);
-        if (knowledgeBaseId == null) {
-            throw new BusinessException(ErrorCode.CONFLICT, "project defaultKnowledgeBaseId is required for policy crawler indexing");
-        }
-        KnowledgeBase knowledgeBase = knowledgeBaseRepository.findById(knowledgeBaseId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "default knowledge base not found"));
-        if (!project.getId().equals(knowledgeBase.getProjectId())) {
-            throw new BusinessException(ErrorCode.PARAM_ERROR, "default knowledge base does not belong to project");
-        }
-        if (!KnowledgeBaseStatus.ENABLED.name().equals(knowledgeBase.getStatus())) {
-            throw new BusinessException(ErrorCode.CONFLICT, "default knowledge base is disabled");
-        }
-        return knowledgeBaseId;
-    }
-
-    private Long parseDefaultKnowledgeBaseId(Project project) {
-        if (project.getSettings() == null || project.getSettings().isBlank()) {
-            return null;
-        }
-        try {
-            return objectMapper.readValue(project.getSettings(), ProjectSettingsResponse.class).getDefaultKnowledgeBaseId();
-        } catch (Exception ex) {
-            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "project settings json parse failed");
-        }
     }
 
     private PolicySource requireSource(Long sourceId) {

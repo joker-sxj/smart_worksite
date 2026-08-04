@@ -35,6 +35,16 @@
           and deleted = 0
     </select>
 
+    <select id="selectByProjectIdAndType" resultMap="KnowledgeBaseResultMap">
+        select <include refid="KnowledgeBaseColumns"/>
+        from knowledge_base
+        where project_id = #{projectId}
+          and knowledge_base_type = #{knowledgeBaseType}
+          and deleted = 0
+        order by id asc
+        limit 1
+    </select>
+
     <select id="selectPage" resultMap="KnowledgeBaseResultMap">
         select <include refid="KnowledgeBaseColumns"/>
         from knowledge_base

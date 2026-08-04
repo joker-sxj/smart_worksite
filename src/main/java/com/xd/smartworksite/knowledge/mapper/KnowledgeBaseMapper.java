@@ -10,6 +10,9 @@ public interface KnowledgeBaseMapper {
 
     KnowledgeBase selectById(@Param("knowledgeBaseId") Long knowledgeBaseId);
 
+    KnowledgeBase selectByProjectIdAndType(@Param("projectId") Long projectId,
+                                               @Param("knowledgeBaseType") String knowledgeBaseType);
+
     List<KnowledgeBase> selectPage(@Param("projectId") Long projectId,
                                    @Param("status") String status,
                                    @Param("domain") String domain,

@@ -135,6 +135,23 @@ class KnowledgeBaseApplicationServiceTest {
     }
 
     @Test
+    void policyKnowledgeBaseRejectsUserMutation() {
+        KnowledgeBase policy = base(1L, "政策资讯库", "ENABLED");
+        policy.setKnowledgeBaseType("POLICY");
+        knowledgeBaseRepository.insert(policy);
+
+        KnowledgeBaseUpdateRequest update = new KnowledgeBaseUpdateRequest();
+        update.setName("new name");
+
+        assertThatThrownBy(() -> service.updateKnowledgeBase(policy.getId(), update)).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.enableKnowledgeBase(policy.getId())).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.disableKnowledgeBase(policy.getId())).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.deleteKnowledgeBase(policy.getId())).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.uploadDocument(policy.getId(), new KnowledgeDocumentUploadRequest()))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
     void defaultKnowledgeBaseCannotBeDisabled() {
         var created = service.createKnowledgeBase(1L, createRequest("默认知识库"));
         projectRepository.findById(1L).orElseThrow().setSettings(

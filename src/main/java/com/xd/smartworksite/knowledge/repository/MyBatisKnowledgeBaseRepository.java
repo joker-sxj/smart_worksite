@@ -27,6 +27,11 @@ public class MyBatisKnowledgeBaseRepository implements KnowledgeBaseRepository {
     }
 
     @Override
+    public Optional<KnowledgeBase> findByProjectIdAndType(Long projectId, String knowledgeBaseType) {
+        return Optional.ofNullable(knowledgeBaseMapper.selectByProjectIdAndType(projectId, knowledgeBaseType));
+    }
+
+    @Override
     public List<KnowledgeBase> findPage(Long projectId, String status, String domain, String keyword) {
         return knowledgeBaseMapper.selectPage(projectId, status, domain, keyword);
     }

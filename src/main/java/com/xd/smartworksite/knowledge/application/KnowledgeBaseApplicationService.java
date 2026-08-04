@@ -123,6 +123,7 @@ public class KnowledgeBaseApplicationService {
     @Transactional
     public KnowledgeBaseResponse updateKnowledgeBase(Long knowledgeBaseId, KnowledgeBaseUpdateRequest request) {
         KnowledgeBase current = requireKnowledgeBaseManage(knowledgeBaseId);
+        ensureUserManagedKnowledgeBase(current);
         current.setName(normalizeRequired(request.getName(), "name is required"));
         current.setDomain(trimToNull(request.getDomain()));
         current.setDescription(trimToNull(request.getDescription()));
@@ -147,6 +148,7 @@ public class KnowledgeBaseApplicationService {
     @Transactional
     public void deleteKnowledgeBase(Long knowledgeBaseId) {
         KnowledgeBase knowledgeBase = requireKnowledgeBaseManage(knowledgeBaseId);
+        ensureUserManagedKnowledgeBase(knowledgeBase);
         ensureNotProjectDefault(knowledgeBase, "deleted");
         int updated = knowledgeBaseRepository.softDelete(knowledgeBaseId, SecurityUtils.getCurrentUserId());
         if (updated == 0) {
@@ -157,6 +159,7 @@ public class KnowledgeBaseApplicationService {
     @Transactional
     public KnowledgeDocumentResponse uploadDocument(Long knowledgeBaseId, KnowledgeDocumentUploadRequest request) {
         KnowledgeBase knowledgeBase = requireKnowledgeBaseManage(knowledgeBaseId);
+        ensureUserManagedKnowledgeBase(knowledgeBase);
         FileUploadRequest uploadRequest = new FileUploadRequest();
         uploadRequest.setProjectId(knowledgeBase.getProjectId());
         uploadRequest.setBizType("KNOWLEDGE_DOC");
@@ -273,6 +276,7 @@ public class KnowledgeBaseApplicationService {
 
     private KnowledgeBaseResponse updateStatus(Long knowledgeBaseId, KnowledgeBaseStatus status) {
         KnowledgeBase knowledgeBase = requireKnowledgeBaseManage(knowledgeBaseId);
+        ensureUserManagedKnowledgeBase(knowledgeBase);
         if (status == KnowledgeBaseStatus.DISABLED) {
             ensureNotProjectDefault(knowledgeBase, "disabled");
         }
@@ -281,6 +285,13 @@ public class KnowledgeBaseApplicationService {
             throw new BusinessException(ErrorCode.NOT_FOUND, "knowledge base not found");
         }
         return getKnowledgeBase(knowledgeBaseId);
+    }
+
+    private void ensureUserManagedKnowledgeBase(KnowledgeBase knowledgeBase) {
+        if ("POLICY".equals(knowledgeBase.getKnowledgeBaseType())) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "policy knowledge base is system managed and cannot be changed manually");
+        }
     }
 
     private void ensureNotProjectDefault(KnowledgeBase knowledgeBase, String action) {
