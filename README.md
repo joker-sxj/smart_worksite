@@ -98,7 +98,8 @@ Python 智能算法服务
 - 报告模板和审查模板兼容接口。
 - 报告创建、列表、详情、逐变量状态查询、重新生成、下载 URL、版本记录、单知识库逐变量 QA/RAG 生成和异步 Java DOCX 模板渲染链路。
 - Java AI 适配层：模型调用、Agent 调用、RAG 检索/索引、数据库问答、路由、上下文准备、外部调用日志和项目级访问校验。
-- 知识库基础管理、文档上传、索引任务创建、任务 outbox 投递、Worker 异步调用 Python RAG 索引和失败状态记录。
+- 知识库基础管理、文档上传、索引任务创建、任务 outbox 投递、Worker 异步调用 Python RAG 索引和失败状态记录。知识库按 `PROJECT` 项目资料库和 `POLICY` 系统政策库隔离。
+- 政策资讯源配置、真实爬取任务、文章入库与重建索引；每个项目自动维护一个系统政策库，不再依赖默认项目知识库。
 - 任务管理接口：任务列表、详情、阶段日志、状态统计、失败任务重试、等待/运行中任务取消请求和项目级访问校验。
 - 任务 outbox 基础投递：以 MySQL `task_outbox` 为事实源，按配置投递任务事件到 Redis 队列，并记录失败原因和重试时间。
 - 任务 Worker 基础状态机：领取 `QUEUED` 任务、写入 worker 租约和心跳、按 owner 校验完成成功或失败；执行业务前校验项目仍为可写状态；Redis 队列坏消息会记录原因和 payload 摘要后拒绝，不 claim 任务。
@@ -117,7 +118,8 @@ Python 智能算法服务
 - 403、404 页面。
 - 通用上传、表格、搜索、弹窗、状态、进度、JSON 查看、下载组件。
 - 文件管理页只提供审查文档上传、下载和解析记录；知识库文档上传统一走知识库页面，模板上传统一走模板中心，报告结果统一由报告任务生成，避免重复功能入口。
-- 知识问答页支持模型、知识库、数据库、混合路由选择；数据库问答提交前必须选择一个已启用数据源，知识库问答必须选择已启用知识库。
+- 知识问答页支持模型、知识库、数据库、混合路由选择；知识检索可按“项目资料”、“政策资讯”或“项目 + 政策”范围选择，默认仅使用项目资料。
+- 报告生成页仅展示 `PROJECT` 项目资料库，后端同步拒绝使用系统政策库生成报告。
 - 前端长任务与状态机操作会按后端允许状态禁用非法按钮：任务只在 `FAILED` 可重试、等待/运行状态可取消；文件解析仅成功可查看内容、失败可重试；报告仅完成可下载，生成中不可重复生成。
 
 ### 规划中
@@ -443,7 +445,7 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 
 项目状态写入规则：`DISABLED` 或 `ARCHIVED` 项目只允许读取和重新启用；创建/修改项目业务数据、成员、文件、模板、知识库、数据源、QA、审查、报告、任务重试/取消、AI 调用等写操作会直接返回冲突错误，不做静默兜底。
 
-项目配置校验规则：默认知识库必须存在、属于当前项目且处于 `ENABLED`；默认报告模板必须存在、属于当前项目、类别为 `REPORT` 且处于 `ENABLED`；默认问答路由只允许 `AUTO`、`MODEL`、`KNOWLEDGE`、`DATABASE`、`MIXED`；默认导出格式只允许 `WORD` 或 `PDF`。
+项目配置校验规则：`defaultKnowledgeBaseId` 必须指向当前项目已启用的 `PROJECT` 知识库；`policyKnowledgeBaseId` 由系统在政策爬取时自动创建或修复，普通项目配置更新不接受手工指定。默认报告模板必须存在、属于当前项目、类别为 `REPORT` 且处于 `ENABLED`；默认问答路由只允许 `AUTO`、`MODEL`、`KNOWLEDGE`、`DATABASE`、`MIXED`；默认导出格式只允许 `WORD` 或 `PDF`。
 | GET | `/api/projects/{projectId}/members` | 查询项目成员 |
 | POST | `/api/projects/{projectId}/members` | 添加项目成员 |
 | PUT | `/api/projects/{projectId}/members/{userId}` | 修改项目成员角色 |
@@ -503,14 +505,14 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/reports` | 使用一个已启用知识库创建报告生成任务，`reportName`、`reportType`、`templateId`、`knowledgeBaseId` 必填，返回 `PENDING` 和 `taskId` |
+| POST | `/api/reports` | 使用一个已启用的 `PROJECT` 知识库创建报告生成任务，`reportName`、`reportType`、`templateId`、`knowledgeBaseId` 必填，返回 `PENDING` 和 `taskId` |
 | GET | `/api/reports` | 分页查询报告列表 |
 | GET | `/api/reports/{reportId}` | 查询报告详情 |
 | GET | `/api/reports/{reportId}/variables` | 按模板顺序查询变量描述、生成值、状态和错误 |
 | POST | `/api/reports/{reportId}/regenerate` | 重新生成报告 |
 | GET | `/api/reports/{reportId}/download?format=WORD` | 获取 Word 报告下载 URL |
 
-报告生成规则：创建时只允许选择一个当前项目已启用知识库；模板必须包含 `{{ var_xx_xx }}` 变量且每个变量都已配置非空描述。Worker 按模板顺序逐项复用 QA/RAG 能力，各变量不共享上下文且不写入普通问答会话历史。变量值和状态实时保存到 `report_variable_value`；单变量失败会使报告失败，任务重试时保留成功值并只补失败或未处理变量。知识库检索为空时允许模型生成通用内容，但不得伪造具体项目数据。报告列表 `status` 查询只允许 `DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`FAILED`、`ARCHIVED`、`DELETED`。
+报告生成规则：创建时只允许选择一个当前项目已启用的 `PROJECT` 知识库，`POLICY` 系统政策库会在调用 RAG 前被后端拒绝；模板必须包含 `{{ var_xx_xx }}` 变量且每个变量都已配置非空描述。Worker 按模板顺序逐项复用 QA/RAG 能力，各变量不共享上下文且不写入普通问答会话历史。变量值和状态实时保存到 `report_variable_value`；单变量失败会使报告失败，任务重试时保留成功值并只补失败或未处理变量。知识库检索为空时允许模型生成通用内容，但不得伪造具体项目数据。报告列表 `status` 查询只允许 `DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`FAILED`、`ARCHIVED`、`DELETED`。
 
 Report write rule: report generation must check affected rows for report-task linking, task status, processing, success, failed, and version file binding. A zero-row update is a conflict and must not be reported as completed generation.
 
@@ -560,6 +562,27 @@ Auth write rule: user, password, role, role-permission, project-member, and last
 
 Knowledge write rule: knowledge-base updates must check affected rows; document uploads must verify generated IDs and read back persisted records before success; `INDEXING`, `SUCCESS`, and `FAILED` indexing status writes must check affected rows, and failure-state persistence failures must surface conflict errors with the original error retained.
 
+知识库隔离规则：
+
+- 知识库类型存储在 `knowledge_base.knowledge_base_type`。`PROJECT` 是用户管理的项目资料库，支持创建、修改、启停、删除和文档上传；旧数据在 Flyway `V19` 中自动回填为 `PROJECT`。
+- `POLICY` 是每个项目至多一个的系统政策库，首次执行政策爬取时自动创建，名称为“政策资讯库”、领域为 `POLICY_CRAWLER`，并写入项目配置 `policyKnowledgeBaseId`。
+- `POLICY` 库由系统管理：普通知识库接口不允许修改、启停、删除或手工上传文档。
+- 政策文章成功写入当前项目政策库后，系统会按 `POLICY_ARTICLE` 来源标识清理该文章在其他知识库中的旧向量，避免项目资料检索命中政策爬虫内容。
+
+### 政策资讯
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/policy/sources` | 分页查询当前项目的政策源 |
+| POST | `/api/policy/sources` | 创建政策源 |
+| PUT | `/api/policy/sources/{sourceId}` | 修改政策源 |
+| DELETE | `/api/policy/sources/{sourceId}` | 删除政策源 |
+| POST | `/api/policy/crawl-tasks` | 创建真实政策爬取任务 |
+| GET | `/api/policy/crawl-tasks` | 分页查询爬取任务及索引进度 |
+| GET | `/api/policy/articles` | 分页查询已爬取政策文章及入库状态 |
+
+爬取任务不使用 `defaultKnowledgeBaseId`。系统会校验并修复 `policyKnowledgeBaseId`，必要时自动重新启用或创建系统政策库；文章只在政策库索引成功并完成旧向量清理后才标记入库成功。
+
 ### 数据源
 
 | 方法 | 路径 | 说明 |
@@ -581,7 +604,7 @@ Knowledge write rule: knowledge-base updates must check affected rows; document 
 
 QA read APIs require `qa:view`; create/update/archive/send/regenerate/feedback APIs require `qa:manage`.
 
-QA 提问时，`knowledgeBaseIds` 必须存在、属于当前会话项目且处于 `ENABLED`；`dataSourceIds` 必须存在、属于当前会话项目且处于 `ENABLED`。跨项目、停用或不存在的引用会在调用 AI 前直接失败，避免把其他项目资料或数据源传给模型。
+QA 提问时，`knowledgeBaseIds` 必须存在、属于当前会话项目且处于 `ENABLED`；`dataSourceIds` 必须存在、属于当前会话项目且处于 `ENABLED`。跨项目、停用或不存在的引用会在调用 AI 前直接失败，避免把其他项目资料或数据源传给模型。前端将范围映射为具体知识库 ID：`PROJECT` 仅项目资料、`POLICY` 仅政策资讯、`ALL` 同时检索两类知识库。
 
 QA 消息写入规则：问题消息创建后必须持有可读 ID；AI 返回后写入答案、引用和状态时必须检查数据库影响行数，写入失败直接返回冲突错误，不允许把未持久化的 AI 答案报告为成功。
 
@@ -625,7 +648,7 @@ Review read APIs require `review:view`; submit/retry/delete/archive/update-issue
 
 ### 报告生成
 
-报告创建接口不直接阻塞生成文件。开启任务 outbox 调度和 Worker 后，Worker 会领取 `REPORT_GENERATION` 任务，确认项目和唯一知识库仍可用，按 `sort_no` 逐个使用变量描述进行 RAG 检索和模型生成，全部成功后在 Java 中渲染 Word 文件。
+报告创建接口不直接阻塞生成文件。开启任务 outbox 调度和 Worker 后，Worker 会领取 `REPORT_GENERATION` 任务，确认项目和唯一的 `PROJECT` 知识库仍可用，按 `sort_no` 逐个使用变量描述进行 RAG 检索和模型生成，全部成功后在 Java 中渲染 Word 文件。
 
 模板占位符只支持 `{{ var_xx_xx }}`。同名变量只生成一次，正文、表格、页眉和页脚中的同名占位符使用同一个值。
 
