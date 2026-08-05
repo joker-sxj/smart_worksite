@@ -108,6 +108,11 @@ public class AiApplicationService {
 
     public RouteResponse route(RouteRequest request) {
         projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
+        return routeForSystem(request);
+    }
+
+    public RouteResponse routeForSystem(RouteRequest request) {
+        projectAccessApplicationService.requireProjectWritableForSystem(request.getProjectId());
         Map<String, Object> payload = pythonClient.toMap(request);
         payload.put("availableKnowledgeBases", request.getAvailableKnowledgeBaseIds().stream()
                 .map(id -> Map.<String, Object>of("id", id))
@@ -131,6 +136,11 @@ public class AiApplicationService {
 
     public DatabaseQueryResponse queryDatabase(DatabaseQueryRequest request) {
         projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
+        return queryDatabaseForSystem(request);
+    }
+
+    public DatabaseQueryResponse queryDatabaseForSystem(DatabaseQueryRequest request) {
+        projectAccessApplicationService.requireProjectWritableForSystem(request.getProjectId());
         DataSourceRecord dataSource = aiRepository.findEnabledDataSource(request.getProjectId(), request.getDataSourceId());
         if (dataSource == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "数据源不存在或未启用");

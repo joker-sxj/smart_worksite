@@ -10,6 +10,8 @@ import EmptyState from '../../components/common/EmptyState.vue';
 import StatusTag from '../../components/common/StatusTag.vue';
 import { deleteTemplate, disableTemplate, enableTemplate, fetchTemplateDetail, fetchTemplatePreview, fetchTemplateVariableDescriptions, fetchTemplates, updateTemplate, updateTemplateVariableDescriptions, uploadTemplate, type TemplateItem, type TemplateVariableDescription } from '../../api/template';
 import { useProjectStore } from '../../stores/project';
+import { fetchDataSources } from '../../api/datasource';
+import type { DataSourceItem } from '../../api/types';
 import { useUserStore } from '../../stores/user';
 import { hasSuspiciousText } from '../../utils/textQuality';
 
@@ -28,6 +30,7 @@ const variableSaving = ref(false);
 const variableError = ref('');
 const variableTemplate = ref<TemplateItem | null>(null);
 const variableItems = ref<TemplateVariableDescription[]>([]);
+const variableDataSources = ref<DataSourceItem[]>([]);
 let variableRequestSequence = 0;
 const previewVisible = ref(false);
 const previewLoading = ref(false);
@@ -109,13 +112,18 @@ async function openVariables(row: TemplateItem) {
   const sequence = ++variableRequestSequence;
   variableTemplate.value = row;
   variableItems.value = [];
+  variableDataSources.value = [];
   variableError.value = '';
   variableDialogVisible.value = true;
   variableLoading.value = true;
   try {
-    const items = await fetchTemplateVariableDescriptions(row.templateId);
+    const [items, sourcePage] = await Promise.all([
+      fetchTemplateVariableDescriptions(row.templateId),
+      fetchDataSources({ projectId: projectId.value, status: 'ENABLED', pageNo: 1, pageSize: 100 })
+    ]);
     if (sequence !== variableRequestSequence || !variableDialogVisible.value) return;
-    variableItems.value = items;
+    variableItems.value = items.map((item) => ({ ...item, dataSourceIds: item.dataSourceIds || [] }));
+    variableDataSources.value = sourcePage.records.filter((item) => String(item.status).toUpperCase() === 'ENABLED');
   } catch (err) {
     if (sequence !== variableRequestSequence) return;
     variableError.value = err instanceof Error ? err.message : '模板变量加载失败，请检查后端变量描述接口。';
@@ -128,6 +136,7 @@ function resetVariableDialog() {
   variableRequestSequence += 1;
   variableTemplate.value = null;
   variableItems.value = [];
+  variableDataSources.value = [];
   variableError.value = '';
   variableLoading.value = false;
   variableSaving.value = false;
@@ -146,7 +155,8 @@ async function saveVariableDescriptions() {
       variableTemplate.value.templateId,
       variableItems.value.map((item) => ({
         variableName: item.variableName,
-        description: item.description.trim()
+        description: item.description.trim(),
+        dataSourceIds: item.dataSourceIds || []
       }))
     );
     ElMessage.success('模板变量描述已保存');
@@ -398,9 +408,16 @@ onMounted(async () => {
           <el-table-column label="变量名" width="260">
             <template #default="{ row }"><el-input :model-value="row.variableName" disabled /></template>
           </el-table-column>
-          <el-table-column label="变量描述">
+          <el-table-column label="变量描述" min-width="300">
             <template #default="{ row }">
               <el-input v-model="row.description" type="textarea" :rows="2" maxlength="2000" show-word-limit :disabled="!canManageTemplate" placeholder="请输入该变量的业务含义和生成要求" />
+            </template>
+          </el-table-column>
+          <el-table-column label="限定数据源" min-width="260">
+            <template #default="{ row }">
+              <el-select v-model="row.dataSourceIds" multiple collapse-tags clearable style="width: 100%" :disabled="!canManageTemplate" placeholder="留空则由 AI 自动选择">
+                <el-option v-for="source in variableDataSources" :key="source.dataSourceId" :label="source.name" :value="source.dataSourceId" />
+              </el-select>
             </template>
           </el-table-column>
         </el-table>

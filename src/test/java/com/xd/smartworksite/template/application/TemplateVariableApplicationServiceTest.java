@@ -87,13 +87,16 @@ class TemplateVariableApplicationServiceTest {
     void upsertsAllCurrentVariablesAndReadsThemBackInTemplateOrder() {
         setTemplateContent("{{ var_project_name }} {{ var_report_date }} {{var_project_name}}");
 
+        TemplateVariableDescriptionItemRequest reportDate = item("var_report_date", "报告日期");
+        reportDate.setDataSourceIds(List.of(21L, 21L, 20L));
         List<TemplateVariableDescriptionResponse> first = service.upsertDescriptions(10L, request(
-                item("var_report_date", "报告日期"),
+                reportDate,
                 item("var_project_name", "项目名称")
         ));
 
         assertThat(first).extracting(TemplateVariableDescriptionResponse::getVariableName)
                 .containsExactly("var_project_name", "var_report_date");
+        assertThat(first.get(1).getDataSourceIds()).containsExactly(21L, 20L);
         assertThat(descriptionRepository.records).hasSize(2);
 
         List<TemplateVariableDescriptionResponse> second = service.upsertDescriptions(10L, request(

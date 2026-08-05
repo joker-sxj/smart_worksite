@@ -58,6 +58,8 @@
         <result property="templateId" column="template_id"/>
         <result property="templateFileId" column="template_file_id"/>
         <result property="knowledgeBaseId" column="knowledge_base_id"/>
+        <result property="knowledgeBaseIds" column="knowledge_base_ids"/>
+        <result property="dataSourceIds" column="data_source_ids"/>
         <result property="variableName" column="variable_name"/>
         <result property="variableDescription" column="variable_description"/>
         <result property="variableValue" column="variable_value"/>
@@ -238,18 +240,18 @@
     <insert id="insertReportVariable" useGeneratedKeys="true" keyProperty="id">
         insert into report_variable_value (
             project_id, report_id, task_id, template_id, template_file_id,
-            knowledge_base_id, variable_name, variable_description, variable_value,
+            knowledge_base_id, knowledge_base_ids, data_source_ids, variable_name, variable_description, variable_value,
             sort_no, status, references_json, created_by, updated_by
         ) values (
             #{projectId}, #{reportId}, #{taskId}, #{templateId}, #{templateFileId},
-            #{knowledgeBaseId}, #{variableName}, #{variableDescription}, #{variableValue},
+            #{knowledgeBaseId}, #{knowledgeBaseIds}, #{dataSourceIds}, #{variableName}, #{variableDescription}, #{variableValue},
             #{sortNo}, #{status}, #{referencesJson}, #{createdBy}, #{updatedBy}
         )
     </insert>
 
     <select id="selectReportVariables" resultMap="ReportVariableResultMap">
         select id, project_id, report_id, task_id, template_id, template_file_id,
-               knowledge_base_id, variable_name, variable_description, variable_value,
+               knowledge_base_id, knowledge_base_ids, data_source_ids, variable_name, variable_description, variable_value,
                sort_no, status, provider_trace_id, references_json, error_message,
                started_at, finished_at, created_at, updated_at, created_by, updated_by
         from report_variable_value

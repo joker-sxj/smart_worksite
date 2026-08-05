@@ -1,6 +1,6 @@
 # 报告模块接口文档
 
-本文档描述 `report` 模块当前已实现的知识库报告生成接口。Java 创建报告、变量快照和异步任务；Worker 按模板顺序逐个复用 QA/RAG 能力生成变量，保存后使用 Java DOCX 模板引擎渲染报告。
+本文档描述 `report` 模块当前已实现的知识库和数据库报告生成接口。Java 创建报告、变量快照和异步任务；Worker 按模板顺序逐个通过 AI 路由选择 RAG、只读数据库查询或混合能力生成变量，保存后使用 Java DOCX 模板引擎渲染报告。
 
 所有接口都需要：
 
@@ -50,7 +50,9 @@ Content-Type: application/json
 | reportName | String | 是 | 报告名称 |
 | reportType | String | 是 | 报告类型 |
 | templateId | Long | 是 | DOCX 报告模板 ID |
-| knowledgeBaseId | Long | 是 | 当前项目内一个已启用知识库 ID |
+| knowledgeBaseIds | Array<Long> | 条件必填 | 当前项目内已启用 `PROJECT` 知识库 ID，可多选 |
+| dataSourceIds | Array<Long> | 条件必填 | 当前项目内已启用数据源 ID，可多选 |
+| knowledgeBaseId | Long | 否 | 旧版单知识库兼容字段，仅当 `knowledgeBaseIds` 为空时生效 |
 
 示例：
 
@@ -58,7 +60,7 @@ Content-Type: application/json
 curl --noproxy '*' -X POST "http://127.0.0.1:8080/api/reports" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"projectId":1,"reportName":"周安全报告","reportType":"WEEKLY","templateId":1,"knowledgeBaseId":10}'
+  -d '{"projectId":1,"reportName":"周安全报告","reportType":"WEEKLY","templateId":1,"knowledgeBaseIds":[10,11],"dataSourceIds":[20]}'
 ```
 
 响应重点字段：`reportId`、`taskId`、`status`。创建接口返回 `PENDING`，实际生成由 Worker 异步执行。
@@ -67,6 +69,9 @@ curl --noproxy '*' -X POST "http://127.0.0.1:8080/api/reports" \
 
 - `reportName` 必须显式传入。
 - `templateId` 必须是当前项目启用的 DOCX 报告模板。
+- `knowledgeBaseIds` 与 `dataSourceIds` 至少一项非空；知识库只允许当前项目已启用的 `PROJECT` 库，数据源必须属于当前项目且已启用。
+- 模板变量可配置 `dataSourceIds` 白名单；留空时 AI 可在报告所选数据源中自动选择，非空时只使用两者交集。
+- 同时存在知识库与数据源时，AI 按变量路由到知识检索、数据库查询或混合生成；数据库 SQL 始终经过 Java 只读安全校验。
 - 模板只支持 `{{ var_xx_xx }}` 占位符；同名变量重复出现时只生成一次。
 - 模板必须包含至少一个变量，且全部变量都已配置非空描述；错误会列出缺少描述的变量名。
 - 知识库必须存在、属于当前项目并处于 `ENABLED`。
@@ -97,7 +102,7 @@ GET /api/reports/{reportId}/variables
 POST /api/reports/{reportId}/regenerate
 ```
 
-说明：基于原报告的唯一知识库配置创建新的报告和任务。失败任务通过任务重试接口重试时，保留已成功变量，仅重新生成失败或未处理变量。
+说明：基于原报告的知识库和数据源配置创建新的报告和任务。失败任务通过任务重试接口重试时，保留已成功变量，仅重新生成失败或未处理变量。
 
 ## 4. 下载报告
 
@@ -113,4 +118,4 @@ GET /api/reports/{reportId}/download?format=WORD
 - 报告、任务、文件和版本状态流转必须检查影响行数或生成 ID。
 - Worker 执行前必须重新校验项目可写。
 - 每个变量状态写入都必须检查影响行数；单变量失败时整份报告失败，但已成功变量保留用于任务重试。
-- Python AI 服务不可用、知识库不可用、变量缺失、模板不合法时，必须记录变量、任务和报告失败原因，不能返回假成功。
+- Python AI 服务不可用、知识库或数据源不可用、变量缺失、模板不合法时，必须记录变量、任务和报告失败原因，不能返回假成功。

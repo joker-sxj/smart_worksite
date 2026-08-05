@@ -96,7 +96,7 @@ Python 智能算法服务
 - 模板上传、列表、详情、修改、启用、停用、删除和项目级访问校验。
 - 报告模板上传前自动扫描并持久化 `{{ var_xx_xx }}` 变量、模板文件流预览、变量顺序查询，以及按模板文件新增或修改全部变量描述；审查模板上传不执行变量自动解析。
 - 报告模板和审查模板兼容接口。
-- 报告创建、列表、详情、逐变量状态查询、重新生成、下载 URL、版本记录、单知识库逐变量 QA/RAG 生成和异步 Java DOCX 模板渲染链路。
+- 报告创建、列表、详情、逐变量状态查询、重新生成、下载 URL、版本记录、多知识库/多数据库逐变量 AI 路由生成和异步 Java DOCX 模板渲染链路。
 - Java AI 适配层：模型调用、Agent 调用、RAG 检索/索引、数据库问答、路由、上下文准备、外部调用日志和项目级访问校验。
 - 知识库基础管理、文档上传、索引任务创建、任务 outbox 投递、Worker 异步调用 Python RAG 索引和失败状态记录。知识库按 `PROJECT` 项目资料库和 `POLICY` 系统政策库隔离。
 - 政策资讯源配置、真实爬取任务、文章入库与重建索引；每个项目自动维护一个系统政策库，不再依赖默认项目知识库。
@@ -489,7 +489,7 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 | GET | `/api/templates/{templateId}/preview` | 通过 Java 后端获取模板预览文件流，不暴露 MinIO 地址 |
 | GET | `/api/templates/{templateId}/variables` | 扫描 DOC、DOCX、XLS、XLSX、CSV、TXT、MD 中的 `{{ var_xx_xx }}` 变量并按首次出现顺序去重 |
 | GET | `/api/templates/{templateId}/variables/descriptions` | 按模板变量顺序查询变量名和已有描述，未配置描述返回空字符串 |
-| PUT | `/api/templates/{templateId}/variables/descriptions` | 对当前模板文件的全部变量描述执行新增或修改 |
+| PUT | `/api/templates/{templateId}/variables/descriptions` | 对当前模板文件的全部变量描述和可选数据源白名单执行新增或修改 |
 | POST | `/api/templates/report` | 上传报告模板 |
 | POST | `/api/templates/review` | 上传审查模板 |
 | POST | `/api/report/templates` | 上传报告模板兼容接口 |
@@ -511,14 +511,14 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/reports` | 使用一个已启用的 `PROJECT` 知识库创建报告生成任务，`reportName`、`reportType`、`templateId`、`knowledgeBaseId` 必填，返回 `PENDING` 和 `taskId` |
+| POST | `/api/reports` | 使用多个已启用 `PROJECT` 知识库和/或多个已启用数据源创建报告任务；两类来源至少选择一项，返回 `PENDING` 和 `taskId` |
 | GET | `/api/reports` | 分页查询报告列表 |
 | GET | `/api/reports/{reportId}` | 查询报告详情 |
 | GET | `/api/reports/{reportId}/variables` | 按模板顺序查询变量描述、生成值、状态和错误 |
 | POST | `/api/reports/{reportId}/regenerate` | 重新生成报告 |
 | GET | `/api/reports/{reportId}/download?format=WORD` | 获取 Word 报告下载 URL |
 
-报告生成规则：创建时只允许选择一个当前项目已启用的 `PROJECT` 知识库，`POLICY` 系统政策库会在调用 RAG 前被后端拒绝；模板必须包含 `{{ var_xx_xx }}` 变量且每个变量都已配置非空描述。Worker 按模板顺序逐项复用 QA/RAG 能力，各变量不共享上下文且不写入普通问答会话历史。变量值和状态实时保存到 `report_variable_value`；单变量失败会使报告失败，任务重试时保留成功值并只补失败或未处理变量。知识库检索为空时允许模型生成通用内容，但不得伪造具体项目数据。报告列表 `status` 查询只允许 `DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`FAILED`、`ARCHIVED`、`DELETED`。
+报告生成规则：创建时可多选当前项目已启用的 `PROJECT` 知识库和已启用数据库数据源，两类来源至少选择一项；旧字段 `knowledgeBaseId` 仍兼容。`POLICY` 系统政策库会被拒绝。模板必须包含 `{{ var_xx_xx }}` 变量且每个变量都已配置非空描述；变量可配置 `dataSourceIds` 白名单，留空表示允许 AI 在报告所选数据源中自动选择。Worker 按变量调用 AI 路由决定知识检索、只读数据库查询或混合生成，并仅执行路由要求且属于变量快照的数据源；路由不可用时安全回退为混合。数据库 SQL 由 Java 安全校验并以只读方式执行。各变量不共享上下文且不写入普通问答会话历史。变量值和状态实时保存到 `report_variable_value`；单变量失败会使报告失败，任务重试时保留成功值并只补失败或未处理变量。资料为空时允许模型生成通用内容，但不得伪造具体项目数据。报告列表 `status` 查询只允许 `DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`FAILED`、`ARCHIVED`、`DELETED`。
 
 Report write rule: report generation must check affected rows for report-task linking, task status, processing, success, failed, and version file binding. A zero-row update is a conflict and must not be reported as completed generation.
 
@@ -686,7 +686,7 @@ Review read APIs require `review:view`; submit/retry/delete/archive/update-issue
 
 ### 报告生成
 
-报告创建接口不直接阻塞生成文件。开启任务 outbox 调度和 Worker 后，Worker 会领取 `REPORT_GENERATION` 任务，确认项目和唯一的 `PROJECT` 知识库仍可用，按 `sort_no` 逐个使用变量描述进行 RAG 检索和模型生成，全部成功后在 Java 中渲染 Word 文件。
+报告创建接口不直接阻塞生成文件。开启任务 outbox 调度和 Worker 后，Worker 会领取 `REPORT_GENERATION` 任务，确认项目、所选 `PROJECT` 知识库和数据源仍可用，按 `sort_no` 逐个根据变量描述执行 AI 路由、RAG 检索和/或只读数据库查询，全部成功后在 Java 中渲染 Word 文件。
 
 模板占位符只支持 `{{ var_xx_xx }}`。同名变量只生成一次，正文、表格、页眉和页脚中的同名占位符使用同一个值。
 

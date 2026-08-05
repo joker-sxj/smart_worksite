@@ -15,6 +15,8 @@ import java.util.List;
 public interface QaAiGateway {
     RouteResponse route(RouteRequest request);
 
+    default RouteResponse routeForSystem(RouteRequest request) { return route(request); }
+
     ModelInvokeResponse invokeModel(ModelInvokeRequest request);
 
     ModelInvokeResponse invokeModelForSystem(ModelInvokeRequest request);
@@ -24,6 +26,8 @@ public interface QaAiGateway {
     RagSearchResponse searchKnowledgeForSystem(RagSearchRequest request);
 
     DatabaseQueryResponse queryDatabase(DatabaseQueryRequest request);
+
+    default DatabaseQueryResponse queryDatabaseForSystem(DatabaseQueryRequest request) { return queryDatabase(request); }
 
     static ModelInvokeRequest modelRequest(Long projectId, String question, List<AiMessage> contextMessages) {
         ModelInvokeRequest request = new ModelInvokeRequest();

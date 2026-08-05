@@ -10,6 +10,7 @@ public class TemplateVariableDescription {
     private Long fileId;
     private String variableName;
     private String description;
+    private String dataSourceIds;
     private Long createdBy;
     private Long updatedBy;
     private Boolean deleted;
@@ -63,6 +64,10 @@ public class TemplateVariableDescription {
     public void setDescription(String description) {
         this.description = description;
     }
+
+    public String getDataSourceIds() { return dataSourceIds; }
+
+    public void setDataSourceIds(String dataSourceIds) { this.dataSourceIds = dataSourceIds; }
 
     public Long getCreatedBy() {
         return createdBy;

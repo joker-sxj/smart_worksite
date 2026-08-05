@@ -10,6 +10,8 @@ public class ReportVariableValue {
     private Long templateId;
     private Long templateFileId;
     private Long knowledgeBaseId;
+    private String knowledgeBaseIds;
+    private String dataSourceIds;
     private String variableName;
     private String variableDescription;
     private String variableValue;
@@ -39,6 +41,10 @@ public class ReportVariableValue {
     public void setTemplateFileId(Long templateFileId) { this.templateFileId = templateFileId; }
     public Long getKnowledgeBaseId() { return knowledgeBaseId; }
     public void setKnowledgeBaseId(Long knowledgeBaseId) { this.knowledgeBaseId = knowledgeBaseId; }
+    public String getKnowledgeBaseIds() { return knowledgeBaseIds; }
+    public void setKnowledgeBaseIds(String knowledgeBaseIds) { this.knowledgeBaseIds = knowledgeBaseIds; }
+    public String getDataSourceIds() { return dataSourceIds; }
+    public void setDataSourceIds(String dataSourceIds) { this.dataSourceIds = dataSourceIds; }
     public String getVariableName() { return variableName; }
     public void setVariableName(String variableName) { this.variableName = variableName; }
     public String getVariableDescription() { return variableDescription; }

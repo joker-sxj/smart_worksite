@@ -80,7 +80,8 @@ public class TemplateVariableApplicationService {
             TemplateVariableDescription record = persisted.get(variableName);
             response.add(new TemplateVariableDescriptionResponse(
                     variableName,
-                    record == null || record.getDescription() == null ? "" : record.getDescription()
+                    record == null || record.getDescription() == null ? "" : record.getDescription(),
+                    record == null ? List.of() : parseIds(record.getDataSourceIds())
             ));
         }
         return response;
@@ -114,6 +115,7 @@ public class TemplateVariableApplicationService {
             record.setFileId(file.getFileId());
             record.setVariableName(variableName);
             record.setDescription(description);
+            record.setDataSourceIds(toJsonIds(findItem(request.getVariables(), variableName).getDataSourceIds()));
             record.setUpdatedBy(operatorId);
             if (insert) {
                 record.setCreatedBy(operatorId);
@@ -140,9 +142,28 @@ public class TemplateVariableApplicationService {
             if (record == null || !requestDescriptions.get(variableName).equals(record.getDescription())) {
                 throw new BusinessException(ErrorCode.CONFLICT, "模板变量描述写入后无法读回");
             }
-            response.add(new TemplateVariableDescriptionResponse(variableName, record.getDescription()));
+            response.add(new TemplateVariableDescriptionResponse(variableName, record.getDescription(), parseIds(record.getDataSourceIds())));
         }
         return response;
+    }
+
+
+    private TemplateVariableDescriptionItemRequest findItem(List<TemplateVariableDescriptionItemRequest> items, String variableName) {
+        return items.stream().filter(item -> variableName.equals(item.getVariableName().trim())).findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.PARAM_ERROR, "变量配置不存在: " + variableName));
+    }
+
+    private String toJsonIds(List<Long> ids) {
+        return (ids == null ? List.<Long>of() : ids).stream().filter(java.util.Objects::nonNull).distinct()
+                .map(String::valueOf).collect(java.util.stream.Collectors.joining(",", "[", "]"));
+    }
+
+    private List<Long> parseIds(String json) {
+        if (json == null || json.isBlank() || "[]".equals(json.trim())) return List.of();
+        String body = json.trim().replace("[", "").replace("]", "");
+        if (body.isBlank()) return List.of();
+        try { return java.util.Arrays.stream(body.split(",")).map(String::trim).map(Long::valueOf).toList(); }
+        catch (NumberFormatException ex) { throw new BusinessException(ErrorCode.SYSTEM_ERROR, "模板变量数据源配置损坏"); }
     }
 
     private Template requireTemplate(Long templateId, boolean writableManage) {

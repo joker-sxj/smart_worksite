@@ -8,10 +8,11 @@ import StatusTag from '../../components/common/StatusTag.vue';
 import EmptyState from '../../components/common/EmptyState.vue';
 import { createReport, downloadReport, fetchReportTemplates, fetchReports, type ReportTemplate } from '../../api/report';
 import { fetchKnowledgeBases } from '../../api/knowledge';
+import { fetchDataSources } from '../../api/datasource';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import { hasSuspiciousText } from '../../utils/textQuality';
-import type { ID, KnowledgeBase, ReportItem } from '../../api/types';
+import type { DataSourceItem, ID, KnowledgeBase, ReportItem } from '../../api/types';
 
 const router = useRouter();
 const projectStore = useProjectStore();
@@ -27,18 +28,20 @@ const pager = reactive({ pageNo: 1, pageSize: 20, total: 0 });
 const reports = ref<ReportItem[]>([]);
 const templates = ref<ReportTemplate[]>([]);
 const knowledgeBases = ref<KnowledgeBase[]>([]);
+const dataSources = ref<DataSourceItem[]>([]);
 const downloadingId = ref<ID>('');
-const form = reactive<{ reportName: string; reportType: string; templateId: ID | ''; knowledgeBaseId: ID | '' }>({
+const form = reactive<{ reportName: string; reportType: string; templateId: ID | ''; knowledgeBaseIds: ID[]; dataSourceIds: ID[] }>({
   reportName: '',
   reportType: 'SAFETY_MONTHLY',
   templateId: '',
-  knowledgeBaseId: ''
+  knowledgeBaseIds: [],
+  dataSourceIds: []
 });
 
 const currentProjectId = computed(() => projectStore.currentProject?.projectId);
 const canManageReport = computed(() => userStore.hasPermission('report:view'));
 const templateEmpty = computed(() => !templates.value.length && !templateWarning.value);
-const canCreate = computed(() => Boolean(canManageReport.value && currentProjectId.value && form.reportName.trim() && form.reportType && form.templateId && form.knowledgeBaseId));
+const canCreate = computed(() => Boolean(canManageReport.value && currentProjectId.value && form.reportName.trim() && form.reportType && form.templateId && (form.knowledgeBaseIds.length || form.dataSourceIds.length)));
 const downloadableStatuses = new Set(['COMPLETED']);
 const statusOptions = [
   { label: '已完成', value: 'COMPLETED' },
@@ -85,8 +88,10 @@ async function openCreateDialog() {
   knowledgeWarning.value = '';
   templates.value = [];
   knowledgeBases.value = [];
+  dataSources.value = [];
   form.templateId = '';
-  form.knowledgeBaseId = '';
+  form.knowledgeBaseIds = [];
+  form.dataSourceIds = [];
   try {
     if (!currentProjectId.value) throw new Error('请先选择项目');
     templates.value = await fetchReportTemplates(currentProjectId.value);
@@ -94,10 +99,11 @@ async function openCreateDialog() {
     const bases = await fetchKnowledgeBases(currentProjectId.value, { status: 'ENABLED', pageNo: 1, pageSize: 100 });
     knowledgeBases.value = bases.filter((item) => String(item.status).toUpperCase() === 'ENABLED'
       && String(item.knowledgeBaseType || 'PROJECT').toUpperCase() === 'PROJECT');
-    if (knowledgeBases.value[0]) form.knowledgeBaseId = knowledgeBases.value[0].knowledgeBaseId;
     if (!knowledgeBases.value.length) {
-      knowledgeWarning.value = '当前项目暂无已启用的知识库，请先创建、启用知识库并完成文档入库。';
+      knowledgeWarning.value = '当前项目暂无已启用的知识库，仍可仅选择数据库数据源生成报告。';
     }
+    const sourcePage = await fetchDataSources({ projectId: currentProjectId.value, status: 'ENABLED', pageNo: 1, pageSize: 100 });
+    dataSources.value = sourcePage.records.filter((item) => String(item.status).toUpperCase() === 'ENABLED');
   } catch (err) {
     templateWarning.value = err instanceof Error ? err.message : '报告创建依赖数据加载失败';
   }
@@ -115,7 +121,7 @@ async function submitCreate() {
   if (!form.reportName.trim()) return ElMessage.warning('请填写报告名称');
   if (!form.reportType) return ElMessage.warning('请选择报告类型');
   if (!form.templateId) return ElMessage.warning('请选择报告模板');
-  if (!form.knowledgeBaseId) return ElMessage.warning('请选择知识库');
+  if (!form.knowledgeBaseIds.length && !form.dataSourceIds.length) return ElMessage.warning('知识库和数据源至少选择一项');
   creating.value = true;
   error.value = '';
   try {
@@ -124,7 +130,8 @@ async function submitCreate() {
       reportName: form.reportName,
       reportType: form.reportType,
       templateId: form.templateId,
-      knowledgeBaseId: form.knowledgeBaseId
+      knowledgeBaseIds: form.knowledgeBaseIds,
+      dataSourceIds: form.dataSourceIds
     });
     if (result.status === 'FAILED') {
       ElMessage.warning('报告任务已创建，但生成失败，请进入详情查看失败原因');
@@ -133,7 +140,8 @@ async function submitCreate() {
     }
     dialogVisible.value = false;
     form.reportName = '';
-    form.knowledgeBaseId = '';
+    form.knowledgeBaseIds = [];
+    form.dataSourceIds = [];
     await loadData();
   } catch (err) {
     error.value = err instanceof Error ? err.message : '报告创建失败，请确认后端 /api/reports 是否可用';
@@ -245,11 +253,16 @@ onMounted(loadData);
             <el-option v-for="item in templates" :key="item.templateId" :label="item.templateName" :value="item.templateId" />
           </el-select>
         </el-form-item>
-        <el-form-item label="知识库" required>
-          <el-select v-model="form.knowledgeBaseId" style="width: 100%" placeholder="请选择知识库" clearable>
+        <el-form-item label="知识库">
+          <el-select v-model="form.knowledgeBaseIds" multiple collapse-tags style="width: 100%" placeholder="可多选项目知识库" clearable>
             <el-option v-for="item in knowledgeBases" :key="item.knowledgeBaseId" :label="item.name" :value="item.knowledgeBaseId" />
           </el-select>
-          <div class="form-tip">系统将按模板变量顺序，逐项结合该知识库生成报告内容。</div>
+        </el-form-item>
+        <el-form-item label="数据源">
+          <el-select v-model="form.dataSourceIds" multiple collapse-tags style="width: 100%" placeholder="可多选数据库数据源" clearable>
+            <el-option v-for="item in dataSources" :key="item.dataSourceId" :label="item.name" :value="item.dataSourceId" />
+          </el-select>
+          <div class="form-tip">知识库和数据源至少选择一项。系统按模板变量自动判断使用知识检索、数据库查询或混合生成。</div>
         </el-form-item>
       </el-form>
       <template #footer>

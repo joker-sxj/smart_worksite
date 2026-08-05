@@ -33,6 +33,7 @@ class TemplateVariableDescriptionMapperTest {
                       file_id BIGINT NOT NULL,
                       variable_name VARCHAR(128) NOT NULL,
                       description VARCHAR(2000) NOT NULL,
+                      data_source_ids VARCHAR(2000),
                       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                       created_by BIGINT,
@@ -59,12 +60,17 @@ class TemplateVariableDescriptionMapperTest {
         record.setFileId(20L);
         record.setVariableName("var_project_name");
         record.setDescription("项目名称");
+        record.setDataSourceIds("[20,21]");
         record.setCreatedBy(7L);
         record.setUpdatedBy(7L);
 
         assertThat(mapper.insert(record)).isEqualTo(1);
         assertThat(record.getId()).isNotNull();
-        assertThat(mapper.selectByKey(10L, 20L, "var_project_name").getDescription()).isEqualTo("项目名称");
+        assertThat(mapper.selectByKey(10L, 20L, "var_project_name"))
+                .satisfies(saved -> {
+                    assertThat(saved.getDescription()).isEqualTo("项目名称");
+                    assertThat(saved.getDataSourceIds()).isEqualTo("[20,21]");
+                });
 
         record.setDescription("项目正式名称");
         assertThat(mapper.updateAndReactivate(record)).isEqualTo(1);

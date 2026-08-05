@@ -121,6 +121,19 @@ class MigrationContractTest {
     }
 
     @Test
+    void reportMultiSourceMigrationAddsVariableSourceSnapshots() throws IOException {
+        String migration = Files.readString(
+                MIGRATION_DIR.resolve("V20__add_report_multi_sources.sql"),
+                StandardCharsets.UTF_8
+        );
+
+        assertThat(migration).contains("template_variable_description");
+        assertThat(migration).contains("data_source_ids JSON");
+        assertThat(migration).contains("report_variable_value");
+        assertThat(migration).contains("knowledge_base_ids JSON");
+    }
+
+    @Test
     void fileDownloadContractUsesAccessUrlEndpoint() throws IOException {
         String readme = Files.readString(README, StandardCharsets.UTF_8);
         String frontendFileApi = Files.readString(FRONTEND_FILE_API, StandardCharsets.UTF_8);

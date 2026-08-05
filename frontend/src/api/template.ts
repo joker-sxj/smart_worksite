@@ -42,6 +42,7 @@ export interface TemplatePreviewFile {
 export interface TemplateVariableDescription {
   variableName: string;
   description: string;
+  dataSourceIds: ID[];
 }
 
 function cleanParams(params: TemplateQuery) {

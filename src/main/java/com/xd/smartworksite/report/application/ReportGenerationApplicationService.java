@@ -11,6 +11,8 @@ import com.xd.smartworksite.common.result.PageResult;
 import com.xd.smartworksite.common.security.SecurityUtils;
 import com.xd.smartworksite.file.infra.StorageAdapter;
 import com.xd.smartworksite.file.infra.StorageObject;
+import com.xd.smartworksite.datasource.domain.DataSource;
+import com.xd.smartworksite.datasource.repository.DataSourceRepository;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
 import com.xd.smartworksite.qa.application.ReportQaApplicationService;
 import com.xd.smartworksite.qa.dto.ReportVariableQaRequest;
@@ -82,6 +84,7 @@ public class ReportGenerationApplicationService {
     private final ReportRepository reportRepository;
     private final ProjectAccessApplicationService projectAccessApplicationService;
     private final TemplateRepository templateRepository;
+    private final DataSourceRepository dataSourceRepository;
     private final TemplateVariableApplicationService templateVariableApplicationService;
     private final ReportQaApplicationService reportQaApplicationService;
     private final TaskOutboxApplicationService taskOutboxApplicationService;
@@ -91,6 +94,7 @@ public class ReportGenerationApplicationService {
     public ReportGenerationApplicationService(ReportRepository reportRepository,
                                               ProjectAccessApplicationService projectAccessApplicationService,
                                               TemplateRepository templateRepository,
+                                              DataSourceRepository dataSourceRepository,
                                               TemplateVariableApplicationService templateVariableApplicationService,
                                               ReportQaApplicationService reportQaApplicationService,
                                               TaskOutboxApplicationService taskOutboxApplicationService,
@@ -99,6 +103,7 @@ public class ReportGenerationApplicationService {
         this.reportRepository = reportRepository;
         this.projectAccessApplicationService = projectAccessApplicationService;
         this.templateRepository = templateRepository;
+        this.dataSourceRepository = dataSourceRepository;
         this.templateVariableApplicationService = templateVariableApplicationService;
         this.reportQaApplicationService = reportQaApplicationService;
         this.taskOutboxApplicationService = taskOutboxApplicationService;
@@ -115,7 +120,9 @@ public class ReportGenerationApplicationService {
         FileObjectRecord templateFile = templateRepository.findFileObjectById(template.getFileId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告模板文件不存在"));
         validateTemplateFile(request.getProjectId(), template, templateFile);
-        reportQaApplicationService.validateKnowledgeBaseForReport(request.getProjectId(), request.getKnowledgeBaseId());
+        List<Long> knowledgeBaseIds = request.getKnowledgeBaseIds();
+        List<Long> dataSourceIds = request.getDataSourceIds();
+        validateReportSources(request.getProjectId(), knowledgeBaseIds, dataSourceIds);
         List<TemplateVariableDescriptionResponse> templateVariables =
                 templateVariableApplicationService.listDescriptions(templateId);
         validateTemplateVariables(templateVariables);
@@ -128,7 +135,7 @@ public class ReportGenerationApplicationService {
         requireUpdated(reportRepository.updateReportTask(report.getId(), task.getId()), "report task link update failed");
         requireUpdated(reportRepository.updateTaskBizId(task.getId(), report.getId()), "task biz id update failed");
         requireUpdated(reportRepository.updateTaskStatus(task.getId(), TASK_STATUS_QUEUED, TASK_STAGE_CONFIG_VALIDATE, null), "task queued status update failed");
-        saveReportVariables(report, task, templateFile, request.getKnowledgeBaseId(), templateVariables);
+        saveReportVariables(report, task, templateFile, knowledgeBaseIds, dataSourceIds, templateVariables);
         task.setStatus("QUEUED");
         taskOutboxApplicationService.enqueueTask(toSharedTask(task), "report created");
 
@@ -175,11 +182,8 @@ public class ReportGenerationApplicationService {
         request.setReportName(report.getReportName());
         request.setReportType(report.getReportType());
         request.setTemplateId(report.getTemplateId());
-        List<Long> knowledgeBaseIds = parseLongList(config.getKnowledgeBaseIds());
-        if (knowledgeBaseIds.size() != 1) {
-            throw new BusinessException(ErrorCode.CONFLICT, "原报告未配置唯一知识库，无法重新生成");
-        }
-        request.setKnowledgeBaseId(knowledgeBaseIds.get(0));
+        request.setKnowledgeBaseIds(parseLongList(config.getKnowledgeBaseIds()));
+        request.setDataSourceIds(parseLongList(config.getDataSourceIds()));
         return createReport(request);
     }
 
@@ -238,8 +242,8 @@ public class ReportGenerationApplicationService {
         config.setReportType(reportType);
         config.setTemplateId(templateId);
         config.setReferenceFileIds(toJsonArray(List.of()));
-        config.setKnowledgeBaseIds(toJsonArray(List.of(request.getKnowledgeBaseId())));
-        config.setDataSourceIds(toJsonArray(List.of()));
+        config.setKnowledgeBaseIds(toJsonArray(request.getKnowledgeBaseIds()));
+        config.setDataSourceIds(toJsonArray(request.getDataSourceIds()));
         config.setGenerationParams(toJsonObject(Map.of()));
         config.setStatus("SUBMITTED");
         return reportRepository.saveConfig(config);
@@ -324,7 +328,8 @@ public class ReportGenerationApplicationService {
             try {
                 ReportVariableQaRequest request = new ReportVariableQaRequest();
                 request.setProjectId(report.getProjectId());
-                request.setKnowledgeBaseId(variable.getKnowledgeBaseId());
+                request.setKnowledgeBaseIds(parseLongList(variable.getKnowledgeBaseIds()));
+                request.setDataSourceIds(parseLongList(variable.getDataSourceIds()));
                 request.setReportName(report.getReportName());
                 request.setReportType(report.getReportType());
                 request.setVariableName(variable.getVariableName());
@@ -518,6 +523,7 @@ public class ReportGenerationApplicationService {
         sourceSnapshot.put("templateId", config.getTemplateId());
         sourceSnapshot.put("templateEngine", ReportEngineType.JAVA_TEMPLATE_AI.name());
         sourceSnapshot.put("knowledgeBaseIds", parseLongList(config.getKnowledgeBaseIds()));
+        sourceSnapshot.put("dataSourceIds", parseLongList(config.getDataSourceIds()));
         sourceSnapshot.put("engineType", ReportEngineType.JAVA_TEMPLATE_AI.name());
         version.setSourceSnapshot(toJson(sourceSnapshot));
         version.setEngineResponse(toJson(Map.of(
@@ -575,8 +581,26 @@ public class ReportGenerationApplicationService {
         }
     }
 
+
+    private void validateReportSources(Long projectId, List<Long> knowledgeBaseIds, List<Long> dataSourceIds) {
+        if (knowledgeBaseIds.isEmpty() && dataSourceIds.isEmpty()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "知识库和数据源至少选择一项");
+        }
+        reportQaApplicationService.validateKnowledgeBasesForReport(projectId, knowledgeBaseIds);
+        for (Long dataSourceId : dataSourceIds) {
+            DataSource dataSource = dataSourceRepository.findById(dataSourceId)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "数据源不存在"));
+            if (!projectId.equals(dataSource.getProjectId())) {
+                throw new BusinessException(ErrorCode.FORBIDDEN, "数据源不属于当前项目");
+            }
+            if (!"ENABLED".equals(dataSource.getStatus())) {
+                throw new BusinessException(ErrorCode.CONFLICT, "数据源未启用");
+            }
+        }
+    }
+
     private void saveReportVariables(Report report, GenerateTask task, FileObjectRecord templateFile,
-                                     Long knowledgeBaseId,
+                                     List<Long> knowledgeBaseIds, List<Long> dataSourceIds,
                                      List<TemplateVariableDescriptionResponse> templateVariables) {
         Long operatorId = SecurityUtils.getCurrentUserId();
         for (int index = 0; index < templateVariables.size(); index++) {
@@ -587,7 +611,12 @@ public class ReportGenerationApplicationService {
             variable.setTaskId(task.getId());
             variable.setTemplateId(report.getTemplateId());
             variable.setTemplateFileId(templateFile.getId());
-            variable.setKnowledgeBaseId(knowledgeBaseId);
+            variable.setKnowledgeBaseId(knowledgeBaseIds.isEmpty() ? 0L : knowledgeBaseIds.get(0));
+            variable.setKnowledgeBaseIds(toJsonArray(knowledgeBaseIds));
+            List<Long> variableDataSourceIds = source.getDataSourceIds() == null || source.getDataSourceIds().isEmpty()
+                    ? dataSourceIds
+                    : dataSourceIds.stream().filter(source.getDataSourceIds()::contains).toList();
+            variable.setDataSourceIds(toJsonArray(variableDataSourceIds));
             variable.setVariableName(source.getVariableName());
             variable.setVariableDescription(source.getDescription().trim());
             variable.setSortNo(index + 1);

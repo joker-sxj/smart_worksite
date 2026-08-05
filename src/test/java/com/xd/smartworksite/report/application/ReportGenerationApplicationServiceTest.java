@@ -3,7 +3,9 @@ package com.xd.smartworksite.report.application;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.security.UserPrincipal;
+import com.xd.smartworksite.datasource.domain.DataSource;
 import com.xd.smartworksite.file.infra.StorageAdapter;
+import com.xd.smartworksite.datasource.repository.DataSourceRepository;
 import com.xd.smartworksite.file.infra.StorageObject;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
 import com.xd.smartworksite.qa.application.ReportQaApplicationService;
@@ -83,9 +85,15 @@ class ReportGenerationApplicationServiceTest {
                 .extracting(ReportVariableValue::getKnowledgeBaseId)
                 .containsOnly(10L);
         assertThat(context.repository.variables)
+                .extracting(ReportVariableValue::getKnowledgeBaseIds)
+                .containsOnly("[10]");
+        assertThat(context.repository.variables)
+                .extracting(ReportVariableValue::getDataSourceIds)
+                .containsOnly("[]");
+        assertThat(context.repository.variables)
                 .extracting(ReportVariableValue::getStatus)
                 .containsOnly("PENDING");
-        verify(context.qa, times(1)).validateKnowledgeBaseForReport(1L, 10L);
+        verify(context.qa, times(1)).validateKnowledgeBasesForReport(1L, List.of(10L));
         verify(context.qa, times(0)).generateVariableForSystem(any());
         verify(context.outbox, times(1)).enqueueTask(any(), any());
     }
@@ -126,6 +134,12 @@ class ReportGenerationApplicationServiceTest {
         assertThat(captor.getAllValues())
                 .extracting(ReportVariableQaRequest::getVariableDescription)
                 .containsExactly("总结项目进展", "分析主要风险");
+        assertThat(captor.getAllValues())
+                .extracting(ReportVariableQaRequest::getKnowledgeBaseIds)
+                .containsOnly(List.of(10L));
+        assertThat(captor.getAllValues())
+                .extracting(ReportVariableQaRequest::getDataSourceIds)
+                .containsOnly(List.of());
     }
 
     @Test
@@ -157,10 +171,64 @@ class ReportGenerationApplicationServiceTest {
     @Test
     void createReportRejectsKnowledgeBaseValidationFailure() {
         doThrow(new BusinessException(com.xd.smartworksite.common.result.ErrorCode.CONFLICT, "知识库未启用"))
-                .when(context.qa).validateKnowledgeBaseForReport(1L, 10L);
+                .when(context.qa).validateKnowledgeBasesForReport(1L, List.of(10L));
 
         assertThatThrownBy(() -> context.service.createReport(request()))
                 .hasMessageContaining("知识库未启用");
+        assertThat(context.repository.reports).isEmpty();
+    }
+
+    @Test
+    void createDatabaseOnlyReportSnapshotsVariableWhitelistIntersection() {
+        DataSource first = dataSource(20L, 1L, "ENABLED");
+        DataSource second = dataSource(21L, 1L, "ENABLED");
+        when(context.dataSources.findById(20L)).thenReturn(Optional.of(first));
+        when(context.dataSources.findById(21L)).thenReturn(Optional.of(second));
+        when(context.templateVariables.listDescriptions(1001L)).thenReturn(List.of(
+                new TemplateVariableDescriptionResponse("var_summary", "总结项目进展", List.of(21L)),
+                new TemplateVariableDescriptionResponse("var_risk", "分析主要风险", List.of())
+        ));
+        ReportCreateRequest request = request();
+        request.setKnowledgeBaseId(null);
+        request.setDataSourceIds(List.of(20L, 21L, 20L));
+
+        ReportCreateResponse created = context.service.createReport(request);
+
+        assertThat(context.repository.configs.get(0).getKnowledgeBaseIds()).isEqualTo("[]");
+        assertThat(context.repository.configs.get(0).getDataSourceIds()).isEqualTo("[20,21]");
+        assertThat(context.repository.variables)
+                .extracting(ReportVariableValue::getKnowledgeBaseId)
+                .containsOnly(0L);
+        assertThat(context.repository.variables)
+                .extracting(ReportVariableValue::getDataSourceIds)
+                .containsExactly("[21]", "[20,21]");
+
+        context.service.executeReportTask(created.getReportId(), created.getTaskId());
+        assertThat(context.repository.versions.get(0).getSourceSnapshot())
+                .contains("\"knowledgeBaseIds\":[]", "\"dataSourceIds\":[20,21]");
+    }
+
+    @Test
+    void createReportRejectsWhenNoSourceIsSelected() {
+        ReportCreateRequest request = request();
+        request.setKnowledgeBaseId(null);
+
+        assertThatThrownBy(() -> context.service.createReport(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("至少选择一项");
+        assertThat(context.repository.reports).isEmpty();
+    }
+
+    @Test
+    void createReportRejectsDisabledDataSource() {
+        when(context.dataSources.findById(20L)).thenReturn(Optional.of(dataSource(20L, 1L, "DISABLED")));
+        ReportCreateRequest request = request();
+        request.setKnowledgeBaseId(null);
+        request.setDataSourceIds(List.of(20L));
+
+        assertThatThrownBy(() -> context.service.createReport(request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("数据源未启用");
         assertThat(context.repository.reports).isEmpty();
     }
 
@@ -183,6 +251,14 @@ class ReportGenerationApplicationServiceTest {
         request.setTemplateId(1001L);
         request.setKnowledgeBaseId(10L);
         return request;
+    }
+
+    private DataSource dataSource(Long id, Long projectId, String status) {
+        DataSource dataSource = new DataSource();
+        dataSource.setId(id);
+        dataSource.setProjectId(projectId);
+        dataSource.setStatus(status);
+        return dataSource;
     }
 
     private byte[] docx(String... paragraphs) {
@@ -213,6 +289,7 @@ class ReportGenerationApplicationServiceTest {
         private final TemplateRepository templates = mock(TemplateRepository.class);
         private final TemplateVariableApplicationService templateVariables = mock(TemplateVariableApplicationService.class);
         private final ReportQaApplicationService qa = mock(ReportQaApplicationService.class);
+        private final DataSourceRepository dataSources = mock(DataSourceRepository.class);
         private final TaskOutboxApplicationService outbox = mock(TaskOutboxApplicationService.class);
         private final StorageAdapter storage = mock(StorageAdapter.class);
         private final Map<String, String> answers = new LinkedHashMap<>();
@@ -260,7 +337,7 @@ class ReportGenerationApplicationServiceTest {
                 return response;
             });
             service = new ReportGenerationApplicationService(
-                    repository, access, templates, templateVariables, qa, outbox, storage, new ObjectMapper());
+                    repository, access, templates, dataSources, templateVariables, qa, outbox, storage, new ObjectMapper());
         }
     }
 

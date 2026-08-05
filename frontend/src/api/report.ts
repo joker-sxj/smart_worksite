@@ -11,7 +11,8 @@ interface ReportCreateRequest {
   reportName: string;
   reportType: string;
   templateId: ID;
-  knowledgeBaseId: ID;
+  knowledgeBaseIds: ID[];
+  dataSourceIds: ID[];
 }
 
 export type ReportTemplate = TemplateItem;

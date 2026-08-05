@@ -10,6 +10,7 @@
         <result property="fileId" column="file_id"/>
         <result property="variableName" column="variable_name"/>
         <result property="description" column="description"/>
+        <result property="dataSourceIds" column="data_source_ids"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
         <result property="createdBy" column="created_by"/>
@@ -18,7 +19,7 @@
     </resultMap>
 
     <sql id="DescriptionColumns">
-        id, project_id, template_id, file_id, variable_name, description,
+        id, project_id, template_id, file_id, variable_name, description, data_source_ids,
         created_at, updated_at, created_by, updated_by, deleted
     </sql>
 
@@ -42,10 +43,10 @@
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         insert into template_variable_description (
-            project_id, template_id, file_id, variable_name, description,
+            project_id, template_id, file_id, variable_name, description, data_source_ids,
             created_by, updated_by, deleted
         ) values (
-            #{projectId}, #{templateId}, #{fileId}, #{variableName}, #{description},
+            #{projectId}, #{templateId}, #{fileId}, #{variableName}, #{description}, #{dataSourceIds},
             #{createdBy}, #{updatedBy}, 0
         )
     </insert>
@@ -54,6 +55,7 @@
         update template_variable_description
         set project_id = #{projectId},
             description = #{description},
+            data_source_ids = #{dataSourceIds},
             updated_by = #{updatedBy},
             deleted = 0,
             updated_at = current_timestamp
