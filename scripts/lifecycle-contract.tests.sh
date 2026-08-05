@@ -28,6 +28,9 @@ done
 
 if [[ -f "$repo_root/scripts/lib/lifecycle.sh" ]]; then
   grep -Fq 'tcp_check "$port" "$host"' "$repo_root/scripts/lib/lifecycle.sh" || fail 'assert_service_port_available must pass its host name to tcp_check.'
+  if ! bash -c 'set -euo pipefail; source "$1"; [[ "$(configured_port MYSQL_PORT 3306)" == "3306" ]]; MYSQL_PORT=13306; [[ "$(configured_port MYSQL_PORT 3306)" == "13306" ]]; [[ "$(configured_port bad-name 1234)" == "1234" ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
+    fail 'configured_port must safely read unset, set, and invalid variable names under set -u.'
+  fi
 fi
 
 if [[ -f "$repo_root/scripts/start-all.sh" ]] && ! grep -q -- '--check' "$repo_root/scripts/start-all.sh"; then

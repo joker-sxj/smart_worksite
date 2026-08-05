@@ -164,6 +164,9 @@ stop_managed() {
 }
 
 configured_port() {
-  local name="$1" default_value="$2" value="${!name:-}"
+  local name="$1" default_value="$2" value=""
+  if [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    value="${!name:-}"
+  fi
   [[ "$value" =~ ^[0-9]+$ ]] && printf '%s\n' "$value" || printf '%s\n' "$default_value"
 }
