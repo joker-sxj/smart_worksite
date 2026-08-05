@@ -63,7 +63,7 @@ Python 智能算法服务属于整体架构的一部分，位于 `python-ai-serv
 | Redis | 7.2-alpine | 缓存、轻量队列、分布式锁、JWT 黑名单、登录失败锁定 |
 | MinIO | RELEASE.2025-04-22T22-12-26Z | 文档、图片、模板、报告文件存储 |
 | Docker Compose | 本地环境编排 | 启动 MySQL、Redis、MinIO |
-| pgvector / Milvus | 可选规划 | 知识库向量检索，由 Python 服务访问 |
+| LOCAL / pgvector / Milvus | 三种 RAG Provider 均已实现；外部向量库需单独部署 | 知识库向量检索，由 Python 服务访问 |
 
 ## 系统边界
 
@@ -468,6 +468,7 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 | POST | `/api/files/{fileId}/parse` | 创建文件解析任务 |
 | GET | `/api/files/{fileId}/parse-records` | 查询文件解析记录 |
 | GET | `/api/files/{fileId}/parse-records/latest` | 查询最新解析记录 |
+| GET | `/api/files/{fileId}/parse-records/latest-successful` | 查询最新成功的解析记录 |
 | GET | `/api/file-parse-records/{recordId}` | 查询解析记录详情 |
 | GET | `/api/file-parse-records/{recordId}/content` | 查询解析结果内容 |
 | POST | `/api/file-parse-records/{recordId}/retry` | 重试解析 |
@@ -496,6 +497,11 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 | GET | `/api/report/templates/{templateId}/variables` | 报告模板变量兼容接口，委托统一 `{{ var_xx_xx }}` 解析能力 |
 | POST | `/api/review/templates` | 上传审查模板兼容接口 |
 | GET | `/api/review/templates` | 查询审查模板列表 |
+| GET | `/api/review/templates/{templateId}` | 查询审查模板详情 |
+| PUT | `/api/review/templates/{templateId}` | 修改审查模板元数据 |
+| DELETE | `/api/review/templates/{templateId}` | 删除审查模板 |
+| POST | `/api/review/templates/{templateId}/enable` | 启用审查模板 |
+| POST | `/api/review/templates/{templateId}/disable` | 停用审查模板 |
 
 模板变量解析规则：变量接口必须读取模板文件真实内容，只识别 `{{ var_xx_xx }}` 占位符，当前支持 DOC、DOCX、XLS、XLSX、CSV、TXT、MD，不支持 PDF；合法模板没有变量时返回空列表，模板文件缺失、跨项目不一致、格式损坏、格式不支持或对象存储读取失败时直接返回错误，不允许用空列表隐藏解析失败。
 
@@ -571,6 +577,8 @@ Knowledge write rule: knowledge-base updates must check affected rows; document 
 
 ### 政策资讯
 
+政策源、爬取任务和政策文章查询需要 `knowledge:view`；创建、修改、删除政策源以及创建爬取任务需要 `policy:manage`。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/policy/sources` | 分页查询当前项目的政策源 |
@@ -600,6 +608,21 @@ Knowledge write rule: knowledge-base updates must check affected rows; document 
 数据源密码使用 AES-GCM 存储，`AI_DATA_SOURCE_PASSWORD_KEY` 可覆盖本地开发默认 Key；生产环境必须显式配置独立 Key，长度为 16、24 或 32 字节，或使用 `base64:` 前缀。
 数据源写入规则：创建后必须读回持久化记录；修改、启用、停用和删除必须检查数据库影响行数，记录不存在或已变更时直接返回错误，不允许静默成功。
 
+### AI 适配接口
+
+以下接口通过 Java AI 适配层统一调用 Python 智能算法服务。除全局登录鉴权外，项目相关请求仍会执行项目访问和项目状态校验。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/ai/model/invoke` | 调用大模型 |
+| POST | `/api/ai/agent/invoke` | 调用 Agent 智能体 |
+| POST | `/api/ai/knowledge/search` | 执行 RAG 知识检索 |
+| POST | `/api/ai/knowledge/index` | 执行 RAG 文档索引 |
+| POST | `/api/ai/database/query` | 执行数据库问答 |
+| POST | `/api/ai/route` | 获取问答路由决策 |
+| POST | `/api/ai/context/prepare` | 准备模型调用上下文 |
+| GET | `/api/ai/external-call-logs` | 分页查询 AI 外部调用日志 |
+
 ### QA
 
 QA read APIs require `qa:view`; create/update/archive/send/regenerate/feedback APIs require `qa:manage`.
@@ -621,6 +644,21 @@ QA 消息写入规则：问题消息创建后必须持有可读 ID；AI 返回�
 | GET | `/api/qa/messages/{messageId}` | Get QA message detail |
 | GET | `/api/qa/messages/{messageId}/references` | List answer references |
 | POST | `/api/qa/messages/{messageId}/feedback` | Submit answer feedback |
+
+### OCR
+
+当前 OCR Controller 统一要求 `ocr:view` 权限，包括提交识别、字段修订、重试和删除操作。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/ocr/records` | 上传文件并提交 OCR 识别 |
+| GET | `/api/ocr/records` | 分页查询 OCR 记录 |
+| GET | `/api/ocr/records/{recordId}` | 查询 OCR 记录详情 |
+| PUT | `/api/ocr/records/{recordId}/fields` | 修订 OCR 识别字段 |
+| POST | `/api/ocr/records/{recordId}/retry` | 重试 OCR 识别 |
+| DELETE | `/api/ocr/records/{recordId}` | 删除 OCR 记录 |
+| GET | `/api/ocr/records/{recordId}/download` | 获取 OCR 结果下载信息 |
+| GET | `/api/ocr/types` | 查询支持的 OCR 类型和字段模板 |
 
 ### Review
 
@@ -691,6 +729,12 @@ MILVUS_COLLECTION=smart_worksite_chunks
 ```
 
 `EMBEDDING_PROVIDER=QWEN` 是生产路径，`LOCAL_HASH` 仅用于离线测试和无模型额度开发。Java 不直接访问向量数据库。
+
+`RAG_PROVIDER` 控制 Python 服务使用的向量存储实现：
+
+- `LOCAL`：默认本地开发选项，使用 `RAG_DATA_DIR` 下的 JSON/文件存储，不需要额外向量数据库。
+- `PGVECTOR`：使用已实现的 PostgreSQL/pgvector Provider，必须配置可访问的 `PGVECTOR_DSN`；当前 Docker Compose 不包含 pgvector 服务。
+- `MILVUS`：使用已实现的 Milvus Provider，必须部署 Milvus 并配置 `MILVUS_URI`、`MILVUS_TOKEN` 等参数；当前 Docker Compose 不包含 Milvus 服务。
 
 ## 文档
 
