@@ -476,6 +476,77 @@ def test_database_generate_query_normalizes_list_parameters():
     assert usage["prompt_tokens"] == 1
 
 
+def test_database_generate_query_prompt_includes_mysql_distinct_order_rule():
+    from app.models.schemas import DatabaseGenerateQueryRequest
+    from app.services.database_service import DatabaseQaService
+
+    class FakeQwen:
+        def __init__(self):
+            self.messages = None
+
+        async def json_chat(self, messages):
+            self.messages = messages
+            return {
+                "sql": "SELECT id, created_at FROM report ORDER BY created_at DESC",
+                "parameters": {},
+                "explanation": "查询最近报告。",
+                "riskLevel": "LOW",
+            }, {}
+
+    qwen = FakeQwen()
+    service = DatabaseQaService(qwen)
+    asyncio.run(service.generate_query(DatabaseGenerateQueryRequest(
+        question="查询最近报告",
+        schemaSummary="report(id, created_at)",
+        permissionHints={},
+        projectId=1,
+        databaseType="MYSQL",
+    )))
+
+    system_prompt = qwen.messages[0].content
+    assert "MySQL 8" in system_prompt
+    assert "DISTINCT" in system_prompt
+    assert "ORDER BY" in system_prompt
+    assert "SELECT列表" in system_prompt
+
+
+def test_database_generate_query_prompt_includes_failed_sql_repair_context():
+    from app.models.schemas import DatabaseGenerateQueryRequest
+    from app.services.database_service import DatabaseQaService
+
+    class FakeQwen:
+        def __init__(self):
+            self.messages = None
+
+        async def json_chat(self, messages):
+            self.messages = messages
+            return {
+                "sql": "SELECT DISTINCT rv.variable_name, rv.created_at FROM report_variable_value rv ORDER BY rv.created_at DESC",
+                "parameters": {},
+                "explanation": "补充排序字段后重试。",
+                "riskLevel": "LOW",
+            }, {}
+
+    qwen = FakeQwen()
+    service = DatabaseQaService(qwen)
+    asyncio.run(service.generate_query(DatabaseGenerateQueryRequest(
+        question="查询最近的报告变量",
+        schemaSummary="report_variable_value(variable_name, created_at)",
+        permissionHints={},
+        projectId=1,
+        databaseType="MYSQL",
+        failedSql="SELECT DISTINCT rv.variable_name FROM report_variable_value rv ORDER BY rv.created_at DESC",
+        databaseError="Expression #1 of ORDER BY clause is not in SELECT list",
+        attempt=2,
+    )))
+
+    prompt = json.loads(qwen.messages[-1].content)
+    assert prompt["databaseType"] == "MYSQL"
+    assert prompt["failedSql"].startswith("SELECT DISTINCT")
+    assert "ORDER BY clause" in prompt["databaseError"]
+    assert prompt["attempt"] == 2
+    assert "修正" in qwen.messages[0].content
+
 def test_database_summarize_result_normalizes_string_lists():
     from app.models.schemas import DatabaseSummarizeRequest
     from app.services.database_service import DatabaseQaService

@@ -10,6 +10,7 @@ import java.security.SecureRandom;
 import java.sql.Driver;
 import java.sql.DriverManager;
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Base64;
 import java.util.Enumeration;
@@ -32,6 +33,18 @@ class SafeSqlExecutorTest {
 
     private final AiPythonServiceProperties properties = new AiPythonServiceProperties();
     private final SafeSqlExecutor executor = new SafeSqlExecutor(properties);
+
+    @Test
+    void classifiesOnlySqlGrammarAndSchemaErrorsAsRepairable() {
+        assertTrue(new SafeSqlExecutor.QueryExecutionException(
+                "syntax error", "42000", 1064, new SQLException()).isRepairable());
+        assertTrue(new SafeSqlExecutor.QueryExecutionException(
+                "unknown column", "42S22", 1054, new SQLException()).isRepairable());
+        assertFalse(new SafeSqlExecutor.QueryExecutionException(
+                "access denied", "28000", 1045, new SQLException()).isRepairable());
+        assertFalse(new SafeSqlExecutor.QueryExecutionException(
+                "connection failed", "08001", 0, new SQLException()).isRepairable());
+    }
 
     @Test
     void allowsReadOnlySelect() {

@@ -140,6 +140,10 @@ class DatabaseGenerateQueryRequest(BaseModel):
     schemaSummary: str
     permissionHints: dict[str, Any] = Field(default_factory=dict)
     projectId: int | None = None
+    databaseType: str | None = None
+    failedSql: str | None = None
+    databaseError: str | None = None
+    attempt: int = 1
 
 
 class DatabaseGenerateQueryData(BaseModel):

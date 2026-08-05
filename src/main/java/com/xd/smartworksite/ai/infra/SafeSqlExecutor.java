@@ -11,6 +11,7 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
@@ -66,6 +67,8 @@ public class SafeSqlExecutor {
             }
         } catch (BusinessException ex) {
             throw ex;
+        } catch (SQLException ex) {
+            throw new QueryExecutionException(ex.getMessage(), ex.getSQLState(), ex.getErrorCode(), ex);
         } catch (Exception ex) {
             throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "数据库问答查询失败: " + ex.getMessage());
         }
@@ -239,6 +242,29 @@ public class SafeSqlExecutor {
 
     private String normalizedDbType(DataSourceRecord dataSource) {
         return dataSource.getDbType() == null ? "" : dataSource.getDbType().toUpperCase(Locale.ROOT);
+    }
+
+    public static class QueryExecutionException extends RuntimeException {
+        private final String sqlState;
+        private final int vendorCode;
+
+        public QueryExecutionException(String message, String sqlState, int vendorCode, Throwable cause) {
+            super(message, cause);
+            this.sqlState = sqlState;
+            this.vendorCode = vendorCode;
+        }
+
+        public String getSqlState() {
+            return sqlState;
+        }
+
+        public int getVendorCode() {
+            return vendorCode;
+        }
+
+        public boolean isRepairable() {
+            return sqlState != null && sqlState.startsWith("42");
+        }
     }
 
     public record QueryResult(List<String> columns, List<Map<String, Object>> rows) { }

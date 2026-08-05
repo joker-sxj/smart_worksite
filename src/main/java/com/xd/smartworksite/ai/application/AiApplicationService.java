@@ -145,28 +145,38 @@ public class AiApplicationService {
         if (dataSource == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND, "数据源不存在或未启用");
         }
-        Map<String, Object> generatePayload = new LinkedHashMap<>();
-        generatePayload.put("question", request.getQuestion());
-        generatePayload.put("schemaSummary", buildSchemaSummary(dataSource, request.getContext()));
-        generatePayload.put("permissionHints", Map.of("projectId", request.getProjectId(), "readOnly", true));
-        generatePayload.put("projectId", request.getProjectId());
-        AiProviderResponse generated = pythonClient.post(properties.getPaths().getDatabaseGenerateQuery(), "DATABASE_GENERATE_QUERY", request.getProjectId(), generatePayload);
-        Map<String, Object> generatedData = generated.getData();
-        String sql = String.valueOf(generatedData.getOrDefault("sql", ""));
-        Map<String, Object> parameters = extractSqlParameters(generatedData.get("parameters"));
-        safeSqlExecutor.validate(dataSource, sql);
-        SafeSqlExecutor.QueryResult queryResult = safeSqlExecutor.execute(dataSource, sql, parameters);
+        String schemaSummary = buildSchemaSummary(dataSource, request.getContext());
+        GeneratedQuery generatedQuery = generateDatabaseQuery(
+                request, dataSource, schemaSummary, null, null, 1);
+        SafeSqlExecutor.QueryResult queryResult;
+        try {
+            queryResult = safeSqlExecutor.execute(
+                    dataSource, generatedQuery.sql(), generatedQuery.parameters());
+        } catch (SafeSqlExecutor.QueryExecutionException ex) {
+            if (!ex.isRepairable()) {
+                throw databaseQueryFailure(ex);
+            }
+            generatedQuery = generateDatabaseQuery(
+                    request, dataSource, schemaSummary, generatedQuery.sql(), ex.getMessage(), 2);
+            try {
+                queryResult = safeSqlExecutor.execute(
+                        dataSource, generatedQuery.sql(), generatedQuery.parameters());
+            } catch (SafeSqlExecutor.QueryExecutionException retryEx) {
+                throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                        "数据库问答查询失败，SQL自动修正后仍失败: " + retryEx.getMessage());
+            }
+        }
 
         Map<String, Object> summarizePayload = new LinkedHashMap<>();
         summarizePayload.put("question", request.getQuestion());
-        summarizePayload.put("sql", sql);
+        summarizePayload.put("sql", generatedQuery.sql());
         summarizePayload.put("columns", queryResult.columns());
         summarizePayload.put("rows", queryResult.rows());
         AiProviderResponse summarized = pythonClient.post(properties.getPaths().getDatabaseSummarizeResult(), "DATABASE_SUMMARIZE_RESULT", request.getProjectId(), summarizePayload);
         Map<String, Object> summarizedData = summarized.getData();
 
         DatabaseQueryResponse result = new DatabaseQueryResponse();
-        result.setSql(sql);
+        result.setSql(generatedQuery.sql());
         result.setColumns(queryResult.columns());
         result.setRows(queryResult.rows());
         result.setSummary(String.valueOf(summarizedData.getOrDefault("summary", "查询完成")));
@@ -176,6 +186,39 @@ public class AiApplicationService {
         }
         result.setProviderTraceId(summarized.getTraceId());
         return result;
+    }
+
+    private GeneratedQuery generateDatabaseQuery(DatabaseQueryRequest request, DataSourceRecord dataSource,
+                                                   String schemaSummary, String failedSql,
+                                                   String databaseError, int attempt) {
+        Map<String, Object> generatePayload = new LinkedHashMap<>();
+        generatePayload.put("question", request.getQuestion());
+        generatePayload.put("schemaSummary", schemaSummary);
+        generatePayload.put("permissionHints", Map.of("projectId", request.getProjectId(), "readOnly", true));
+        generatePayload.put("projectId", request.getProjectId());
+        generatePayload.put("databaseType", dataSource.getDbType());
+        generatePayload.put("attempt", attempt);
+        if (failedSql != null) {
+            generatePayload.put("failedSql", failedSql);
+        }
+        if (databaseError != null) {
+            generatePayload.put("databaseError", databaseError);
+        }
+        AiProviderResponse generated = pythonClient.post(properties.getPaths().getDatabaseGenerateQuery(),
+                "DATABASE_GENERATE_QUERY", request.getProjectId(), generatePayload);
+        Map<String, Object> generatedData = generated.getData();
+        String sql = String.valueOf(generatedData.getOrDefault("sql", ""));
+        Map<String, Object> parameters = extractSqlParameters(generatedData.get("parameters"));
+        safeSqlExecutor.validate(dataSource, sql);
+        return new GeneratedQuery(sql, parameters);
+    }
+
+    private BusinessException databaseQueryFailure(SafeSqlExecutor.QueryExecutionException ex) {
+        return new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                "数据库问答查询失败: " + ex.getMessage());
+    }
+
+    private record GeneratedQuery(String sql, Map<String, Object> parameters) {
     }
 
     public PageResult<ExternalCallLogResponse> queryExternalCallLogs(ExternalCallLogQueryRequest request) {

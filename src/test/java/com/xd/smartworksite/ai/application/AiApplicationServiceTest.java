@@ -3,6 +3,8 @@ package com.xd.smartworksite.ai.application;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xd.smartworksite.ai.domain.DataSourceRecord;
 import com.xd.smartworksite.ai.domain.ExternalCallLog;
+import com.xd.smartworksite.ai.dto.DatabaseQueryRequest;
+import com.xd.smartworksite.ai.dto.DatabaseQueryResponse;
 import com.xd.smartworksite.ai.dto.ExternalCallLogQueryRequest;
 import com.xd.smartworksite.ai.dto.ModelInvokeRequest;
 import com.xd.smartworksite.ai.dto.ModelInvokeResponse;
@@ -25,14 +27,19 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -93,6 +100,106 @@ class AiApplicationServiceTest {
         assertThat(service.searchKnowledgeForSystem(searchRequest).getProviderTraceId()).isEqualTo("system-trace");
         verify(projectAccess, org.mockito.Mockito.times(2)).requireProjectWritableForSystem(1L);
         verify(projectAccess, never()).requireProjectWritableAccess(any());
+    }
+
+    @Test
+    void repairsDatabaseSqlOnceAfterGrammarErrorAndUsesCorrectedSql() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, projectAccess);
+        DataSourceRecord dataSource = dataSource();
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource);
+        when(sqlExecutor.describeSchema(dataSource)).thenReturn("report_variable_value(variable_name, created_at)");
+
+        String failedSql = "SELECT DISTINCT rv.variable_name FROM report_variable_value rv ORDER BY rv.created_at DESC";
+        String correctedSql = "SELECT DISTINCT rv.variable_name, rv.created_at FROM report_variable_value rv ORDER BY rv.created_at DESC";
+        AiProviderResponse failedGeneration = provider("generate-1", Map.of(
+                "sql", failedSql, "parameters", Map.of(), "explanation", "first"));
+        AiProviderResponse repairedGeneration = provider("generate-2", Map.of(
+                "sql", correctedSql, "parameters", Map.of(), "explanation", "repaired"));
+        AiProviderResponse summary = provider("summary", Map.of("summary", "查询成功", "warnings", List.of()));
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(failedGeneration, repairedGeneration);
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseSummarizeResult()),
+                eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), any())).thenReturn(summary);
+        when(sqlExecutor.execute(dataSource, failedSql, Map.of())).thenThrow(
+                new SafeSqlExecutor.QueryExecutionException(
+                        "Expression #1 of ORDER BY clause is not in SELECT list", "42000", 3065, null));
+        SafeSqlExecutor.QueryResult queryResult = new SafeSqlExecutor.QueryResult(
+                List.of("variable_name", "created_at"), List.of(Map.of("variable_name", "var_risk")));
+        when(sqlExecutor.execute(dataSource, correctedSql, Map.of())).thenReturn(queryResult);
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getSql()).isEqualTo(correctedSql);
+        assertThat(response.getSummary()).isEqualTo("查询成功");
+        verify(pythonClient, times(2)).post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any());
+        verify(pythonClient).post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), argThat(payload -> {
+                    Map<?, ?> map = (Map<?, ?>) payload;
+                    return "MYSQL".equals(map.get("databaseType"))
+                            && failedSql.equals(map.get("failedSql"))
+                            && String.valueOf(map.get("databaseError")).contains("ORDER BY clause")
+                            && Integer.valueOf(2).equals(map.get("attempt"));
+                }));
+        verify(pythonClient).post(eq(properties.getPaths().getDatabaseSummarizeResult()),
+                eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), argThat(payload ->
+                        correctedSql.equals(((Map<?, ?>) payload).get("sql"))));
+    }
+
+    @Test
+    void doesNotRepairDatabaseSqlForConnectionOrAuthenticationErrors() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        DataSourceRecord dataSource = dataSource();
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource);
+        when(sqlExecutor.describeSchema(dataSource)).thenReturn("report(id)");
+        String sql = "SELECT id FROM report";
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(provider("generate-1", Map.of("sql", sql, "parameters", Map.of())));
+        when(sqlExecutor.execute(dataSource, sql, Map.of())).thenThrow(
+                new SafeSqlExecutor.QueryExecutionException("Access denied", "28000", 1045, null));
+
+        assertThatThrownBy(() -> service.queryDatabaseForSystem(databaseRequest()))
+                .hasMessageContaining("Access denied");
+        verify(pythonClient).post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any());
+    }
+
+    private static AiProviderResponse provider(String traceId, Map<String, Object> data) {
+        AiProviderResponse response = new AiProviderResponse();
+        response.setSuccess(true);
+        response.setTraceId(traceId);
+        response.setData(new LinkedHashMap<>(data));
+        return response;
+    }
+
+    private static DataSourceRecord dataSource() {
+        DataSourceRecord record = new DataSourceRecord();
+        record.setId(2L);
+        record.setProjectId(1L);
+        record.setName("report-db");
+        record.setDbType("MYSQL");
+        return record;
+    }
+
+    private static DatabaseQueryRequest databaseRequest() {
+        DatabaseQueryRequest request = new DatabaseQueryRequest();
+        request.setProjectId(1L);
+        request.setDataSourceId(2L);
+        request.setQuestion("查询最近的报告变量");
+        return request;
     }
 
     private void setCurrentUser(Long userId, List<String> roles) {

@@ -518,7 +518,7 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 | POST | `/api/reports/{reportId}/regenerate` | 重新生成报告 |
 | GET | `/api/reports/{reportId}/download?format=WORD` | 获取 Word 报告下载 URL |
 
-报告生成规则：创建时可多选当前项目已启用的 `PROJECT` 知识库和已启用数据库数据源，两类来源至少选择一项；旧字段 `knowledgeBaseId` 仍兼容。`POLICY` 系统政策库会被拒绝。模板必须包含 `{{ var_xx_xx }}` 变量且每个变量都已配置非空描述；变量可配置 `dataSourceIds` 白名单，留空表示允许 AI 在报告所选数据源中自动选择。Worker 按变量调用 AI 路由决定知识检索、只读数据库查询或混合生成，并仅执行路由要求且属于变量快照的数据源；路由不可用时安全回退为混合。数据库 SQL 由 Java 安全校验并以只读方式执行。各变量不共享上下文且不写入普通问答会话历史。变量值和状态实时保存到 `report_variable_value`；单变量失败会使报告失败，任务重试时保留成功值并只补失败或未处理变量。资料为空时允许模型生成通用内容，但不得伪造具体项目数据。报告列表 `status` 查询只允许 `DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`FAILED`、`ARCHIVED`、`DELETED`。
+报告生成规则：创建时可多选当前项目已启用的 `PROJECT` 知识库和已启用数据库数据源，两类来源至少选择一项；旧字段 `knowledgeBaseId` 仍兼容。`POLICY` 系统政策库会被拒绝。模板必须包含 `{{ var_xx_xx }}` 变量且每个变量都已配置非空描述；变量可配置 `dataSourceIds` 白名单，留空表示允许 AI 在报告所选数据源中自动选择。Worker 按变量调用 AI 路由决定知识检索、只读数据库查询或混合生成，并仅执行路由要求且属于变量快照的数据源；路由不可用时安全回退为混合。数据库 SQL 会按数据源方言生成，由 Java 安全校验并以只读方式执行；遇到 SQLState `42` 类语法或表结构错误时，系统会携带原问题、失败 SQL 和数据库错误请求模型自动修正一次，修正后的 SQL 仍须通过相同的只读安全校验。连接、认证和超时错误不会触发 SQL 修正重试。各变量不共享上下文且不写入普通问答会话历史。变量值和状态实时保存到 `report_variable_value`；单变量失败会使报告失败，任务重试时保留成功值并只补失败或未处理变量。资料为空时允许模型生成通用内容，但不得伪造具体项目数据。报告列表 `status` 查询只允许 `DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`FAILED`、`ARCHIVED`、`DELETED`。
 
 Report write rule: report generation must check affected rows for report-task linking, task status, processing, success, failed, and version file binding. A zero-row update is a conflict and must not be reported as completed generation.
 
