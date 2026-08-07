@@ -36,7 +36,7 @@ public class RequestIdFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
         } finally {
             long costMs = System.currentTimeMillis() - start;
-            log.info("http request method={} path={} status={} costMs={}",
+            log.debug("http request method={} path={} status={} costMs={}",
                     request.getMethod(), request.getRequestURI(), response.getStatus(), costMs);
             MDC.remove(RequestContext.REQUEST_ID_MDC_KEY);
         }

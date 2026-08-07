@@ -24,6 +24,16 @@ class AiPythonServiceAutoStarterTest {
     }
 
     @Test
+    void autoStartedPythonLogsFlowThroughTheBoundedBackendLogStream() {
+        ProcessBuilder builder = new ProcessBuilder("python", "-V");
+
+        AiPythonServiceAutoStarter.configureProcessOutput(builder);
+
+        assertTrue(builder.redirectErrorStream());
+        assertEquals(ProcessBuilder.Redirect.INHERIT, builder.redirectOutput());
+    }
+
+    @Test
     void resolvesVirtualEnvPythonBeforeFallingBackToNull() throws Exception {
         Path serviceDir = tempDir.resolve("python-ai-service");
         Path executable = serviceDir.resolve(".venv/Scripts/python.exe");

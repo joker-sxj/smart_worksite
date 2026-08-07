@@ -25,13 +25,15 @@ if [[ ! -f "$env_file" ]]; then
   exit 1
 fi
 load_env "$env_file"
+assert_minimum_free_disk "$root"
 [[ -n "${QWEN_API_KEY:-}" ]] || { printf 'QWEN_API_KEY is empty in deploy/.env. Configure it before starting the complete project.\n' >&2; exit 1; }
-java_major="$(java -version 2>&1 | head -n 1 | sed -E 's/.*"([0-9]+).*/\1/')"
+java_major="$(java_major_version || true)"
 [[ "$java_major" =~ ^[0-9]+$ ]] && (( java_major >= 17 )) || { printf 'Java 17 or newer is required.\n' >&2; exit 1; }
 printf 'Prerequisite and configuration checks passed.\n'
 $check_only && { printf 'Check mode completed; no services were started.\n'; exit 0; }
 
 mkdir -p "$run_dir"
+cleanup_stale_project_logs "$log_dir"
 printf 'Starting Docker Compose services...\n'
 docker_compose "$root" up -d
 mysql_port="$(configured_port MYSQL_PORT 3306)"

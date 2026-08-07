@@ -1,7 +1,14 @@
 name: deploy
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
+    max-file: "${DOCKER_LOG_MAX_FILES:-3}"
+
 services:
   mysql:
+    logging: *default-logging
     image: mysql:${MYSQL_VERSION:-8.4}
     container_name: smart-worksite-mysql
     restart: unless-stopped
@@ -26,6 +33,7 @@ services:
       retries: 10
 
   redis:
+    logging: *default-logging
     image: redis:${REDIS_VERSION:-7.2-alpine}
     container_name: smart-worksite-redis
     restart: unless-stopped
@@ -41,6 +49,7 @@ services:
       retries: 10
 
   minio:
+    logging: *default-logging
     image: minio/minio:${MINIO_VERSION:-RELEASE.2025-04-22T22-12-26Z}
     container_name: smart-worksite-minio
     restart: unless-stopped
@@ -61,6 +70,7 @@ services:
       retries: 10
 
   minio-init:
+    logging: *default-logging
     image: minio/mc:${MINIO_MC_VERSION:-RELEASE.2025-04-16T18-13-26Z}
     container_name: smart-worksite-minio-init
     depends_on:
@@ -79,6 +89,7 @@ services:
     restart: "no"
 
   python-ai-service:
+    logging: *default-logging
     build:
       context: ..
       dockerfile: deploy/Dockerfile.python-ai-service
@@ -89,6 +100,7 @@ services:
       AI_SERVICE_HOST: 0.0.0.0
       AI_SERVICE_PORT: 8015
       AI_SERVICE_API_KEY: ${AI_PYTHON_API_KEY:-dev-ai-service-key}
+      AI_ACCESS_LOG: ${AI_ACCESS_LOG:-false}
       QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
       QWEN_API_KEY: ${QWEN_API_KEY:-}
       QWEN_MODEL: ${QWEN_MODEL:-qwen-plus}
@@ -111,6 +123,7 @@ services:
       retries: 12
 
   pgvector:
+    logging: *default-logging
     image: pgvector/pgvector:${PGVECTOR_VERSION:-pg16}
     container_name: smart-worksite-pgvector
     restart: unless-stopped
@@ -131,6 +144,7 @@ services:
       retries: 10
 
   milvus-etcd:
+    logging: *default-logging
     image: quay.io/coreos/etcd:${MILVUS_ETCD_VERSION:-v3.5.18}
     container_name: smart-worksite-milvus-etcd
     profiles: ["vector"]
@@ -144,6 +158,7 @@ services:
       - milvus-etcd-data:/etcd
 
   milvus-minio:
+    logging: *default-logging
     image: minio/minio:${MINIO_VERSION:-RELEASE.2025-04-22T22-12-26Z}
     container_name: smart-worksite-milvus-minio
     profiles: ["vector"]
@@ -157,6 +172,7 @@ services:
       - milvus-minio-data:/minio_data
 
   milvus:
+    logging: *default-logging
     image: milvusdb/milvus:${MILVUS_VERSION:-v2.5.4}
     container_name: smart-worksite-milvus
     restart: unless-stopped

@@ -21,10 +21,11 @@ try {
     }
 
     Import-DotEnv -Path $envFile
+    Assert-MinimumFreeDisk -Path $projectRoot
     if ([string]::IsNullOrWhiteSpace($env:QWEN_API_KEY)) { throw 'QWEN_API_KEY is empty in deploy/.env. Configure it before starting the complete project.' }
 
-    $javaVersion = (& cmd.exe /d /c 'java -version 2>&1' | Select-Object -First 1) -join ''
-    if ($javaVersion -notmatch '"(?<major>\d+)') { throw "Unable to determine Java version from: $javaVersion" }
+    $javaVersionOutput = (& cmd.exe /d /c 'java -version 2>&1') -join "`n"
+    if ($javaVersionOutput -notmatch 'version\s+"(?<major>\d+)') { throw "Unable to determine Java version from: $javaVersionOutput" }
     if ([int]$Matches.major -lt 17) { throw "Java 17 or newer is required; detected Java $($Matches.major)." }
 
     Write-Host 'Prerequisite and configuration checks passed.' -ForegroundColor Green
@@ -34,6 +35,7 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $runDirectory | Out-Null
+    Remove-StaleProjectLogs -LogDirectory $logDirectory
     Write-Host 'Starting Docker Compose services...' -ForegroundColor Cyan
     Invoke-ProjectCompose -ProjectRoot $projectRoot -Arguments @('up', '-d')
 

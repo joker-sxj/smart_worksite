@@ -1,6 +1,6 @@
 ﻿# deploy
 
-本目录用于启动本地开发依赖服务，包括 MySQL、Redis 和 MinIO。
+本目录用于启动 Docker 依赖服务，包括 MySQL、Redis、MinIO、Python AI 服务，以及可选的 pgvector/Milvus。
 
 ## 文件说明
 
@@ -8,7 +8,7 @@
 | --- | --- |
 | `.env.example` | 本地环境变量示例 |
 | `.env` | 本地实际环境变量，复制 `.env.example` 后生成 |
-| `docker-compose-env.yml` | MySQL、Redis、MinIO 的 Docker Compose 编排文件 |
+| `docker-compose-env.yml` | MySQL、Redis、MinIO、Python AI 和可选向量数据库的 Docker Compose 编排文件 |
 
 ## 启动依赖
 
@@ -30,6 +30,22 @@ docker compose -f docker-compose-env.yml --env-file .env ps
 docker compose -f docker-compose-env.yml --env-file .env logs -f mysql
 docker compose -f docker-compose-env.yml --env-file .env logs -f redis
 docker compose -f docker-compose-env.yml --env-file .env logs -f minio
+```
+
+Compose 为所有容器统一设置 `json-file` 日志轮转，默认每个容器单文件 10 MB、保留 3 个文件：
+
+```env
+DOCKER_LOG_MAX_SIZE=10m
+DOCKER_LOG_MAX_FILES=3
+AI_ACCESS_LOG=false
+```
+
+`AI_ACCESS_LOG=false` 会关闭 Python AI 服务的 Uvicorn 每请求访问日志，错误和应用日志仍会保留。修改日志参数后需要重建容器，`down` 不带 `-v`，不会删除业务数据：
+
+```bash
+docker compose -f docker-compose-env.yml --env-file .env down
+docker compose -f docker-compose-env.yml --env-file .env up -d --build
+docker inspect -f '{{json .HostConfig.LogConfig}}' smart-worksite-python-ai-service
 ```
 
 ## 停止服务

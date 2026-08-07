@@ -122,13 +122,17 @@ public class AiPythonServiceAutoStarter implements SmartLifecycle {
         ));
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(workingDirectory.toFile());
-        builder.redirectErrorStream(true);
-        builder.redirectOutput(ProcessBuilder.Redirect.appendTo(workingDirectory.resolve("python-ai-service.log").toFile()));
+        configureProcessOutput(builder);
         Map<String, String> env = builder.environment();
         if (properties.getApiKey() != null && !properties.getApiKey().isBlank()) {
             env.putIfAbsent("AI_SERVICE_API_KEY", properties.getApiKey());
         }
         process = builder.start();
+    }
+
+    static void configureProcessOutput(ProcessBuilder builder) {
+        builder.redirectErrorStream(true);
+        builder.redirectOutput(ProcessBuilder.Redirect.INHERIT);
     }
 
     private void waitUntilHealthy(URI baseUri, int timeoutSeconds) {

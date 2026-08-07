@@ -128,17 +128,68 @@ managed_pid() {
   printf '%s\n' "$pid"
 }
 
+positive_integer_or_default() {
+  local value="$1" default_value="$2"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] && printf '%s\n' "$value" || printf '%s\n' "$default_value"
+}
+
+assert_minimum_free_disk() {
+  local target="$1" minimum_mb available_kb available_mb
+  minimum_mb="$(positive_integer_or_default "${MIN_FREE_DISK_MB:-}" 2048)"
+  available_kb="$(df -Pk "$target" | awk 'NR == 2 { print $4 }')"
+  [[ "$available_kb" =~ ^[0-9]+$ ]] || { printf 'Unable to determine free disk space for %s.\n' "$target" >&2; return 1; }
+  available_mb=$((available_kb / 1024))
+  if (( available_mb < minimum_mb )); then
+    printf 'Insufficient disk space: %s MB free under %s; at least %s MB is required. Run "df -h", "du -xhd1 ~ | sort -h", and "docker system df -v" to locate usage before starting.\n' "$available_mb" "$target" "$minimum_mb" >&2
+    return 1
+  fi
+}
+
+java_major_version() {
+  local output version major
+  output="$(java -version 2>&1)" || return 1
+  [[ "$output" == *'version "'* ]] || return 1
+  version="${output#*'version "'}"
+  version="${version%%\"*}"
+  major="${version%%.*}"
+  [[ "$major" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$major"
+}
+
+cleanup_stale_project_logs() {
+  local log_dir="$1" retention_days max_size_mb
+  [[ -d "$log_dir" ]] || return 0
+  retention_days="$(positive_integer_or_default "${HOST_LOG_RETENTION_DAYS:-}" 14)"
+  max_size_mb="$(positive_integer_or_default "${HOST_LOG_MAX_SIZE_MB:-}" 10)"
+  find "$log_dir" -maxdepth 1 -type f -name '*.log' \( -mtime "+$retention_days" -o -size +"${max_size_mb}"M \) \
+    ! -name 'backend.out.log' ! -name 'backend.out.log.[0-9]*' \
+    ! -name 'backend.err.log' ! -name 'backend.err.log.[0-9]*' \
+    ! -name 'frontend.out.log' ! -name 'frontend.out.log.[0-9]*' \
+    ! -name 'frontend.err.log' ! -name 'frontend.err.log.[0-9]*' \
+    -delete
+}
+
 start_managed() {
   local name="$1" cwd="$2" command_text="$3" marker="$4" pid_file="$5" out_file="$6" err_file="$7" pid
+  local root runner max_size_mb max_files retention_days
   if pid="$(managed_pid "$pid_file" "$cwd" "$marker")"; then
     printf '%s is already running (PID %s).\n' "$name" "$pid"
     return 0
   fi
   rm -f "$pid_file"
-  nohup bash -c "cd \"\$1\" && $command_text" bash "$cwd" >"$out_file" 2>"$err_file" &
+  root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+  runner="$root/scripts/lib/run-with-log-limit.mjs"
+  [[ -f "$runner" ]] || { printf 'Log runner not found: %s\n' "$runner" >&2; return 1; }
+  max_size_mb="$(positive_integer_or_default "${HOST_LOG_MAX_SIZE_MB:-}" 10)"
+  max_files="$(positive_integer_or_default "${HOST_LOG_MAX_FILES:-}" 3)"
+  retention_days="$(positive_integer_or_default "${HOST_LOG_RETENTION_DAYS:-}" 14)"
+  nohup node "$runner" \
+    --cwd "$cwd" --stdout "$out_file" --stderr "$err_file" \
+    --max-size-mb "$max_size_mb" --max-files "$max_files" --retention-days "$retention_days" \
+    -- bash -c "$command_text" </dev/null >/dev/null 2>&1 &
   pid=$!
   printf '%s\n' "$pid" > "$pid_file"
-  printf 'Started %s (PID %s).\n' "$name" "$pid"
+  printf 'Started %s (PID %s); logs rotate at %sMB with %s total files.\n' "$name" "$pid" "$max_size_mb" "$max_files"
 }
 
 kill_tree() {

@@ -175,7 +175,7 @@ com.xd.smartworksite
 
 - Docker Compose：MySQL、Redis、MinIO、Python AI 服务
 - 宿主机后台进程：Java Spring Boot 后端、Vue 前端
-- 运行日志和 PID：统一写入已忽略的 `logs/` 目录
+- 运行日志和 PID：统一写入已忽略的 `logs/` 目录；宿主机日志和 Docker 日志均默认限额轮转
 
 ### 启动前准备
 
@@ -310,6 +310,34 @@ logs/frontend.out.log
 logs/frontend.err.log
 ```
 
+日志不会无限增长。默认策略可在 `deploy/.env` 调整：
+
+```env
+# 每个 Java/Vue stdout 或 stderr 日志：单文件 10 MB，总共保留 3 个文件
+HOST_LOG_MAX_SIZE_MB=10
+HOST_LOG_MAX_FILES=3
+# 启动时清理 logs/ 下超过单文件上限或超过 14 天的旧式/人工日志
+HOST_LOG_RETENTION_DAYS=14
+# 项目所在文件系统低于 2 GB 可用空间时拒绝启动，避免数据库和构建继续写满磁盘
+MIN_FREE_DISK_MB=2048
+
+# 每个 Docker 容器的 json-file 日志：单文件 10 MB，保留 3 个文件
+DOCKER_LOG_MAX_SIZE=10m
+DOCKER_LOG_MAX_FILES=3
+# 默认关闭 Uvicorn 每请求访问日志；临时排查流量时才改为 true
+AI_ACCESS_LOG=false
+```
+
+轮转文件使用 `.1`、`.2` 后缀。按默认值，Java/Vue 四个日志流合计上限约 120 MB；Java 自动拉起的本地 Python 服务输出也会并入后端受限日志，不再追加独立的 `python-ai-service.log`；Docker 日志按每个容器约 30 MB 封顶。修改 Docker 日志参数后必须重建容器才能生效，数据卷不会被删除：
+
+```bash
+./scripts/stop-all.sh
+./scripts/start-all.sh
+
+# 检查某个容器实际采用的日志策略
+docker inspect -f '{{json .HostConfig.LogConfig}}' smart-worksite-python-ai-service
+```
+
 进程 PID 文件：
 
 ```text
@@ -342,6 +370,9 @@ tail -n 100 logs/frontend.err.log
 - 文件解析或问答失败：检查 `scripts/status.*` 输出、`logs/backend.err.log`，以及 Python AI 容器日志。
 - 端口被占用：状态脚本会显示异常端口；停止冲突进程或修改 `deploy/.env` 后重启。
 - 再次启动时提示已运行：这是正常的幂等保护，可直接访问前端或运行状态脚本确认。
+- Linux 明明是 Java 17 却提示版本不足：新版脚本会跳过 `JAVA_TOOL_OPTIONS` 和共享内存警告后解析真正的 `version` 行；拉取更新后执行 `./scripts/start-all.sh --check`。
+- 从旧版本升级后如存在 `python-ai-service/python-ai-service.log`：先执行 `./scripts/stop-all.sh`，再删除该历史日志；新版已将自动拉起的 Python 输出并入受限后端日志，不会继续生成此文件。
+- 提示 `Insufficient disk space`：这是启动保护，不要继续强制启动。先运行 `df -h`、`du -xhd1 ~ | sort -h`、`docker system df -v` 找出占用；不要删除本项目的 MySQL、MinIO 数据卷。
 
 ### 手动故障排查启动
 

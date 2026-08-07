@@ -142,6 +142,47 @@ function Get-ManagedProcess {
     return $process
 }
 
+function Get-PositiveIntegerSetting {
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][int]$Default)
+    $value = [Environment]::GetEnvironmentVariable($Name, 'Process')
+    $parsed = 0
+    if ($value -and [int]::TryParse($value, [ref]$parsed) -and $parsed -gt 0) { return $parsed }
+    return $Default
+}
+
+function Assert-MinimumFreeDisk {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $minimumMb = Get-PositiveIntegerSetting -Name 'MIN_FREE_DISK_MB' -Default 2048
+    $item = Get-Item -LiteralPath $Path
+    $freeMb = [math]::Floor($item.PSDrive.Free / 1MB)
+    if ($freeMb -lt $minimumMb) {
+        throw "Insufficient disk space: $freeMb MB free on drive $($item.PSDrive.Name); at least $minimumMb MB is required. Check Get-PSDrive and docker system df -v before starting."
+    }
+}
+
+function ConvertTo-NativeArgument {
+    param([AllowEmptyString()][string]$Value)
+    if ($null -eq $Value -or $Value.Length -eq 0) { return '""' }
+    $escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
+    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+    return '"' + $escaped + '"'
+}
+
+function Remove-StaleProjectLogs {
+    param([Parameter(Mandatory = $true)][string]$LogDirectory)
+    if (-not (Test-Path -LiteralPath $LogDirectory -PathType Container)) { return }
+    $retentionDays = Get-PositiveIntegerSetting -Name 'HOST_LOG_RETENTION_DAYS' -Default 14
+    $maxSizeMb = Get-PositiveIntegerSetting -Name 'HOST_LOG_MAX_SIZE_MB' -Default 10
+    $maxSizeBytes = [long]$maxSizeMb * 1MB
+    $cutoff = (Get-Date).ToUniversalTime().AddDays(-$retentionDays)
+    Get-ChildItem -LiteralPath $LogDirectory -File -Filter '*.log' -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -notmatch '^(backend|frontend)\.(out|err)\.log(?:\.\d+)?$' -and
+            ($_.LastWriteTimeUtc -lt $cutoff -or $_.Length -gt $maxSizeBytes)
+        } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
+
 function Start-ManagedProcess {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -158,14 +199,27 @@ function Start-ManagedProcess {
         Write-Host "$Name is already running (PID $($existing.Id))." -ForegroundColor Yellow
         return $existing
     }
+
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
-    $escapedDirectory = $WorkingDirectory.Replace("'", "''")
-    $script = "Set-Location -LiteralPath '$escapedDirectory'; $Command"
-    $process = Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $script) `
-        -RedirectStandardOutput $StdOutFile -RedirectStandardError $StdErrFile -WindowStyle Hidden -PassThru
+    $runner = Join-Path $ProjectRoot 'scripts\lib\run-with-log-limit.mjs'
+    if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "Log runner not found: $runner" }
+    $maxSizeMb = Get-PositiveIntegerSetting -Name 'HOST_LOG_MAX_SIZE_MB' -Default 10
+    $maxFiles = Get-PositiveIntegerSetting -Name 'HOST_LOG_MAX_FILES' -Default 3
+    $retentionDays = Get-PositiveIntegerSetting -Name 'HOST_LOG_RETENTION_DAYS' -Default 14
+    $arguments = @(
+        $runner,
+        '--cwd', $WorkingDirectory,
+        '--stdout', $StdOutFile,
+        '--stderr', $StdErrFile,
+        '--max-size-mb', $maxSizeMb.ToString(),
+        '--max-files', $maxFiles.ToString(),
+        '--retention-days', $retentionDays.ToString(),
+        '--', 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $Command
+    )
+    $argumentLine = ($arguments | ForEach-Object { ConvertTo-NativeArgument -Value ([string]$_) }) -join ' '
+    $process = Start-Process -FilePath 'node.exe' -ArgumentList $argumentLine -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru
     Set-Content -LiteralPath $PidFile -Value $process.Id -Encoding ascii
-    Write-Host "Started $Name (PID $($process.Id))." -ForegroundColor Green
+    Write-Host "Started $Name (PID $($process.Id)); logs rotate at $($maxSizeMb)MB with $maxFiles total files." -ForegroundColor Green
     return $process
 }
 
