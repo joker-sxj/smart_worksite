@@ -80,8 +80,8 @@ if (Test-Path -LiteralPath $startPowerShell) {
     if ($startPowerShellContent -match 'Select-Object\s+-First\s+1' -or $startPowerShellContent -notmatch 'javaVersionOutput') {
         $failures.Add('scripts/start-all.ps1 must parse the Java version from complete JVM output, after possible warnings.')
     }
-    if ($startPowerShellContent -notmatch "-Arguments\s+@\('up',\s*'-d'\)") {
-        $failures.Add('scripts/start-all.ps1 must pass Docker Compose detached mode without PowerShell treating -d as a script parameter.')
+    if ($startPowerShellContent -notmatch "-Arguments\s+@\('up',\s*'-d',\s*'--build'\)") {
+        $failures.Add('scripts/start-all.ps1 must rebuild local Docker images before detached startup.')
     }
 }
 
@@ -101,6 +101,9 @@ if ((Test-Path -LiteralPath $startBash) -and (Get-Content -Raw $startBash) -notm
 }
 if ((Test-Path -LiteralPath $startBash) -and (Get-Content -Raw $startBash) -notmatch 'java_major_version') {
     $failures.Add('scripts/start-all.sh must use warning-tolerant Java version detection.')
+}
+if ((Test-Path -LiteralPath $startBash) -and (Get-Content -Raw $startBash) -notmatch 'docker_compose\s+"\$root"\s+up\s+-d\s+--build') {
+    $failures.Add('scripts/start-all.sh must rebuild local Docker images before detached startup.')
 }
 
 foreach ($relativePath in @('scripts/stop-all.ps1', 'scripts/stop-all.sh')) {

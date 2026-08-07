@@ -37,7 +37,7 @@ try {
     New-Item -ItemType Directory -Force -Path $runDirectory | Out-Null
     Remove-StaleProjectLogs -LogDirectory $logDirectory
     Write-Host 'Starting Docker Compose services...' -ForegroundColor Cyan
-    Invoke-ProjectCompose -ProjectRoot $projectRoot -Arguments @('up', '-d')
+    Invoke-ProjectCompose -ProjectRoot $projectRoot -Arguments @('up', '-d', '--build')
 
     $mysqlPort = Get-ConfiguredPort -Name 'MYSQL_PORT' -Default 3306
     $redisPort = Get-ConfiguredPort -Name 'REDIS_PORT' -Default 6379

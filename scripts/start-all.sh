@@ -35,7 +35,7 @@ $check_only && { printf 'Check mode completed; no services were started.\n'; exi
 mkdir -p "$run_dir"
 cleanup_stale_project_logs "$log_dir"
 printf 'Starting Docker Compose services...\n'
-docker_compose "$root" up -d
+docker_compose "$root" up -d --build
 mysql_port="$(configured_port MYSQL_PORT 3306)"
 redis_port="$(configured_port REDIS_PORT 6379)"
 minio_port="$(configured_port MINIO_API_PORT 9000)"

@@ -50,6 +50,7 @@ if [[ -f "$repo_root/scripts/start-all.sh" ]] && ! grep -q -- '--check' "$repo_r
 fi
 
 if [[ -f "$repo_root/scripts/start-all.sh" ]]; then
+  grep -Eq 'docker_compose "\$root" up -d --build' "$repo_root/scripts/start-all.sh" || fail 'scripts/start-all.sh must rebuild local Docker images before detached startup.'
   grep -q 'assert_service_port_available' "$repo_root/scripts/start-all.sh" || fail 'scripts/start-all.sh must reject occupied but unhealthy host-service ports.'
   grep -q 'http_ready' "$repo_root/scripts/start-all.sh" || fail 'scripts/start-all.sh must verify that an existing frontend port serves HTTP.'
   grep -q 'wait_http_ready' "$repo_root/scripts/start-all.sh" || fail 'scripts/start-all.sh must wait for frontend HTTP readiness.'
