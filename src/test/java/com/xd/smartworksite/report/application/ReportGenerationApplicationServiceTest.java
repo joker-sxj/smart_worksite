@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.security.UserPrincipal;
 import com.xd.smartworksite.datasource.domain.DataSource;
+import com.xd.smartworksite.file.application.FileObjectContent;
 import com.xd.smartworksite.file.infra.StorageAdapter;
 import com.xd.smartworksite.datasource.repository.DataSourceRepository;
 import com.xd.smartworksite.file.infra.StorageObject;
@@ -48,6 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -140,6 +142,28 @@ class ReportGenerationApplicationServiceTest {
         assertThat(captor.getAllValues())
                 .extracting(ReportVariableQaRequest::getDataSourceIds)
                 .containsOnly(List.of());
+    }
+
+    @Test
+    void openDownloadFileStreamsReportThroughBackend() throws Exception {
+        ReportCreateResponse created = context.service.createReport(request());
+        context.service.executeReportTask(created.getReportId(), created.getTaskId());
+        FileObjectRecord generatedFile = context.repository.files.stream()
+                .filter(file -> "REPORT_OUTPUT".equals(file.getBizType()))
+                .findFirst()
+                .orElseThrow();
+        when(context.storage.openObject(generatedFile.getObjectName()))
+                .thenReturn(new ByteArrayInputStream(context.generatedDocx));
+
+        FileObjectContent content = context.service.openDownloadFile(created.getReportId(), "WORD");
+
+        assertThat(content.getFileName()).isEqualTo("智慧工地报告.docx");
+        assertThat(content.getContentType())
+                .isEqualTo("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        assertThat(readDocxText(content.getInputStream().readAllBytes()))
+                .contains("生成内容-var_summary", "生成内容-var_risk");
+        verify(context.access, atLeastOnce()).requireProjectAccess(1L);
+        verify(context.storage).openObject(generatedFile.getObjectName());
     }
 
     @Test

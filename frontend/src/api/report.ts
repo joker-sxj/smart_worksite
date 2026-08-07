@@ -1,4 +1,4 @@
-import request, { downloadFile, downloadTextFile } from '../utils/request';
+import request, { downloadApiFile, downloadTextFile } from '../utils/request';
 import { mockReports } from '../mocks/report';
 import type { ID, PageQuery, PageResult, ReportItem, ReportVariableItem } from './types';
 import type { TemplateItem } from './template';
@@ -66,7 +66,5 @@ export async function fetchReportDownloadUrl(reportId: ID, format: 'WORD' | 'PDF
 
 export async function downloadReport(reportId: ID, format: 'WORD' | 'PDF' = 'WORD', filename?: string) {
   if (useMock) return downloadTextFile(filename || `report-${reportId}.${format === 'PDF' ? 'pdf' : 'docx'}`, 'mock report content');
-  const url = await fetchReportDownloadUrl(reportId, format);
-  if (!url) throw new Error('报告下载地址为空，请检查后端报告下载接口');
-  return downloadFile(url, { filename });
+  return downloadApiFile(`/reports/${reportId}/download-file`, { params: { format }, filename });
 }

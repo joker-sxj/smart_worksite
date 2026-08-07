@@ -34,6 +34,7 @@ AI_PYTHON_API_KEY=dev-ai-service-key
 | `GET` | `/api/reports/{reportId}/variables` | 查询报告变量生成状态和结果 |
 | `POST` | `/api/reports/{reportId}/regenerate` | 重新生成报告 |
 | `GET` | `/api/reports/{reportId}/download` | 获取下载地址 |
+| `GET` | `/api/reports/{reportId}/download-file` | 通过 Java 后端流式下载报告文件 |
 
 ## 1. 创建报告
 
@@ -110,7 +111,7 @@ POST /api/reports/{reportId}/regenerate
 GET /api/reports/{reportId}/download?format=WORD
 ```
 
-当前支持 Word 下载。报告必须已完成，接口返回 MinIO 预签名下载地址字符串。前端先携带 JWT 调用本接口获取地址，再使用不携带 `Authorization` 和 `X-Request-Id` 的独立请求读取该预签名地址；签名查询参数本身就是 MinIO 鉴权，不能同时附加 Bearer Token。`format=PDF` 明确不支持。
+当前支持 Word 下载，`format=PDF` 明确不支持。报告必须已完成。`/download-file` 会携带 JWT 访问 Java 后端，由后端读取对象存储并流式返回文件，适用于浏览器不应或不能直连 MinIO 的服务器部署场景；`/download` 保留为兼容接口，仍返回 MinIO 预签名下载地址字符串。
 
 ## 写入规则
 

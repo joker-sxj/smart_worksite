@@ -20,6 +20,7 @@ This file records the current implementation contract of the `report` module.
 | GET | `/api/reports/{reportId}/variables` | Gets ordered per-variable status, description, value, trace, and error details. |
 | POST | `/api/reports/{reportId}/regenerate` | Creates a new report and task from the original report config. |
 | GET | `/api/reports/{reportId}/download?format=WORD` | Returns a MinIO access URL for the saved Word file. |
+| GET | `/api/reports/{reportId}/download-file?format=WORD` | Streams the saved Word file through the Java backend. |
 
 ## State Flow
 
@@ -43,7 +44,8 @@ This file records the current implementation contract of the `report` module.
 
 - Only `WORD` is supported.
 - PDF requests fail explicitly. Word output must not be returned as fake PDF.
-- The API returns a MinIO signed URL for the current report version `word_file_id`.
+- `/download-file` is the browser-facing path and streams the current report version `word_file_id` through Java so remote clients do not need direct MinIO network access.
+- `/download` is kept for compatibility and returns a MinIO signed URL for callers that can reach the object-storage endpoint directly.
 
 ## Verification
 

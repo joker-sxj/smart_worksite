@@ -9,6 +9,7 @@ import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.common.result.PageResult;
 import com.xd.smartworksite.common.security.SecurityUtils;
+import com.xd.smartworksite.file.application.FileObjectContent;
 import com.xd.smartworksite.file.infra.StorageAdapter;
 import com.xd.smartworksite.file.infra.StorageObject;
 import com.xd.smartworksite.datasource.domain.DataSource;
@@ -219,6 +220,32 @@ public class ReportGenerationApplicationService {
     }
 
     public String createDownloadUrl(Long reportId, String format) {
+        FileObjectRecord file = findDownloadFile(reportId, format);
+        return storageAdapter.createAccessUrl(file.getObjectName(), Duration.ofMinutes(10));
+    }
+
+    public FileObjectContent openDownloadFile(Long reportId, String format) {
+        FileObjectRecord file = findDownloadFile(reportId, format);
+        try {
+            InputStream inputStream = storageAdapter.openObject(file.getObjectName());
+            if (inputStream == null) {
+                throw new IllegalStateException("storage returned no content stream");
+            }
+            return new FileObjectContent(
+                    file.getId(),
+                    file.getProjectId(),
+                    file.getBizId(),
+                    file.getFileName(),
+                    file.getContentType(),
+                    file.getFileSize(),
+                    inputStream
+            );
+        } catch (RuntimeException ex) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "open report file failed");
+        }
+    }
+
+    private FileObjectRecord findDownloadFile(Long reportId, String format) {
         Report report = reportRepository.findReportById(reportId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告不存在"));
         projectAccessApplicationService.requireProjectAccess(report.getProjectId());
@@ -231,7 +258,6 @@ public class ReportGenerationApplicationService {
         }
         return reportRepository.findCurrentWordFileId(reportId)
                 .flatMap(reportRepository::findFileObjectById)
-                .map(file -> storageAdapter.createAccessUrl(file.getObjectName(), Duration.ofMinutes(10)))
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告文件不存在"));
     }
 

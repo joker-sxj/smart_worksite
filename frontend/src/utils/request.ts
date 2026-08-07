@@ -166,8 +166,24 @@ export async function downloadFile(url: string, options: DownloadOptions = {}) {
     responseType: 'blob',
     transformResponse: [(data) => data]
   });
-  const blob = response.data;
-  const headerFilename = parseFilename(getHeader(response.headers, 'content-disposition'), requestedFilename || 'download');
+  saveBlob(response.data, response.headers, requestedFilename);
+}
+
+export async function downloadApiFile(url: string, options: DownloadOptions = {}) {
+  if (!url) throw new Error('下载地址为空');
+  const { filename: requestedFilename, ...requestOptions } = options;
+  const response = await request.request<Blob, AxiosResponse<Blob>>({
+    ...requestOptions,
+    url,
+    method: requestOptions.method || 'GET',
+    responseType: 'blob',
+    transformResponse: [(data) => data]
+  });
+  saveBlob(response.data, response.headers, requestedFilename);
+}
+
+function saveBlob(blob: Blob, headers: AxiosResponse['headers'], requestedFilename?: string) {
+  const headerFilename = parseFilename(getHeader(headers, 'content-disposition'), requestedFilename || 'download');
   const filename = requestedFilename || headerFilename;
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement('a');
