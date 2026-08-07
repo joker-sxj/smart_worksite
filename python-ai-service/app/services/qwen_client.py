@@ -277,14 +277,35 @@ class QwenClient:
             "Accept": "application/json",
         }
         async with httpx.AsyncClient(timeout=self.settings.qwen_timeout_seconds) as client:
-            response = await client.post(url, headers=headers, json=payload)
-            response.raise_for_status()
+            try:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as ex:
+                if ex.response.status_code == 400 and "dimensions" in payload:
+                    retry_payload = dict(payload)
+                    retry_payload.pop("dimensions", None)
+                    try:
+                        response = await client.post(url, headers=headers, json=retry_payload)
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as retry_ex:
+                        raise RuntimeError(self._format_embedding_http_error(retry_ex, retry_payload, len(texts))) from retry_ex
+                else:
+                    raise RuntimeError(self._format_embedding_http_error(ex, payload, len(texts))) from ex
             body = response.json()
         vectors = [
             item["embedding"]
             for item in sorted(body.get("data", []), key=lambda item: item.get("index", 0))
         ]
         return vectors, body.get("usage") or {}
+
+    def _format_embedding_http_error(self, ex: httpx.HTTPStatusError, payload: dict[str, Any], input_count: int) -> str:
+        model = payload.get("model") or "unknown"
+        dimensions = payload.get("dimensions", "omitted")
+        prefix = (
+            "Qwen embedding call failed "
+            f"(model={model}, inputCount={input_count}, dimensions={dimensions})"
+        )
+        return self._format_http_error(prefix, ex)
 
     async def rerank(self, query: str, documents: list[str], top_n: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if not documents:

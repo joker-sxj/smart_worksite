@@ -707,3 +707,102 @@ def test_docker_and_local_python_use_the_same_rag_data_directory():
     compose = compose_file.read_text(encoding="utf-8")
 
     assert "../python-ai-service/data:/app/data" in compose
+
+
+def test_qwen_embedding_retries_without_dimensions_on_bad_request(monkeypatch):
+    import httpx
+    from app.services import qwen_client as qwen_module
+
+    settings = Settings(
+        qwen_api_key="test-key",
+        qwen_embedding_model="text-embedding-v4",
+        qwen_embedding_dimensions=1024,
+    )
+    client = QwenClient(settings)
+    payloads = []
+
+    class FakeResponse:
+        def __init__(self, status_code=200, text="", body=None):
+            self.status_code = status_code
+            self.text = text
+            self._body = body or {}
+            self.request = httpx.Request("POST", "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings")
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise httpx.HTTPStatusError("bad request", request=self.request, response=self)
+
+        def json(self):
+            return self._body
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers=None, json=None):
+            payloads.append(dict(json))
+            if len(payloads) == 1:
+                return FakeResponse(400, '{"code":"InvalidParameter","message":"dimensions is invalid"}')
+            return FakeResponse(body={
+                "data": [{"index": 0, "embedding": [0.1, 0.2]}],
+                "usage": {"total_tokens": 2},
+            })
+
+    monkeypatch.setattr(qwen_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    vectors, usage = asyncio.run(client.embed(["policy content"]))
+
+    assert vectors == [[0.1, 0.2]]
+    assert usage == {"total_tokens": 2}
+    assert payloads[0]["dimensions"] == 1024
+    assert "dimensions" not in payloads[1]
+
+
+def test_qwen_embedding_error_includes_provider_body(monkeypatch):
+    import pytest
+    import httpx
+    from app.services import qwen_client as qwen_module
+
+    settings = Settings(qwen_api_key="test-key", qwen_embedding_dimensions=0)
+    client = QwenClient(settings)
+
+    class FakeResponse:
+        status_code = 400
+        text = '{"code":"InvalidParameter","message":"input is too long"}'
+
+        def __init__(self):
+            self.request = httpx.Request("POST", "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings")
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("bad request", request=self.request, response=self)
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers=None, json=None):
+            return FakeResponse()
+
+    monkeypatch.setattr(qwen_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    with pytest.raises(RuntimeError) as error:
+        asyncio.run(client.embed(["x"] * 3))
+
+    message = str(error.value)
+    assert "Qwen embedding call failed" in message
+    assert "HTTP 400" in message
+    assert "input is too long" in message
+    assert "inputCount=3" in message
+    assert "api_key" not in message.lower()
