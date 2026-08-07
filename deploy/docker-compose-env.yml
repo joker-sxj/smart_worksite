@@ -4,7 +4,7 @@ x-logging: &default-logging
   driver: json-file
   options:
     max-size: "${DOCKER_LOG_MAX_SIZE:-10m}"
-    max-file: "${DOCKER_LOG_MAX_FILES:-3}"
+    max-file: "${DOCKER_LOG_MAX_FILES:-30}"
 
 services:
   mysql:

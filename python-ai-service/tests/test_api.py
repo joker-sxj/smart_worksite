@@ -508,6 +508,8 @@ def test_database_generate_query_prompt_includes_mysql_distinct_order_rule():
     assert "DISTINCT" in system_prompt
     assert "ORDER BY" in system_prompt
     assert "SELECT列表" in system_prompt
+    assert "子查询" in system_prompt
+    assert "禁止使用分号" in system_prompt
 
 
 def test_database_generate_query_prompt_includes_failed_sql_repair_context():
@@ -545,7 +547,8 @@ def test_database_generate_query_prompt_includes_failed_sql_repair_context():
     assert prompt["failedSql"].startswith("SELECT DISTINCT")
     assert "ORDER BY clause" in prompt["databaseError"]
     assert prompt["attempt"] == 2
-    assert "修正" in qwen.messages[0].content
+    assert "必须返回与failedSql不同" in qwen.messages[0].content
+    assert "本地安全校验失败" in qwen.messages[0].content
 
 def test_database_summarize_result_normalizes_string_lists():
     from app.models.schemas import DatabaseSummarizeRequest

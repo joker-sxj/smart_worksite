@@ -171,13 +171,13 @@ function ConvertTo-NativeArgument {
 function Remove-StaleProjectLogs {
     param([Parameter(Mandatory = $true)][string]$LogDirectory)
     if (-not (Test-Path -LiteralPath $LogDirectory -PathType Container)) { return }
-    $retentionDays = Get-PositiveIntegerSetting -Name 'HOST_LOG_RETENTION_DAYS' -Default 14
+    $retentionDays = Get-PositiveIntegerSetting -Name 'HOST_LOG_RETENTION_DAYS' -Default 30
     $maxSizeMb = Get-PositiveIntegerSetting -Name 'HOST_LOG_MAX_SIZE_MB' -Default 10
     $maxSizeBytes = [long]$maxSizeMb * 1MB
     $cutoff = (Get-Date).ToUniversalTime().AddDays(-$retentionDays)
     Get-ChildItem -LiteralPath $LogDirectory -File -Filter '*.log' -ErrorAction SilentlyContinue |
         Where-Object {
-            $_.Name -notmatch '^(backend|frontend)\.(out|err)\.log(?:\.\d+)?$' -and
+            $_.Name -notmatch '^(backend|frontend)\.(out|err)\.log(?:\.\d{4}-\d{2}-\d{2}(?:\.\d+)?|\.\d+)?$' -and
             ($_.LastWriteTimeUtc -lt $cutoff -or $_.Length -gt $maxSizeBytes)
         } |
         Remove-Item -Force -ErrorAction SilentlyContinue
@@ -205,7 +205,7 @@ function Start-ManagedProcess {
     if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "Log runner not found: $runner" }
     $maxSizeMb = Get-PositiveIntegerSetting -Name 'HOST_LOG_MAX_SIZE_MB' -Default 10
     $maxFiles = Get-PositiveIntegerSetting -Name 'HOST_LOG_MAX_FILES' -Default 3
-    $retentionDays = Get-PositiveIntegerSetting -Name 'HOST_LOG_RETENTION_DAYS' -Default 14
+    $retentionDays = Get-PositiveIntegerSetting -Name 'HOST_LOG_RETENTION_DAYS' -Default 30
     $arguments = @(
         $runner,
         '--cwd', $WorkingDirectory,
@@ -219,7 +219,7 @@ function Start-ManagedProcess {
     $argumentLine = ($arguments | ForEach-Object { ConvertTo-NativeArgument -Value ([string]$_) }) -join ' '
     $process = Start-Process -FilePath 'node.exe' -ArgumentList $argumentLine -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru
     Set-Content -LiteralPath $PidFile -Value $process.Id -Encoding ascii
-    Write-Host "Started $Name (PID $($process.Id)); logs rotate at $($maxSizeMb)MB with $maxFiles total files." -ForegroundColor Green
+    Write-Host "Started $Name (PID $($process.Id)); logs rotate daily at $($maxSizeMb)MB with up to $maxFiles archives per natural day." -ForegroundColor Green
     return $process
 }
 

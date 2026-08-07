@@ -173,6 +173,8 @@ Content-Type: application/json
 
 - Java 会读取数据源配置并调用 Python 生成 SQL。
 - Java 只允许执行安全只读 `SELECT` / `WITH` SQL。
+- 数据库问答和报告变量生成默认最多执行 4 次 SQL 生成/修复尝试，可通过 `AI_DATABASE_QUERY_MAX_ATTEMPTS` 调整；可修复范围包括 MySQL `DISTINCT` + `ORDER BY` 规则、本地安全校验发现的多语句 SQL、语法错误和字段错误。
+- 数据库认证、网络连接、数据源配置错误等非 SQL 问题不会重试，会直接返回失败原因。
 - 不返回数据源密码密文或明文。
 
 ## 6. 智能路由

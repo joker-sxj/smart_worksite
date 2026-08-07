@@ -9,12 +9,11 @@ function fail(message) {
   process.exit(2);
 }
 
-function parsePositiveInteger(value, name) {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    fail(`${name} must be a positive integer, received: ${value}`);
+function positiveInteger(value, name) {
+  if (!/^\d+$/.test(value ?? '') || Number(value) <= 0) {
+    fail(`${name} must be a positive integer`);
   }
-  return parsed;
+  return Number(value);
 }
 
 function parseArguments(argv) {
@@ -23,63 +22,101 @@ function parseArguments(argv) {
     fail('usage: run-with-log-limit.mjs [options] -- command [args...]');
   }
 
-  const options = {};
-  for (let index = 0; index < separator; index += 2) {
-    const name = argv[index];
-    const value = argv[index + 1];
-    if (!name?.startsWith('--') || value === undefined) {
-      fail(`invalid option near: ${name ?? '<empty>'}`);
+  const optionArgs = argv.slice(0, separator);
+  const commandArgs = argv.slice(separator + 1);
+  const values = new Map();
+  for (let index = 0; index < optionArgs.length; index += 2) {
+    const key = optionArgs[index];
+    const value = optionArgs[index + 1];
+    if (!key?.startsWith('--') || value === undefined) {
+      fail(`invalid option near ${key ?? '<empty>'}`);
     }
-    options[name.slice(2)] = value;
+    values.set(key, value);
   }
 
-  const maxBytes = options['max-size-bytes']
-    ? parsePositiveInteger(options['max-size-bytes'], 'max-size-bytes')
-    : parsePositiveInteger(options['max-size-mb'] ?? '10', 'max-size-mb') * 1024 * 1024;
+  const cwd = values.get('--cwd');
+  const stdoutPath = values.get('--stdout');
+  const stderrPath = values.get('--stderr');
+  if (!cwd || !stdoutPath || !stderrPath) {
+    fail('--cwd, --stdout, and --stderr are required');
+  }
+
+  let maxBytes;
+  if (values.has('--max-size-bytes')) {
+    maxBytes = positiveInteger(values.get('--max-size-bytes'), '--max-size-bytes');
+  } else {
+    maxBytes = positiveInteger(values.get('--max-size-mb') ?? '10', '--max-size-mb') * 1024 * 1024;
+  }
 
   return {
-    cwd: path.resolve(options.cwd ?? process.cwd()),
-    stdoutPath: path.resolve(options.stdout ?? fail('missing --stdout')),
-    stderrPath: path.resolve(options.stderr ?? fail('missing --stderr')),
+    cwd: path.resolve(cwd),
+    stdoutPath: path.resolve(stdoutPath),
+    stderrPath: path.resolve(stderrPath),
     maxBytes,
-    maxFiles: parsePositiveInteger(options['max-files'] ?? '3', 'max-files'),
-    retentionDays: parsePositiveInteger(options['retention-days'] ?? '14', 'retention-days'),
-    command: argv[separator + 1],
-    commandArgs: argv.slice(separator + 2),
+    maxFilesPerDay: positiveInteger(values.get('--max-files') ?? '3', '--max-files'),
+    retentionDays: positiveInteger(values.get('--retention-days') ?? '30', '--retention-days'),
+    command: commandArgs[0],
+    commandArgs: commandArgs.slice(1),
   };
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function localDateKey(date = new Date()) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function naturalDayOrdinal(dateKey) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) return Number.NaN;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const timestamp = Date.UTC(year, month - 1, day);
+  const check = new Date(timestamp);
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) {
+    return Number.NaN;
+  }
+  return Math.floor(timestamp / 86400000);
+}
+
 class RotatingLog {
-  constructor(filePath, maxBytes, maxFiles, retentionDays) {
+  constructor(filePath, maxBytes, maxFilesPerDay, retentionDays) {
     this.filePath = filePath;
     this.maxBytes = maxBytes;
-    this.maxFiles = maxFiles;
+    this.maxFilesPerDay = maxFilesPerDay;
+    this.retentionDays = retentionDays;
+    this.fd = undefined;
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    this.prune(retentionDays);
-    this.trimToTail(filePath);
-    this.size = this.fileSize(filePath);
-    if (this.size >= this.maxBytes) {
-      this.rotate();
+
+    const today = localDateKey();
+    this.prune(today);
+    if (fs.existsSync(filePath)) {
+      this.trimToTail(filePath);
+      const stat = fs.statSync(filePath);
+      const fileDate = localDateKey(stat.mtime);
+      if (stat.size > 0 && fileDate !== today) {
+        this.archiveActive(fileDate);
+      }
     }
+
+    this.activeDate = today;
+    this.size = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
     this.fd = fs.openSync(filePath, 'a');
   }
 
-  fileSize(filePath) {
-    try {
-      return fs.statSync(filePath).size;
-    } catch (error) {
-      if (error.code === 'ENOENT') return 0;
-      throw error;
-    }
-  }
-
   trimToTail(filePath) {
-    const size = this.fileSize(filePath);
+    const size = fs.statSync(filePath).size;
     if (size <= this.maxBytes) return;
-
-    const tail = Buffer.allocUnsafe(this.maxBytes);
     const fd = fs.openSync(filePath, 'r');
     try {
+      const tail = Buffer.alloc(this.maxBytes);
       let bytesRead = 0;
       while (bytesRead < tail.length) {
         const count = fs.readSync(fd, tail, bytesRead, tail.length - bytesRead, size - tail.length + bytesRead);
@@ -92,56 +129,91 @@ class RotatingLog {
     }
   }
 
-  prune(retentionDays) {
-    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  archivePath(dateKey, index) {
+    return index === 1 ? `${this.filePath}.${dateKey}` : `${this.filePath}.${dateKey}.${index}`;
+  }
+
+  prune(today = localDateKey()) {
+    const cutoffOrdinal = naturalDayOrdinal(today) - this.retentionDays + 1;
     const directory = path.dirname(this.filePath);
     const baseName = path.basename(this.filePath);
+    const datedPattern = new RegExp(`^${escapeRegExp(baseName)}\\.(\\d{4}-\\d{2}-\\d{2})(?:\\.(\\d+))?$`);
+    const legacyPattern = new RegExp(`^${escapeRegExp(baseName)}\\.(\\d+)$`);
+
     for (const entry of fs.readdirSync(directory)) {
-      const match = entry.match(new RegExp(`^${escapeRegExp(baseName)}\\.(\\d+)$`));
-      if (!match) continue;
       const archivePath = path.join(directory, entry);
-      const archiveNumber = Number(match[1]);
-      const expired = fs.statSync(archivePath).mtimeMs < cutoff;
-      if (expired || archiveNumber >= this.maxFiles) {
+      const datedMatch = datedPattern.exec(entry);
+      if (datedMatch) {
+        const archiveOrdinal = naturalDayOrdinal(datedMatch[1]);
+        const part = Number(datedMatch[2] ?? '1');
+        if (!Number.isFinite(archiveOrdinal) || archiveOrdinal < cutoffOrdinal || part > this.maxFilesPerDay) {
+          fs.rmSync(archivePath, { force: true });
+        } else if (fs.statSync(archivePath).isFile()) {
+          this.trimToTail(archivePath);
+        }
+        continue;
+      }
+
+      const legacyMatch = legacyPattern.exec(entry);
+      if (!legacyMatch) continue;
+      const archiveOrdinal = naturalDayOrdinal(localDateKey(fs.statSync(archivePath).mtime));
+      if (archiveOrdinal < cutoffOrdinal || Number(legacyMatch[1]) >= this.maxFilesPerDay) {
         fs.rmSync(archivePath, { force: true });
-      } else {
+      } else if (fs.statSync(archivePath).isFile()) {
         this.trimToTail(archivePath);
       }
     }
   }
 
-  rotate() {
+  archiveActive(dateKey) {
     if (this.fd !== undefined) {
       fs.closeSync(this.fd);
       this.fd = undefined;
     }
-
-    if (this.maxFiles === 1) {
-      fs.writeFileSync(this.filePath, '');
+    if (!fs.existsSync(this.filePath) || fs.statSync(this.filePath).size === 0) {
+      fs.rmSync(this.filePath, { force: true });
       this.size = 0;
       return;
     }
 
-    fs.rmSync(`${this.filePath}.${this.maxFiles - 1}`, { force: true });
-    for (let index = this.maxFiles - 2; index >= 1; index -= 1) {
-      const source = `${this.filePath}.${index}`;
+    fs.rmSync(this.archivePath(dateKey, this.maxFilesPerDay), { force: true });
+    for (let index = this.maxFilesPerDay - 1; index >= 1; index -= 1) {
+      const source = this.archivePath(dateKey, index);
       if (fs.existsSync(source)) {
-        fs.renameSync(source, `${this.filePath}.${index + 1}`);
+        fs.renameSync(source, this.archivePath(dateKey, index + 1));
       }
     }
-    if (fs.existsSync(this.filePath)) {
-      fs.renameSync(this.filePath, `${this.filePath}.1`);
-    }
+    fs.renameSync(this.filePath, this.archivePath(dateKey, 1));
     this.size = 0;
+  }
+
+  reopen() {
+    this.fd = fs.openSync(this.filePath, 'a');
+    this.size = fs.statSync(this.filePath).size;
+  }
+
+  rotateForSize() {
+    this.archiveActive(this.activeDate);
+    this.reopen();
+  }
+
+  rotateForDay(today) {
+    this.archiveActive(this.activeDate);
+    this.activeDate = today;
+    this.prune(today);
+    this.reopen();
   }
 
   write(chunk) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     let offset = 0;
     while (offset < buffer.length) {
+      const today = localDateKey();
+      if (today !== this.activeDate) {
+        this.rotateForDay(today);
+      }
       if (this.size >= this.maxBytes) {
-        this.rotate();
-        this.fd = fs.openSync(this.filePath, 'a');
+        this.rotateForSize();
       }
       const length = Math.min(this.maxBytes - this.size, buffer.length - offset);
       fs.writeSync(this.fd, buffer, offset, length);
@@ -158,18 +230,24 @@ class RotatingLog {
   }
 }
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 const options = parseArguments(process.argv.slice(2));
 if (!fs.statSync(options.cwd).isDirectory()) {
   fail(`working directory does not exist: ${options.cwd}`);
 }
 process.chdir(options.cwd);
 
-const stdoutLog = new RotatingLog(options.stdoutPath, options.maxBytes, options.maxFiles, options.retentionDays);
-const stderrLog = new RotatingLog(options.stderrPath, options.maxBytes, options.maxFiles, options.retentionDays);
+const stdoutLog = new RotatingLog(
+  options.stdoutPath,
+  options.maxBytes,
+  options.maxFilesPerDay,
+  options.retentionDays,
+);
+const stderrLog = new RotatingLog(
+  options.stderrPath,
+  options.maxBytes,
+  options.maxFilesPerDay,
+  options.retentionDays,
+);
 const child = spawn(options.command, options.commandArgs, {
   cwd: options.cwd,
   env: process.env,

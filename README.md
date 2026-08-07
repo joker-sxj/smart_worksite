@@ -313,22 +313,22 @@ logs/frontend.err.log
 日志不会无限增长。默认策略可在 `deploy/.env` 调整：
 
 ```env
-# 每个 Java/Vue stdout 或 stderr 日志：单文件 10 MB，总共保留 3 个文件
+# Java/Vue stdout、stderr 按本地自然日归档；单个分卷 10 MB，每个日志流每天最多 3 个归档
 HOST_LOG_MAX_SIZE_MB=10
 HOST_LOG_MAX_FILES=3
-# 启动时清理 logs/ 下超过单文件上限或超过 14 天的旧式/人工日志
-HOST_LOG_RETENTION_DAYS=14
+# 包含当天在内保留最近 30 个自然日，启动和跨日写入时自动清理更早归档
+HOST_LOG_RETENTION_DAYS=30
 # 项目所在文件系统低于 2 GB 可用空间时拒绝启动，避免数据库和构建继续写满磁盘
 MIN_FREE_DISK_MB=2048
 
-# 每个 Docker 容器的 json-file 日志：单文件 10 MB，保留 3 个文件
+# Docker json-file 不支持按自然日清理；以容量兜底：单文件 10 MB，最多保留 30 个文件
 DOCKER_LOG_MAX_SIZE=10m
-DOCKER_LOG_MAX_FILES=3
+DOCKER_LOG_MAX_FILES=30
 # 默认关闭 Uvicorn 每请求访问日志；临时排查流量时才改为 true
 AI_ACCESS_LOG=false
 ```
 
-轮转文件使用 `.1`、`.2` 后缀。按默认值，Java/Vue 四个日志流合计上限约 120 MB；Java 自动拉起的本地 Python 服务输出也会并入后端受限日志，不再追加独立的 `python-ai-service.log`；Docker 日志按每个容器约 30 MB 封顶。修改 Docker 日志参数后必须重建容器才能生效，数据卷不会被删除：
+宿主机归档使用 `.YYYY-MM-DD`、`.YYYY-MM-DD.2` 等后缀，包含当天在内保留最近 30 个自然日；单日异常刷屏仍受单文件大小和每日分卷数限制。Java 自动拉起的本地 Python 服务输出会并入后端受限日志，不再追加独立的 `python-ai-service.log`。Docker `json-file` 驱动不支持精确按自然日删除，因此按默认每容器约 300 MB 容量封顶，作为磁盘安全兜底；修改 Docker 日志参数后必须重建容器才能生效，数据卷不会被删除：
 
 ```bash
 ./scripts/stop-all.sh
@@ -653,6 +653,8 @@ Knowledge write rule: knowledge-base updates must check affected rows; document 
 | POST | `/api/ai/route` | 获取问答路由决策 |
 | POST | `/api/ai/context/prepare` | 准备模型调用上下文 |
 | GET | `/api/ai/external-call-logs` | 分页查询 AI 外部调用日志 |
+
+数据库问答和报告变量生成会对可修复 SQL 错误进行有限自动修正，默认最多 4 次 SQL 生成/修复尝试，可通过 `AI_DATABASE_QUERY_MAX_ATTEMPTS` 调整。修复范围包括 MySQL `DISTINCT` + `ORDER BY` 规则、本地安全校验发现的多语句 SQL、语法错误和字段错误；数据库认证、连接失败等非 SQL 问题不会重试。
 
 ### QA
 

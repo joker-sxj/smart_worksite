@@ -17,6 +17,8 @@ import com.xd.smartworksite.ai.infra.SafeSqlExecutor;
 import com.xd.smartworksite.ai.repository.AiRepository;
 import com.xd.smartworksite.auth.domain.ProjectMember;
 import com.xd.smartworksite.auth.mapper.ProjectMemberMapper;
+import com.xd.smartworksite.common.exception.BusinessException;
+import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.common.security.UserPrincipal;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
 import com.xd.smartworksite.project.domain.Project;
@@ -151,6 +153,92 @@ class AiApplicationServiceTest {
         verify(pythonClient).post(eq(properties.getPaths().getDatabaseSummarizeResult()),
                 eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), argThat(payload ->
                         correctedSql.equals(((Map<?, ?>) payload).get("sql"))));
+    }
+
+    @Test
+    void repairsDatabaseSqlAfterLocalValidationRejectsMultiStatementSql() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        DataSourceRecord dataSource = dataSource();
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource);
+        when(sqlExecutor.describeSchema(dataSource)).thenReturn("report(id, created_at)");
+
+        String rejectedSql = "SELECT id FROM report; SELECT created_at FROM report";
+        String correctedSql = "SELECT id, created_at FROM report ORDER BY created_at DESC";
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(
+                        provider("generate-1", Map.of("sql", rejectedSql, "parameters", Map.of())),
+                        provider("generate-2", Map.of("sql", correctedSql, "parameters", Map.of()))
+                );
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseSummarizeResult()),
+                eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), any()))
+                .thenReturn(provider("summary", Map.of("summary", "查询成功", "warnings", List.of())));
+        org.mockito.Mockito.doThrow(new BusinessException(ErrorCode.FORBIDDEN, "数据库问答不允许多语句SQL"))
+                .when(sqlExecutor).validate(dataSource, rejectedSql);
+        SafeSqlExecutor.QueryResult queryResult = new SafeSqlExecutor.QueryResult(
+                List.of("id", "created_at"), List.of(Map.of("id", 1)));
+        when(sqlExecutor.execute(dataSource, correctedSql, Map.of())).thenReturn(queryResult);
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getSql()).isEqualTo(correctedSql);
+        verify(sqlExecutor, never()).execute(dataSource, rejectedSql, Map.of());
+        verify(pythonClient).post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), argThat(payload -> {
+                    Map<?, ?> map = (Map<?, ?>) payload;
+                    return rejectedSql.equals(map.get("failedSql"))
+                            && String.valueOf(map.get("databaseError")).contains("多语句")
+                            && Integer.valueOf(2).equals(map.get("attempt"));
+                }));
+    }
+
+    @Test
+    void continuesRepairingDatabaseSqlUntilConfiguredAttemptLimit() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        properties.getDatabase().setQueryMaxAttempts(4);
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        DataSourceRecord dataSource = dataSource();
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource);
+        when(sqlExecutor.describeSchema(dataSource)).thenReturn("report_variable_value(variable_name, created_at)");
+
+        String badDistinct = "SELECT DISTINCT rv.variable_name FROM report_variable_value rv ORDER BY rv.created_at DESC";
+        String badMulti = "SELECT variable_name FROM report_variable_value; SELECT created_at FROM report_variable_value";
+        String correctedSql = "SELECT DISTINCT rv.variable_name, rv.created_at FROM report_variable_value rv ORDER BY rv.created_at DESC";
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(
+                        provider("generate-1", Map.of("sql", badDistinct, "parameters", Map.of())),
+                        provider("generate-2", Map.of("sql", badDistinct, "parameters", Map.of())),
+                        provider("generate-3", Map.of("sql", badMulti, "parameters", Map.of())),
+                        provider("generate-4", Map.of("sql", correctedSql, "parameters", Map.of()))
+                );
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseSummarizeResult()),
+                eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), any()))
+                .thenReturn(provider("summary", Map.of("summary", "查询成功", "warnings", List.of())));
+        when(sqlExecutor.execute(dataSource, badDistinct, Map.of())).thenThrow(
+                new SafeSqlExecutor.QueryExecutionException(
+                        "Expression #1 of ORDER BY clause is not in SELECT list", "42000", 3065, null));
+        org.mockito.Mockito.doThrow(new BusinessException(ErrorCode.FORBIDDEN, "数据库问答不允许多语句SQL"))
+                .when(sqlExecutor).validate(dataSource, badMulti);
+        SafeSqlExecutor.QueryResult queryResult = new SafeSqlExecutor.QueryResult(
+                List.of("variable_name", "created_at"), List.of(Map.of("variable_name", "var_summary")));
+        when(sqlExecutor.execute(dataSource, correctedSql, Map.of())).thenReturn(queryResult);
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getSql()).isEqualTo(correctedSql);
+        verify(pythonClient, times(4)).post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any());
+        verify(sqlExecutor, never()).execute(dataSource, badMulti, Map.of());
     }
 
     @Test

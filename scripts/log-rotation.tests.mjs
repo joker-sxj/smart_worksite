@@ -14,8 +14,18 @@ const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'smart-worksite-log-
 try {
   const stdoutPath = path.join(tempDirectory, 'service.out.log');
   const stderrPath = path.join(tempDirectory, 'service.err.log');
-  fs.writeFileSync(`${stdoutPath}.9`, 'stale archive');
-  fs.utimesSync(`${stdoutPath}.9`, new Date(0), new Date(0));
+  const today = new Date();
+  const recentDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29);
+  const expiredDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 30);
+  const formatDate = (date) => [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+  const recentArchive = `${stdoutPath}.${formatDate(recentDate)}`;
+  const expiredArchive = `${stdoutPath}.${formatDate(expiredDate)}`;
+  fs.writeFileSync(recentArchive, 'recent archive');
+  fs.writeFileSync(expiredArchive, 'expired archive');
 
   const childScript = [
     "process.stdout.write('O'.repeat(2048));",
@@ -28,20 +38,32 @@ try {
     '--stderr', stderrPath,
     '--max-size-bytes', '256',
     '--max-files', '3',
-    '--retention-days', '1',
+    '--retention-days', '30',
     '--', process.execPath, '-e', childScript,
   ], { encoding: 'utf8' });
 
   assert.equal(result.status, 0, `runner failed: ${result.stderr}`);
-  assert.equal(fs.existsSync(`${stdoutPath}.9`), false, 'stale/excess archive was not deleted');
+  assert.equal(fs.existsSync(expiredArchive), false, 'archive outside the 30-day natural-day window was not deleted');
+  assert.equal(fs.existsSync(recentArchive), true, 'archive on the 30-day inclusive boundary was deleted');
+  assert.ok(
+    fs.readdirSync(tempDirectory).some((entry) => /^service\.out\.log\.\d{4}-\d{2}-\d{2}(?:\.\d+)?$/.test(entry)),
+    'rotated logs must use natural-day archive names',
+  );
 
   for (const logPath of [stdoutPath, stderrPath]) {
     const matchingFiles = fs.readdirSync(tempDirectory)
       .filter((entry) => entry === path.basename(logPath) || entry.startsWith(`${path.basename(logPath)}.`));
     assert.ok(matchingFiles.length >= 2, `${logPath} did not rotate`);
-    assert.ok(matchingFiles.length <= 3, `${logPath} exceeded max-files`);
+    const archiveCountsByDay = new Map();
     for (const entry of matchingFiles) {
       assert.ok(fs.statSync(path.join(tempDirectory, entry)).size <= 256, `${entry} exceeded max-size-bytes`);
+      const archiveMatch = entry.match(/\.(\d{4}-\d{2}-\d{2})(?:\.\d+)?$/);
+      if (archiveMatch) {
+        archiveCountsByDay.set(archiveMatch[1], (archiveCountsByDay.get(archiveMatch[1]) ?? 0) + 1);
+      }
+    }
+    for (const [date, count] of archiveCountsByDay) {
+      assert.ok(count <= 3, `${logPath} exceeded max-files for ${date}`);
     }
   }
 
@@ -55,7 +77,7 @@ try {
     '--stderr', path.join(tempDirectory, 'existing.err.log'),
     '--max-size-bytes', '256',
     '--max-files', '3',
-    '--retention-days', '1',
+    '--retention-days', '30',
     '--', process.execPath, '-e', '',
   ], { encoding: 'utf8' });
   assert.equal(existingResult.status, 0, `runner failed while bounding existing logs: ${existingResult.stderr}`);
@@ -81,14 +103,14 @@ try {
     '--stderr', path.join(tempDirectory, 'exit.err.log'),
     '--max-size-bytes', '256',
     '--max-files', '2',
-    '--retention-days', '1',
+    '--retention-days', '30',
     '--', process.execPath, '-e', "process.stderr.write('expected failure'); process.exit(7)",
   ], { encoding: 'utf8' });
   assert.equal(exitResult.status, 7, 'child exit code was not propagated');
   assert.match(fs.readFileSync(path.join(tempDirectory, 'exit.err.log'), 'utf8'), /expected failure/);
 
   const writeFailurePath = path.join(tempDirectory, 'write-failure.out.log');
-  fs.mkdirSync(`${writeFailurePath}.1`);
+  fs.mkdirSync(`${writeFailurePath}.${formatDate(today)}`);
   const writeFailureResult = spawnSync(process.execPath, [
     runner,
     '--cwd', tempDirectory,
@@ -96,7 +118,7 @@ try {
     '--stderr', path.join(tempDirectory, 'write-failure.err.log'),
     '--max-size-bytes', '64',
     '--max-files', '2',
-    '--retention-days', '1',
+    '--retention-days', '30',
     '--', process.execPath, '-e', "setInterval(() => process.stdout.write('X'.repeat(128)), 10)",
   ], { encoding: 'utf8', timeout: 5000 });
   assert.notEqual(writeFailureResult.error?.code, 'ETIMEDOUT', 'runner left child alive after a log write failure');

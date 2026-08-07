@@ -159,7 +159,7 @@ java_major_version() {
 cleanup_stale_project_logs() {
   local log_dir="$1" retention_days max_size_mb
   [[ -d "$log_dir" ]] || return 0
-  retention_days="$(positive_integer_or_default "${HOST_LOG_RETENTION_DAYS:-}" 14)"
+  retention_days="$(positive_integer_or_default "${HOST_LOG_RETENTION_DAYS:-}" 30)"
   max_size_mb="$(positive_integer_or_default "${HOST_LOG_MAX_SIZE_MB:-}" 10)"
   find "$log_dir" -maxdepth 1 -type f -name '*.log' \( -mtime "+$retention_days" -o -size +"${max_size_mb}"M \) \
     ! -name 'backend.out.log' ! -name 'backend.out.log.[0-9]*' \
@@ -182,14 +182,14 @@ start_managed() {
   [[ -f "$runner" ]] || { printf 'Log runner not found: %s\n' "$runner" >&2; return 1; }
   max_size_mb="$(positive_integer_or_default "${HOST_LOG_MAX_SIZE_MB:-}" 10)"
   max_files="$(positive_integer_or_default "${HOST_LOG_MAX_FILES:-}" 3)"
-  retention_days="$(positive_integer_or_default "${HOST_LOG_RETENTION_DAYS:-}" 14)"
+  retention_days="$(positive_integer_or_default "${HOST_LOG_RETENTION_DAYS:-}" 30)"
   nohup node "$runner" \
     --cwd "$cwd" --stdout "$out_file" --stderr "$err_file" \
     --max-size-mb "$max_size_mb" --max-files "$max_files" --retention-days "$retention_days" \
     -- bash -c "$command_text" </dev/null >/dev/null 2>&1 &
   pid=$!
   printf '%s\n' "$pid" > "$pid_file"
-  printf 'Started %s (PID %s); logs rotate at %sMB with %s total files.\n' "$name" "$pid" "$max_size_mb" "$max_files"
+  printf 'Started %s (PID %s); logs rotate daily at %sMB with up to %s archives per natural day.\n' "$name" "$pid" "$max_size_mb" "$max_files"
 }
 
 kill_tree() {

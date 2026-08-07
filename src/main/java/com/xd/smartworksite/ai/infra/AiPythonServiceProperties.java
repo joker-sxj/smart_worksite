@@ -89,10 +89,13 @@ public class AiPythonServiceProperties {
     public static class Database {
         private int maxRows = 100;
         private int queryTimeoutSeconds = 15;
+        private int queryMaxAttempts = 4;
         public int getMaxRows() { return maxRows; }
         public void setMaxRows(int maxRows) { this.maxRows = maxRows; }
         public int getQueryTimeoutSeconds() { return queryTimeoutSeconds; }
         public void setQueryTimeoutSeconds(int queryTimeoutSeconds) { this.queryTimeoutSeconds = queryTimeoutSeconds; }
+        public int getQueryMaxAttempts() { return queryMaxAttempts; }
+        public void setQueryMaxAttempts(int queryMaxAttempts) { this.queryMaxAttempts = queryMaxAttempts; }
     }
 
     public static class Security {

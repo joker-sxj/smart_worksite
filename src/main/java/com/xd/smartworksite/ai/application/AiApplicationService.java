@@ -146,25 +146,41 @@ public class AiApplicationService {
             throw new BusinessException(ErrorCode.NOT_FOUND, "数据源不存在或未启用");
         }
         String schemaSummary = buildSchemaSummary(dataSource, request.getContext());
-        GeneratedQuery generatedQuery = generateDatabaseQuery(
-                request, dataSource, schemaSummary, null, null, 1);
-        SafeSqlExecutor.QueryResult queryResult;
-        try {
-            queryResult = safeSqlExecutor.execute(
-                    dataSource, generatedQuery.sql(), generatedQuery.parameters());
-        } catch (SafeSqlExecutor.QueryExecutionException ex) {
-            if (!ex.isRepairable()) {
-                throw databaseQueryFailure(ex);
-            }
+        GeneratedQuery generatedQuery = null;
+        SafeSqlExecutor.QueryResult queryResult = null;
+        String failedSql = null;
+        String databaseError = null;
+        int maxAttempts = Math.max(1, Math.min(properties.getDatabase().getQueryMaxAttempts(), 6));
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             generatedQuery = generateDatabaseQuery(
-                    request, dataSource, schemaSummary, generatedQuery.sql(), ex.getMessage(), 2);
+                    request, dataSource, schemaSummary, failedSql, databaseError, attempt);
+            try {
+                safeSqlExecutor.validate(dataSource, generatedQuery.sql());
+            } catch (BusinessException validationEx) {
+                failedSql = generatedQuery.sql();
+                databaseError = validationEx.getMessage();
+                if (attempt == maxAttempts) {
+                    throw repairedDatabaseQueryFailure(databaseError);
+                }
+                continue;
+            }
             try {
                 queryResult = safeSqlExecutor.execute(
                         dataSource, generatedQuery.sql(), generatedQuery.parameters());
-            } catch (SafeSqlExecutor.QueryExecutionException retryEx) {
-                throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
-                        "数据库问答查询失败，SQL自动修正后仍失败: " + retryEx.getMessage());
+                break;
+            } catch (SafeSqlExecutor.QueryExecutionException ex) {
+                if (!ex.isRepairable()) {
+                    throw databaseQueryFailure(ex);
+                }
+                failedSql = generatedQuery.sql();
+                databaseError = ex.getMessage();
+                if (attempt == maxAttempts) {
+                    throw repairedDatabaseQueryFailure(databaseError);
+                }
             }
+        }
+        if (generatedQuery == null || queryResult == null) {
+            throw repairedDatabaseQueryFailure(databaseError == null ? "未生成可执行SQL" : databaseError);
         }
 
         Map<String, Object> summarizePayload = new LinkedHashMap<>();
@@ -209,13 +225,17 @@ public class AiApplicationService {
         Map<String, Object> generatedData = generated.getData();
         String sql = String.valueOf(generatedData.getOrDefault("sql", ""));
         Map<String, Object> parameters = extractSqlParameters(generatedData.get("parameters"));
-        safeSqlExecutor.validate(dataSource, sql);
         return new GeneratedQuery(sql, parameters);
     }
 
     private BusinessException databaseQueryFailure(SafeSqlExecutor.QueryExecutionException ex) {
         return new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
                 "数据库问答查询失败: " + ex.getMessage());
+    }
+
+    private BusinessException repairedDatabaseQueryFailure(String message) {
+        return new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                "数据库问答查询失败，SQL自动修正后仍失败: " + message);
     }
 
     private record GeneratedQuery(String sql, Map<String, Object> parameters) {
