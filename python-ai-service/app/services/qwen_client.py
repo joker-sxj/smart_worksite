@@ -1,4 +1,5 @@
 import base64
+import binascii
 import json
 import mimetypes
 import re
@@ -51,17 +52,21 @@ class QwenClient:
             raise ValueError("Qwen JSON response must be an object")
         return data, usage
 
-    async def vision_json_chat(self, prompt: str, file_url: str, content_type: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    async def vision_json_chat(self, prompt: str, file_sources: str | list[str], content_type: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
         api_key = self.settings.qwen_vl_api_key or self.settings.qwen_api_key
         if not api_key:
             raise RuntimeError("QWEN_VL_API_KEY is not configured")
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         normalized_type = self._normalize_mime_type(content_type)
-        if normalized_type == "application/pdf" or file_url.lower().split("?", 1)[0].endswith(".pdf"):
-            content.append({"type": "file_url", "file_url": {"url": file_url}})
-        else:
-            image_data_url = await self._download_image_as_data_url(file_url, normalized_type)
-            content.append({"type": "image_url", "image_url": {"url": image_data_url}})
+        sources = [file_sources] if isinstance(file_sources, str) else file_sources
+        if not sources:
+            raise RuntimeError("OCR file source is empty")
+        for file_url in sources:
+            if normalized_type == "application/pdf" and not file_url.startswith("data:image/"):
+                content.append({"type": "file_url", "file_url": {"url": file_url}})
+            else:
+                image_data_url = await self._download_image_as_data_url(file_url, normalized_type)
+                content.append({"type": "image_url", "image_url": {"url": image_data_url}})
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -109,6 +114,7 @@ class QwenClient:
 
     async def _download_image_as_data_url(self, file_url: str, content_type: str | None) -> str:
         if file_url.startswith("data:image/"):
+            self._validate_image_data_url(file_url)
             return file_url
 
         async with httpx.AsyncClient(
@@ -121,6 +127,11 @@ class QwenClient:
                 response.raise_for_status()
             except httpx.HTTPStatusError as ex:
                 raise RuntimeError(self._format_http_error("OCR file download failed", ex)) from ex
+            except httpx.RequestError as ex:
+                host = urlparse(file_url).hostname or "unknown"
+                raise RuntimeError(
+                    f"OCR file download failed (host={host}): {ex.__class__.__name__}"
+                ) from ex
 
         data = response.content
         if len(data) > self.settings.qwen_vl_max_image_bytes:
@@ -139,6 +150,20 @@ class QwenClient:
 
         encoded = base64.b64encode(data).decode("ascii")
         return f"data:{mime_type};base64,{encoded}"
+
+    def _validate_image_data_url(self, data_url: str) -> None:
+        try:
+            header, encoded = data_url.split(",", 1)
+            if ";base64" not in header:
+                raise ValueError("not base64 encoded")
+            data = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as ex:
+            raise RuntimeError("OCR inline image data URL is invalid") from ex
+        if len(data) > self.settings.qwen_vl_max_image_bytes:
+            raise RuntimeError(
+                "OCR image is too large for base64 Qwen VL request: "
+                f"{len(data)} bytes > {self.settings.qwen_vl_max_image_bytes} bytes"
+            )
 
     def _resolve_image_mime_type(self, *candidates: str | None) -> str:
         fallback = ""

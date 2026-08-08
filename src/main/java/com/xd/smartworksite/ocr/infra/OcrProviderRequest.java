@@ -1,6 +1,7 @@
 package com.xd.smartworksite.ocr.infra;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public class OcrProviderRequest {
@@ -26,6 +27,7 @@ public class OcrProviderRequest {
         private String fileName;
         private String contentType;
         private String downloadUrl;
+        private List<String> dataUrls;
 
         public Long getFileId() { return fileId; }
         public void setFileId(Long fileId) { this.fileId = fileId; }
@@ -35,5 +37,7 @@ public class OcrProviderRequest {
         public void setContentType(String contentType) { this.contentType = contentType; }
         public String getDownloadUrl() { return downloadUrl; }
         public void setDownloadUrl(String downloadUrl) { this.downloadUrl = downloadUrl; }
+        public List<String> getDataUrls() { return dataUrls; }
+        public void setDataUrls(List<String> dataUrls) { this.dataUrls = dataUrls; }
     }
 }

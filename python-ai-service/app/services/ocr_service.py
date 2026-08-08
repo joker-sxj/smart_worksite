@@ -46,9 +46,12 @@ class OcrService:
     async def recognize(self, request: OcrRecognizeRequest) -> tuple[OcrRecognizeData, dict[str, Any]]:
         ocr_type = self._normalize_type(request.ocrType)
         prompt = self._build_prompt(request, ocr_type)
+        file_sources = request.file.dataUrls or ([request.file.downloadUrl] if request.file.downloadUrl else [])
+        if not file_sources:
+            raise ValueError("OCR file requires dataUrls or downloadUrl")
         raw, usage = await self.qwen.vision_json_chat(
             prompt,
-            request.file.downloadUrl,
+            file_sources,
             request.file.contentType,
         )
         data = self._normalize_response(raw, ocr_type)
@@ -64,14 +67,22 @@ class OcrService:
 
     def _build_prompt(self, request: OcrRecognizeRequest, ocr_type: str) -> str:
         fields = self._field_definitions(request, ocr_type)
+        type_instruction = {
+            "ID_CARD": "仅在extras.watermark中返回detected、type、text、confidence；extras不要包含其他类型结构。",
+            "LICENSE_PLATE": "仅在extras.plate中返回number、backgroundColor、fontColor、plateType、bbox；extras不要包含其他类型结构。",
+            "INVOICE": "仅在extras.items中返回最多50条可见明细，并在extras.validation中返回金额校验结果。",
+            "CUSTOM": "extras返回空对象，自定义字段尽量返回evidence和pageNo。",
+        }[ocr_type]
         return (
-            "你是智慧工地OCR字段抽取服务。请识别上传的图片或PDF文件，并严格返回JSON对象，不要返回Markdown。\n"
+            "你是智慧工地OCR字段抽取服务。请识别上传的图片或PDF页面，并严格返回JSON对象，不要返回Markdown。\n"
             f"OCR类型: {ocr_type}\n"
             f"文件名: {request.file.fileName}\n"
             f"内容类型: {request.file.contentType or 'unknown'}\n"
             f"额外选项: {request.options}\n"
             f"需要抽取的字段定义: {fields}\n"
-            "只允许输出一个紧凑JSON对象，不要输出Markdown、注释或解释。所有字符串必须使用英文双引号，字符串内部双引号必须转义，evidence不要超过80个中文字符。\n"
+            "fields数组必须与字段定义一一对应，不得增加字段或重复字段。"
+            "只允许输出一个紧凑JSON对象，不要输出Markdown、注释或解释。"
+            "所有字符串必须使用英文双引号，evidence不要超过80个中文字符，raw固定返回空对象。\n"
             "输出JSON格式必须为: {"
             "\"ocrType\":\"...\","
             "\"confidence\":0到1之间数字,"
@@ -80,10 +91,7 @@ class OcrService:
             "\"raw\":{}"
             "}。\n"
             "如果字段不可见或无法确认，fieldValue返回空字符串，confidence返回0到0.3之间，不要编造。"
-            "身份证水印需要在extras.watermark中返回detected、type、text、confidence。"
-            "车牌需要在extras.plate中返回number、backgroundColor、fontColor、plateType、bbox。"
-            "发票需要在extras.items中返回明细行，并在extras.validation中返回金额校验结果。"
-            "自定义合同字段需要尽量返回evidence和pageNo。"
+            + type_instruction
         )
 
     def _field_definitions(self, request: OcrRecognizeRequest, ocr_type: str) -> list[dict[str, Any]]:

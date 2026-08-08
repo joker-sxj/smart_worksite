@@ -170,7 +170,8 @@ class OcrFilePayload(BaseModel):
     fileId: int
     fileName: str
     contentType: str | None = None
-    downloadUrl: str
+    downloadUrl: str | None = None
+    dataUrls: list[str] = Field(default_factory=list)
 
 
 class OcrRecognizeRequest(BaseModel):

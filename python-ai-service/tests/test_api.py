@@ -806,3 +806,133 @@ def test_qwen_embedding_error_includes_provider_body(monkeypatch):
     assert "input is too long" in message
     assert "inputCount=3" in message
     assert "api_key" not in message.lower()
+
+def test_ocr_accepts_inline_images_for_all_supported_types_without_downloading(monkeypatch):
+    from app.models.schemas import OcrFilePayload, OcrRecognizeRequest
+    from app.services.ocr_service import OcrService
+
+    captured = []
+
+    class FakeQwen:
+        async def vision_json_chat(self, prompt, file_sources, content_type):
+            captured.append(file_sources)
+            return {"ocrType": "TEST", "confidence": 1, "fields": []}, {}
+
+    data_url = "data:image/jpeg;base64,ZmFrZS1pbWFnZQ=="
+    for ocr_type in ("ID_CARD", "LICENSE_PLATE", "INVOICE", "CUSTOM", "CONTRACT"):
+        options = {}
+        if ocr_type == "INVOICE":
+            options["invoiceType"] = "VAT_NORMAL"
+        if ocr_type in {"CUSTOM", "CONTRACT"}:
+            options["customFields"] = [{"fieldKey": "partyA", "fieldName": "甲方"}]
+        request = OcrRecognizeRequest(
+            projectId=1,
+            recordId=1,
+            ocrType=ocr_type,
+            file=OcrFilePayload(
+                fileId=1,
+                fileName="input.jpg",
+                contentType="image/jpeg",
+                dataUrls=[data_url],
+            ),
+            options=options,
+        )
+        asyncio.run(OcrService(FakeQwen()).recognize(request))
+
+    assert captured == [[data_url]] * 5
+
+def test_ocr_accepts_inline_images_for_all_supported_types_without_downloading():
+    from app.models.schemas import OcrFilePayload, OcrRecognizeRequest
+    from app.services.ocr_service import OcrService
+
+    captured = []
+
+    class FakeQwen:
+        async def vision_json_chat(self, prompt, file_sources, content_type):
+            captured.append(file_sources)
+            return {"ocrType": "TEST", "confidence": 1, "fields": []}, {}
+
+    data_url = "data:image/jpeg;base64,ZmFrZS1pbWFnZQ=="
+    for ocr_type in ("ID_CARD", "LICENSE_PLATE", "INVOICE", "CUSTOM", "CONTRACT"):
+        options = {}
+        if ocr_type == "INVOICE":
+            options["invoiceType"] = "VAT_NORMAL"
+        if ocr_type in {"CUSTOM", "CONTRACT"}:
+            options["customFields"] = [{"fieldKey": "partyA", "fieldName": "甲方"}]
+        request = OcrRecognizeRequest(
+            projectId=1,
+            recordId=1,
+            ocrType=ocr_type,
+            file=OcrFilePayload(
+                fileId=1,
+                fileName="input.jpg",
+                contentType="image/jpeg",
+                dataUrls=[data_url],
+            ),
+            options=options,
+        )
+        asyncio.run(OcrService(FakeQwen()).recognize(request))
+
+    assert captured == [[data_url]] * 5
+
+
+
+def test_qwen_vl_forwards_multiple_inline_images_without_http_download(monkeypatch):
+    from app.services import qwen_client as qwen_module
+
+    settings = Settings(qwen_vl_api_key="test-key")
+    client = QwenClient(settings)
+    first = "data:image/jpeg;base64,Zmlyc3Q="
+    second = "data:image/png;base64,c2Vjb25k"
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "{\"ocrType\":\"CUSTOM\",\"fields\":[]}"}}],
+                "usage": {},
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url):
+            raise AssertionError("inline OCR images must not be downloaded over HTTP")
+
+        async def post(self, url, headers=None, json=None):
+            captured["content"] = json["messages"][0]["content"]
+            return FakeResponse()
+
+    monkeypatch.setattr(qwen_module.httpx, "AsyncClient", FakeAsyncClient)
+    raw, _ = asyncio.run(client.vision_json_chat("extract", [first, second], "application/pdf"))
+
+    assert [item["image_url"]["url"] for item in captured["content"][1:]] == [first, second]
+    assert raw["ocrType"] == "CUSTOM"
+
+
+def test_ocr_prompt_only_requests_type_specific_extras():
+    from app.models.schemas import OcrFilePayload, OcrRecognizeRequest
+    from app.services.ocr_service import OcrService
+
+    service = OcrService(object())
+    file = OcrFilePayload(fileId=1, fileName="input.jpg", contentType="image/jpeg", downloadUrl="http://example/input.jpg")
+
+    id_prompt = service._build_prompt(OcrRecognizeRequest(projectId=1, recordId=1, ocrType="ID_CARD", file=file), "ID_CARD")
+    assert "extras.watermark" in id_prompt
+    assert "extras.plate" not in id_prompt
+    assert "extras.items" not in id_prompt
+
+    plate_prompt = service._build_prompt(OcrRecognizeRequest(projectId=1, recordId=2, ocrType="LICENSE_PLATE", file=file), "LICENSE_PLATE")
+    assert "extras.plate" in plate_prompt
+    assert "extras.watermark" not in plate_prompt
+    assert "extras.items" not in plate_prompt
