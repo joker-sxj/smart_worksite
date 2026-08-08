@@ -76,18 +76,29 @@ class QwenClient:
         try:
             return self._parse_vision_json_body(body)
         except json.JSONDecodeError:
-            retry_content = self._replace_prompt(content, self._build_json_retry_prompt(prompt))
-            retry_body = await self._post_qwen_vl(retry_content, headers)
+            # Repair the exact OCR result without images first. Re-running vision tends to
+            # reproduce the same quoting/comma mistakes and costs another full OCR pass.
+            repair_content = [{
+                "type": "text",
+                "text": self._build_json_repair_prompt(self._extract_message_content(body)),
+            }]
+            repair_body = await self._post_qwen_vl(repair_content, headers)
             try:
-                return self._parse_vision_json_body(retry_body)
-            except json.JSONDecodeError as retry_ex:
-                raise RuntimeError(self._format_json_parse_error(retry_body, retry_ex)) from retry_ex
+                return self._parse_vision_json_body(repair_body)
+            except json.JSONDecodeError:
+                retry_content = self._replace_prompt(content, self._build_json_retry_prompt(prompt))
+                retry_body = await self._post_qwen_vl(retry_content, headers)
+                try:
+                    return self._parse_vision_json_body(retry_body)
+                except json.JSONDecodeError as retry_ex:
+                    raise RuntimeError(self._format_json_parse_error(retry_body, retry_ex)) from retry_ex
 
     async def _post_qwen_vl(self, content: list[dict[str, Any]], headers: dict[str, str]) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.settings.qwen_vl_model,
             "messages": [{"role": "user", "content": content}],
             "response_format": {"type": "json_object"},
+            "presence_penalty": 1.5,
         }
         if self.settings.qwen_vl_max_tokens > 0:
             payload["max_tokens"] = self.settings.qwen_vl_max_tokens
@@ -204,7 +215,14 @@ class QwenClient:
 
         last_error: json.JSONDecodeError | None = None
         for candidate in candidates:
-            for item in (candidate, self._remove_trailing_commas(candidate)):
+            completed = self._complete_json_delimiters(candidate)
+            variants = (
+                candidate,
+                self._remove_trailing_commas(candidate),
+                completed,
+                self._remove_trailing_commas(completed),
+            )
+            for item in variants:
                 try:
                     value = json.loads(item)
                 except json.JSONDecodeError as ex:
@@ -233,8 +251,43 @@ class QwenClient:
             return text[start:end + 1]
         return ""
 
+    def _complete_json_delimiters(self, text: str) -> str:
+        stack: list[str] = []
+        in_string = False
+        escaped = False
+        for char in text:
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                stack.append("}")
+            elif char == "[":
+                stack.append("]")
+            elif char in "}]":
+                if not stack or stack[-1] != char:
+                    return text
+                stack.pop()
+        if in_string or not stack:
+            return text
+        return text.rstrip() + "".join(reversed(stack))
+
     def _remove_trailing_commas(self, text: str) -> str:
         return re.sub(r",\s*([}\]])", r"\1", text)
+
+    def _build_json_repair_prompt(self, invalid_json: str) -> str:
+        return (
+            "你是JSON语法修复器。只修复JSON语法，不要重新识别、概括、删减或改写任何字段和值。"
+            "补齐缺失的逗号、引号、括号和必要转义，并只输出一个完整的紧凑JSON对象；"
+            "不要返回Markdown、注释或解释。待修复内容如下：\n"
+            + invalid_json
+        )
 
     def _build_json_retry_prompt(self, prompt: str) -> str:
         return (

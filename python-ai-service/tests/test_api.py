@@ -292,6 +292,7 @@ def test_qwen_vl_converts_image_url_to_data_url_before_provider_call(monkeypatch
             assert url == settings.qwen_vl_endpoint
             captured["image_url"] = json["messages"][0]["content"][1]["image_url"]["url"]
             captured["max_tokens"] = json["max_tokens"]
+            captured["presence_penalty"] = json["presence_penalty"]
             return FakeResponse(body={
                 "choices": [{
                     "message": {
@@ -312,9 +313,56 @@ def test_qwen_vl_converts_image_url_to_data_url_before_provider_call(monkeypatch
     assert captured["download_trust_env"] is False
     assert captured["image_url"] == expected
     assert captured["max_tokens"] == settings.qwen_vl_max_tokens
+    assert captured["presence_penalty"] == 1.5
     assert raw["ocrType"] == "ID_CARD"
     assert usage["provider"] == "QWEN_VL"
 
+
+def test_qwen_vl_completes_missing_closing_delimiters_without_another_call(monkeypatch):
+    import asyncio
+    from app.services import qwen_client as qwen_module
+
+    client = QwenClient(Settings(qwen_vl_api_key="test-key"))
+    payloads = []
+
+    class FakeResponse:
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {"content": '{"ocrType":"LICENSE_PLATE","fields":[],"raw":{}   '},
+                    "finish_reason": "stop",
+                }],
+                "usage": {},
+            }
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers=None, json=None):
+            payloads.append(json)
+            return FakeResponse()
+
+    monkeypatch.setattr(qwen_module.httpx, "AsyncClient", FakeAsyncClient)
+    raw, _ = asyncio.run(client.vision_json_chat(
+        "return JSON",
+        "data:image/jpeg;base64,ZmFrZQ==",
+        "image/jpeg",
+    ))
+
+    assert len(payloads) == 1
+    assert raw == {"ocrType": "LICENSE_PLATE", "fields": [], "raw": {}}
 
 def test_qwen_vl_retries_once_when_provider_json_is_invalid(monkeypatch):
     import asyncio
@@ -384,10 +432,66 @@ def test_qwen_vl_retries_once_when_provider_json_is_invalid(monkeypatch):
 
     assert len(payloads) == 2
     assert payloads[0]["max_tokens"] == 99
-    assert "上一次输出不是合法JSON" in payloads[1]["messages"][0]["content"][0]["text"]
+    repair_content = payloads[1]["messages"][0]["content"]
+    assert [item["type"] for item in repair_content] == ["text"]
+    assert "只修复JSON语法" in repair_content[0]["text"]
+    assert "{\"ocrType\":\"ID_CARD\" \"fields\":[]}" in repair_content[0]["text"]
     assert raw["ocrType"] == "ID_CARD"
     assert usage["prompt_tokens"] == 2
 
+
+def test_qwen_vl_retries_vision_after_json_repair_is_still_invalid(monkeypatch):
+    import asyncio
+    from app.services import qwen_client as qwen_module
+
+    client = QwenClient(Settings(qwen_vl_api_key="test-key"))
+    payloads = []
+
+    class FakeResponse:
+        text = ""
+
+        def __init__(self, body):
+            self._body = body
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._body
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers=None, json=None):
+            payloads.append(json)
+            content = (
+                '{"ocrType":"ID_CARD" "fields":[]}'
+                if len(payloads) < 3
+                else '{"ocrType":"ID_CARD","fields":[]}'
+            )
+            return FakeResponse({
+                "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+                "usage": {},
+            })
+
+    monkeypatch.setattr(qwen_module.httpx, "AsyncClient", FakeAsyncClient)
+    raw, _ = asyncio.run(client.vision_json_chat(
+        "return JSON",
+        "data:image/jpeg;base64,ZmFrZQ==",
+        "image/jpeg",
+    ))
+
+    assert len(payloads) == 3
+    assert [item["type"] for item in payloads[1]["messages"][0]["content"]] == ["text"]
+    assert [item["type"] for item in payloads[2]["messages"][0]["content"]] == ["text", "image_url"]
+    assert raw["ocrType"] == "ID_CARD"
 
 def test_database_summarize_result_fails_fast_when_qwen_fails(monkeypatch):
     from app.api import routes
