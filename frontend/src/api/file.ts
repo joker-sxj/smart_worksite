@@ -1,3 +1,4 @@
+import type { AxiosResponse } from 'axios';
 import request, { downloadFile, downloadTextFile } from '../utils/request';
 import { mockFiles } from '../mocks/file';
 import type { FileAccessUrl, FileObject, ID, PageQuery, PageResult } from './types';
@@ -72,6 +73,16 @@ export async function fetchFileDownloadUrl(fileId: ID) {
 
 export async function fetchFilePreviewUrl(fileId: ID) {
   return request.get<FileAccessUrl>(`/files/${fileId}/access-url`, { params: { usage: 'PREVIEW' } });
+}
+
+export async function fetchFileContent(fileId: ID) {
+  const response = await request.request<Blob, AxiosResponse<Blob>>({
+    url: `/files/${fileId}/content`,
+    method: 'GET',
+    responseType: 'blob',
+    transformResponse: [(data) => data]
+  });
+  return response.data;
 }
 
 export async function deleteFile(fileId: ID) {

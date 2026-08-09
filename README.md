@@ -489,6 +489,7 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 | POST | `/api/files` | 上传文件，`multipart/form-data` |
 | GET | `/api/files` | 分页查询文件列表 |
 | GET | `/api/files/{fileId}` | 查询文件详情 |
+| GET | `/api/files/{fileId}/content` | 通过 Java 后端鉴权并以内联方式流式读取文件，供远程浏览器预览 |
 | GET | `/api/files/{fileId}/access-url?usage=DOWNLOAD\|PREVIEW` | 获取访问 URL |
 | DELETE | `/api/files/{fileId}` | 删除文件 |
 

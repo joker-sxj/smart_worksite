@@ -53,6 +53,8 @@ QWEN_VL_MODEL=qwen-vl-plus
 
 ## 文件对象管理
 
+浏览器查看文件应使用 `GET /api/files/{fileId}/content`。该接口由 Java 后端完成登录和项目权限校验，并以内联响应流式返回文件；Windows 等远程浏览器无需直接访问 Linux 服务器内部的 MinIO 地址。
+
 ### 1. 上传文件
 
 ```text

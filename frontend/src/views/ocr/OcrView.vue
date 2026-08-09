@@ -5,11 +5,12 @@ import AppUpload from '../../components/common/AppUpload.vue';
 import AppTable from '../../components/common/AppTable.vue';
 import StatusTag from '../../components/common/StatusTag.vue';
 import EmptyState from '../../components/common/EmptyState.vue';
-import { fetchFileDetail, fetchFilePreviewUrl } from '../../api/file';
+import { fetchFileContent, fetchFileDetail } from '../../api/file';
 import { deleteOcrRecord, fetchOcrDownloadResult, fetchOcrRecord, fetchOcrRecords, fetchOcrTypes, retryOcrRecord, submitOcrRecord, updateOcrFields } from '../../api/ocr';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, OcrRecord, OcrTypeTemplate } from '../../api/types';
+import { createOcrPreviewController } from './ocrPreview';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -110,11 +111,32 @@ function clearPreview() {
   previewUrl.value = '';
 }
 
+const recordPreviewController = createOcrPreviewController({
+  load: async (fileId) => {
+    const [detail, blob] = await Promise.all([
+      fetchFileDetail(fileId),
+      fetchFileContent(fileId)
+    ]);
+    return {
+      blob,
+      name: detail.fileName || `OCR 文件 #${fileId}`,
+      isImage: Boolean(
+        detail.contentType?.startsWith('image/')
+        || blob.type.startsWith('image/')
+        || ['jpg', 'jpeg', 'png', 'webp'].includes(String(detail.fileExt || '').toLowerCase())
+      )
+    };
+  },
+  onChange: (preview) => {
+    recordPreviewUrl.value = preview.url;
+    recordPreviewName.value = preview.name;
+    recordPreviewIsImage.value = preview.isImage;
+    recordPreviewError.value = preview.error;
+  }
+});
+
 function clearRecordPreview() {
-  recordPreviewUrl.value = '';
-  recordPreviewName.value = '';
-  recordPreviewIsImage.value = false;
-  recordPreviewError.value = '';
+  recordPreviewController.clear();
 }
 
 function handleFileChange(files: File[]) {
@@ -163,30 +185,17 @@ async function loadRecord(recordId: ID) {
     await loadRecordPreview(record.value);
     notice.value = '';
   } catch (err) {
-    record.value = null;
-    clearRecordPreview();
     const detail = err instanceof Error && err.message ? ` ${err.message}` : '';
-    notice.value = `OCR 任务已提交，但结果接口暂不可用。${detail}`;
+    notice.value = `OCR 结果刷新暂时失败，已保留当前记录和原图。${detail}`;
   }
 }
 
 async function loadRecordPreview(item: OcrRecord | null) {
-  clearRecordPreview();
-  if (!item?.fileId) return;
-  try {
-    const [detail, access] = await Promise.all([
-      fetchFileDetail(item.fileId),
-      fetchFilePreviewUrl(item.fileId)
-    ]);
-    recordPreviewName.value = detail.fileName || `OCR 文件 #${item.fileId}`;
-    recordPreviewUrl.value = access.url;
-    recordPreviewIsImage.value = Boolean(
-      detail.contentType?.startsWith('image/')
-      || ['jpg', 'jpeg', 'png', 'webp'].includes(String(detail.fileExt || '').toLowerCase())
-    );
-  } catch (err) {
-    recordPreviewError.value = err instanceof Error ? err.message : '原图预览加载失败';
+  if (!item?.fileId) {
+    clearRecordPreview();
+    return;
   }
+  await recordPreviewController.show(item.fileId);
 }
 
 async function loadOcrTypes() {
@@ -354,7 +363,7 @@ onMounted(async () => {
 onUnmounted(() => {
   stopPolling();
   clearPreview();
-  clearRecordPreview();
+  recordPreviewController.dispose();
 });
 </script>
 
