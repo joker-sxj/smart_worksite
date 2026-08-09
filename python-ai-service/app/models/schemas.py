@@ -187,6 +187,7 @@ class OcrFieldData(BaseModel):
     fieldName: str
     fieldValue: str = ""
     confidence: float = 0
+    recognized: bool = False
     location: str | None = None
     pageNo: int | None = None
     evidence: str | None = None

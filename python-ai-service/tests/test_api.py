@@ -767,6 +767,98 @@ def test_ocr_normalizes_optional_field_types():
     assert usage["prompt_tokens"] == 1
 
 
+def test_ocr_reconciles_id_card_fields_against_complete_schema():
+    from app.models.schemas import OcrFilePayload, OcrRecognizeRequest
+    from app.services.ocr_service import OcrService, STANDARD_FIELDS
+
+    class FakeQwen:
+        async def vision_json_chat(self, prompt, file_sources, content_type):
+            return {
+                "ocrType": "ID_CARD",
+                "confidence": 0.92,
+                "fields": [
+                    {"fieldKey": "", "fieldName": "公民身份号码", "fieldValue": "3702", "confidence": 0.8},
+                    {"fieldKey": "name", "fieldName": "姓名", "fieldValue": "低可信", "confidence": 0.2},
+                    {"fieldKey": "name", "fieldName": "姓名", "fieldValue": "张三", "confidence": 0.98},
+                    {"fieldKey": "unknown", "fieldName": "未知字段", "fieldValue": "extra", "confidence": 0.7},
+                ],
+                "extras": {"watermark": {"detected": False}},
+            }, {}
+
+    request = OcrRecognizeRequest(
+        projectId=1,
+        recordId=1,
+        ocrType="ID_CARD",
+        file=OcrFilePayload(
+            fileId=1,
+            fileName="id-card.jpg",
+            contentType="image/jpeg",
+            dataUrls=["data:image/jpeg;base64,ZmFrZQ=="],
+        ),
+    )
+
+    data, _ = asyncio.run(OcrService(FakeQwen()).recognize(request))
+
+    assert [field.fieldKey for field in data.fields] == [item["fieldKey"] for item in STANDARD_FIELDS["ID_CARD"]]
+    assert [field.fieldName for field in data.fields] == [item["fieldName"] for item in STANDARD_FIELDS["ID_CARD"]]
+    assert data.fields[0].fieldValue == "张三"
+    assert data.fields[0].recognized is True
+    assert data.fields[5].fieldValue == "3702"
+    assert data.fields[5].recognized is True
+    assert data.fields[6].fieldKey == "issuingAuthority"
+    assert data.fields[6].fieldValue == ""
+    assert data.fields[6].confidence == 0
+    assert data.fields[6].recognized is False
+    assert data.extras["watermark"] == {"detected": False}
+    assert data.extras["unmappedFields"][0]["fieldKey"] == "unknown"
+
+
+def test_ocr_reconciles_all_custom_fields_in_configured_order_and_by_name():
+    from app.models.schemas import OcrFilePayload, OcrRecognizeRequest
+    from app.services.ocr_service import OcrService
+
+    class FakeQwen:
+        async def vision_json_chat(self, prompt, file_sources, content_type):
+            return {
+                "ocrType": "CUSTOM",
+                "confidence": 0.85,
+                "fields": [
+                    {"fieldKey": "wrong-key", "fieldName": "合同金额", "fieldValue": "100万元", "confidence": 0.9},
+                    {"fieldKey": "partyA", "fieldName": "甲方", "fieldValue": "建设单位", "confidence": 0.8},
+                ],
+            }, {}
+
+    custom_fields = [
+        {"fieldKey": "partyA", "fieldName": "甲方"},
+        {"fieldKey": "partyB", "fieldName": "乙方"},
+        {"fieldKey": "amount", "fieldName": "合同金额"},
+    ]
+    request = OcrRecognizeRequest(
+        projectId=1,
+        recordId=2,
+        ocrType="CUSTOM",
+        file=OcrFilePayload(
+            fileId=2,
+            fileName="contract.jpg",
+            contentType="image/jpeg",
+            dataUrls=["data:image/jpeg;base64,ZmFrZQ=="],
+        ),
+        options={"customFields": custom_fields},
+    )
+
+    data, _ = asyncio.run(OcrService(FakeQwen()).recognize(request))
+
+    assert [(field.fieldKey, field.fieldName) for field in data.fields] == [
+        ("partyA", "甲方"),
+        ("partyB", "乙方"),
+        ("amount", "合同金额"),
+    ]
+    assert data.fields[0].fieldValue == "建设单位"
+    assert data.fields[1].fieldValue == ""
+    assert data.fields[1].recognized is False
+    assert data.fields[2].fieldValue == "100万元"
+    assert data.fields[2].recognized is True
+
 def test_qwen_json_chat_rejects_non_object_json():
     from app.models.schemas import Message
 

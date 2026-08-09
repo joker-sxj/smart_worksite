@@ -5,17 +5,21 @@ from .qwen_client import QwenClient
 from .normalization import as_dict, optional_int, optional_string
 
 
-STANDARD_FIELDS: dict[str, list[dict[str, str]]] = {
+STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
     "ID_CARD": [
         {"fieldKey": "name", "fieldName": "姓名"},
         {"fieldKey": "gender", "fieldName": "性别"},
         {"fieldKey": "nation", "fieldName": "民族"},
-        {"fieldKey": "birthDate", "fieldName": "出生日期"},
-        {"fieldKey": "address", "fieldName": "住址"},
-        {"fieldKey": "idNumber", "fieldName": "身份证号"},
+        {"fieldKey": "birthDate", "fieldName": "出生日期", "aliases": ["出生", "出生年月日"]},
+        {"fieldKey": "address", "fieldName": "住址", "aliases": ["地址"]},
+        {
+            "fieldKey": "idNumber",
+            "fieldName": "身份证号",
+            "aliases": ["公民身份号码", "身份证号码", "身份号码"],
+        },
         {"fieldKey": "issuingAuthority", "fieldName": "签发机关"},
-        {"fieldKey": "validPeriod", "fieldName": "有效期限"},
-        {"fieldKey": "hasWatermark", "fieldName": "是否有水印"},
+        {"fieldKey": "validPeriod", "fieldName": "有效期限", "aliases": ["有效期"]},
+        {"fieldKey": "hasWatermark", "fieldName": "是否有水印", "aliases": ["水印"]},
     ],
     "LICENSE_PLATE": [
         {"fieldKey": "plateNumber", "fieldName": "车牌号"},
@@ -45,7 +49,8 @@ class OcrService:
 
     async def recognize(self, request: OcrRecognizeRequest) -> tuple[OcrRecognizeData, dict[str, Any]]:
         ocr_type = self._normalize_type(request.ocrType)
-        prompt = self._build_prompt(request, ocr_type)
+        field_definitions = self._field_definitions(request, ocr_type)
+        prompt = self._build_prompt(request, ocr_type, field_definitions)
         file_sources = request.file.dataUrls or ([request.file.downloadUrl] if request.file.downloadUrl else [])
         if not file_sources:
             raise ValueError("OCR file requires dataUrls or downloadUrl")
@@ -54,7 +59,7 @@ class OcrService:
             file_sources,
             request.file.contentType,
         )
-        data = self._normalize_response(raw, ocr_type)
+        data = self._normalize_response(raw, ocr_type, field_definitions)
         return data, usage
 
     def _normalize_type(self, ocr_type: str) -> str:
@@ -65,10 +70,15 @@ class OcrService:
             raise ValueError("unsupported ocrType")
         return normalized
 
-    def _build_prompt(self, request: OcrRecognizeRequest, ocr_type: str) -> str:
-        fields = self._field_definitions(request, ocr_type)
+    def _build_prompt(
+        self,
+        request: OcrRecognizeRequest,
+        ocr_type: str,
+        fields: list[dict[str, Any]] | None = None,
+    ) -> str:
+        fields = fields or self._field_definitions(request, ocr_type)
         type_instruction = {
-            "ID_CARD": "仅在extras.watermark中返回detected、type、text、confidence；extras不要包含其他类型结构。",
+            "ID_CARD": "身份证正反面字段都必须保留；仅在extras.watermark中返回detected、type、text、confidence；extras不要包含其他类型结构。",
             "LICENSE_PLATE": "仅在extras.plate中返回number、backgroundColor、fontColor、plateType、bbox；extras不要包含其他类型结构。",
             "INVOICE": "仅在extras.items中返回最多50条可见明细，并在extras.validation中返回金额校验结果。",
             "CUSTOM": "extras返回空对象，自定义字段尽量返回evidence和pageNo。",
@@ -80,17 +90,17 @@ class OcrService:
             f"内容类型: {request.file.contentType or 'unknown'}\n"
             f"额外选项: {request.options}\n"
             f"需要抽取的字段定义: {fields}\n"
-            "fields数组必须与字段定义一一对应，不得增加字段或重复字段。"
+            "fields数组必须与字段定义一一对应，数量、fieldKey、fieldName和顺序必须完全一致，不得增加、删除或重复字段。"
             "只允许输出一个紧凑JSON对象，不要输出Markdown、注释或解释。"
             "所有字符串必须使用英文双引号，evidence不要超过80个中文字符，raw固定返回空对象。\n"
             "输出JSON格式必须为: {"
             "\"ocrType\":\"...\","
             "\"confidence\":0到1之间数字,"
-            "\"fields\":[{\"fieldKey\":\"...\",\"fieldName\":\"...\",\"fieldValue\":\"...\",\"confidence\":0到1之间数字,\"location\":\"页码或区域\",\"pageNo\":1,\"evidence\":\"原文证据\"}],"
+            "\"fields\":[{\"fieldKey\":\"...\",\"fieldName\":\"...\",\"fieldValue\":\"...\",\"confidence\":0到1之间数字,\"recognized\":true或false,\"location\":\"页码或区域\",\"pageNo\":1,\"evidence\":\"原文证据\"}],"
             "\"extras\":{},"
             "\"raw\":{}"
             "}。\n"
-            "如果字段不可见或无法确认，fieldValue返回空字符串，confidence返回0到0.3之间，不要编造。"
+            "如果字段不可见或无法确认，仍必须返回该字段，fieldValue返回空字符串，confidence返回0，recognized返回false，不要编造。"
             + type_instruction
         )
 
@@ -99,33 +109,117 @@ class OcrService:
             fields = request.options.get("customFields") or []
             if not isinstance(fields, list) or not fields:
                 raise ValueError("customFields is required for CUSTOM OCR")
-            return fields
-        return STANDARD_FIELDS[ocr_type]
+            return self._normalize_field_definitions(fields)
+        return self._normalize_field_definitions(STANDARD_FIELDS[ocr_type])
 
-    def _normalize_response(self, raw: dict[str, Any], ocr_type: str) -> OcrRecognizeData:
-        fields = raw.get("fields") or []
-        if not isinstance(fields, list):
-            fields = []
-        normalized_fields: list[OcrFieldData] = []
+    def _normalize_field_definitions(self, fields: list[Any]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        seen_names: set[str] = set()
         for item in fields:
             if not isinstance(item, dict):
-                continue
-            normalized_fields.append(OcrFieldData(
-                fieldKey=str(item.get("fieldKey") or item.get("key") or ""),
-                fieldName=str(item.get("fieldName") or item.get("name") or ""),
-                fieldValue="" if item.get("fieldValue") is None else str(item.get("fieldValue")),
-                confidence=self._confidence(item.get("confidence")),
-                location=optional_string(item.get("location")),
-                pageNo=optional_int(item.get("pageNo")),
-                evidence=optional_string(item.get("evidence")),
-            ))
+                raise ValueError("OCR field definition must be an object")
+            field_key = str(item.get("fieldKey") or item.get("key") or "").strip()
+            field_name = str(item.get("fieldName") or item.get("name") or "").strip()
+            if not field_key or not field_name:
+                raise ValueError("OCR field definition requires fieldKey and fieldName")
+            key_token = self._match_token(field_key)
+            name_token = self._match_token(field_name)
+            if key_token in seen_keys or name_token in seen_names:
+                raise ValueError("OCR field definitions must not contain duplicate keys or names")
+            seen_keys.add(key_token)
+            seen_names.add(name_token)
+            aliases = item.get("aliases") if isinstance(item.get("aliases"), list) else []
+            normalized_item = dict(item)
+            normalized_item["fieldKey"] = field_key
+            normalized_item["fieldName"] = field_name
+            normalized_item["aliases"] = [str(alias).strip() for alias in aliases if str(alias).strip()]
+            normalized.append(normalized_item)
+        return normalized
+
+    def _normalize_response(
+        self,
+        raw: dict[str, Any],
+        ocr_type: str,
+        definitions: list[dict[str, Any]],
+    ) -> OcrRecognizeData:
+        raw_fields = raw.get("fields") or []
+        if not isinstance(raw_fields, list):
+            raw_fields = []
+        provider_raw_fields = [item for item in raw_fields if isinstance(item, dict)]
+        provider_fields = [self._normalize_provider_field(item) for item in provider_raw_fields]
+        required_keys = {self._match_token(item["fieldKey"]) for item in definitions}
+        used_indexes: set[int] = set()
+        normalized_fields: list[OcrFieldData] = []
+
+        for definition in definitions:
+            key_token = self._match_token(definition["fieldKey"])
+            name_tokens = {
+                self._match_token(definition["fieldName"]),
+                *(self._match_token(alias) for alias in definition.get("aliases", [])),
+            }
+            key_matches = [
+                index for index, item in enumerate(provider_fields)
+                if index not in used_indexes and self._match_token(item.fieldKey) == key_token
+            ]
+            candidates = key_matches
+            if not candidates:
+                candidates = [
+                    index for index, item in enumerate(provider_fields)
+                    if index not in used_indexes
+                    and self._match_token(item.fieldKey) not in required_keys
+                    and self._match_token(item.fieldName) in name_tokens
+                ]
+            if candidates:
+                selected_index = max(candidates, key=lambda index: provider_fields[index].confidence)
+                used_indexes.update(candidates)
+                selected = provider_fields[selected_index]
+                normalized_fields.append(OcrFieldData(
+                    fieldKey=definition["fieldKey"],
+                    fieldName=definition["fieldName"],
+                    fieldValue=selected.fieldValue,
+                    confidence=selected.confidence,
+                    recognized=bool(selected.fieldValue.strip()),
+                    location=selected.location,
+                    pageNo=selected.pageNo,
+                    evidence=selected.evidence,
+                ))
+            else:
+                normalized_fields.append(OcrFieldData(
+                    fieldKey=definition["fieldKey"],
+                    fieldName=definition["fieldName"],
+                    fieldValue="",
+                    confidence=0,
+                    recognized=False,
+                ))
+
+        extras = as_dict(raw.get("extras"))
+        unmapped = [provider_raw_fields[index] for index in range(len(provider_raw_fields)) if index not in used_indexes]
+        if unmapped:
+            extras["unmappedFields"] = unmapped
         return OcrRecognizeData(
-            ocrType=str(raw.get("ocrType") or ocr_type),
+            ocrType=ocr_type,
             confidence=self._confidence(raw.get("confidence")),
             fields=normalized_fields,
-            extras=as_dict(raw.get("extras")),
+            extras=extras,
             raw=raw.get("raw") if isinstance(raw.get("raw"), dict) else {"providerJson": raw},
         )
+
+    def _normalize_provider_field(self, item: dict[str, Any]) -> OcrFieldData:
+        field_value = "" if item.get("fieldValue") is None else str(item.get("fieldValue"))
+        return OcrFieldData(
+            fieldKey=str(item.get("fieldKey") or item.get("key") or "").strip(),
+            fieldName=str(item.get("fieldName") or item.get("name") or "").strip(),
+            fieldValue=field_value,
+            confidence=self._confidence(item.get("confidence")),
+            recognized=bool(field_value.strip()),
+            location=optional_string(item.get("location")),
+            pageNo=optional_int(item.get("pageNo")),
+            evidence=optional_string(item.get("evidence")),
+        )
+
+    def _match_token(self, value: Any) -> str:
+        return "".join(str(value or "").split()).casefold()
 
     def _confidence(self, value: Any) -> float:
         try:
