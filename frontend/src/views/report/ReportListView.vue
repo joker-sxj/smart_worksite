@@ -42,9 +42,10 @@ const currentProjectId = computed(() => projectStore.currentProject?.projectId);
 const canManageReport = computed(() => userStore.hasPermission('report:view'));
 const templateEmpty = computed(() => !templates.value.length && !templateWarning.value);
 const canCreate = computed(() => Boolean(canManageReport.value && currentProjectId.value && form.reportName.trim() && form.reportType && form.templateId && (form.knowledgeBaseIds.length || form.dataSourceIds.length)));
-const downloadableStatuses = new Set(['COMPLETED']);
+const downloadableStatuses = new Set(['COMPLETED', 'PARTIAL_SUCCESS']);
 const statusOptions = [
   { label: '已完成', value: 'COMPLETED' },
+  { label: '部分成功', value: 'PARTIAL_SUCCESS' },
   { label: '待生成', value: 'PENDING' },
   { label: '生成中', value: 'PROCESSING' },
   { label: '失败', value: 'FAILED' }
@@ -135,6 +136,8 @@ async function submitCreate() {
     });
     if (result.status === 'FAILED') {
       ElMessage.warning('报告任务已创建，但生成失败，请进入详情查看失败原因');
+    } else if (result.status === 'PARTIAL_SUCCESS') {
+      ElMessage.warning('报告已生成，但部分变量失败，可下载后人工补充');
     } else {
       ElMessage.success('报告创建成功');
     }

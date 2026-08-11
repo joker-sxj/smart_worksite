@@ -87,7 +87,7 @@ GET /api/reports
 GET /api/reports/{reportId}
 ```
 
-报告状态：`DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`FAILED`、`ARCHIVED`、`DELETED`。
+报告状态：`DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`PARTIAL_SUCCESS`、`FAILED`、`ARCHIVED`、`DELETED`。`PARTIAL_SUCCESS` 表示报告文件已生成，但至少一个变量使用了明确的失败占位内容。
 
 报告变量：
 
@@ -111,12 +111,12 @@ POST /api/reports/{reportId}/regenerate
 GET /api/reports/{reportId}/download?format=WORD
 ```
 
-当前支持 Word 下载，`format=PDF` 明确不支持。报告必须已完成。`/download-file` 会携带 JWT 访问 Java 后端，由后端读取对象存储并流式返回文件，适用于浏览器不应或不能直连 MinIO 的服务器部署场景；`/download` 保留为兼容接口，仍返回 MinIO 预签名下载地址字符串。
+当前支持 Word 下载，`format=PDF` 明确不支持。报告状态必须为 `COMPLETED` 或 `PARTIAL_SUCCESS`。`/download-file` 会携带 JWT 访问 Java 后端，由后端读取对象存储并流式返回文件，适用于浏览器不应或不能直连 MinIO 的服务器部署场景；`/download` 保留为兼容接口，仍返回 MinIO 预签名下载地址字符串。
 
 ## 写入规则
 
 - 报告创建必须写入报告记录、任务、outbox。
 - 报告、任务、文件和版本状态流转必须检查影响行数或生成 ID。
 - Worker 执行前必须重新校验项目可写。
-- 每个变量状态写入都必须检查影响行数；单变量失败时整份报告失败，但已成功变量保留用于任务重试。
+- 每个变量状态写入都必须检查影响行数；单变量失败时继续生成剩余变量，在 Word 中写入失败占位内容，并将报告标记为 `PARTIAL_SUCCESS`。已成功变量保留用于重试，重试时只补失败变量。
 - Python AI 服务不可用、知识库或数据源不可用、变量缺失、模板不合法时，必须记录变量、任务和报告失败原因，不能返回假成功。

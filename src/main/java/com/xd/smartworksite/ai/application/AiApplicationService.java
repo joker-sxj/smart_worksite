@@ -17,9 +17,12 @@ import com.xd.smartworksite.common.security.SecurityUtils;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
 import org.springframework.stereotype.Service;
 
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class AiApplicationService {
@@ -150,10 +153,20 @@ public class AiApplicationService {
         SafeSqlExecutor.QueryResult queryResult = null;
         String failedSql = null;
         String databaseError = null;
+        Set<String> attemptedSql = new HashSet<>();
         int maxAttempts = Math.max(1, Math.min(properties.getDatabase().getQueryMaxAttempts(), 6));
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             generatedQuery = generateDatabaseQuery(
                     request, dataSource, schemaSummary, failedSql, databaseError, attempt);
+            String sqlFingerprint = sqlFingerprint(generatedQuery.sql());
+            if (!attemptedSql.add(sqlFingerprint)) {
+                failedSql = generatedQuery.sql();
+                databaseError = "模型重复返回已经失败的SQL，请改用不同的查询结构";
+                if (attempt == maxAttempts) {
+                    throw repairedDatabaseQueryFailure(databaseError);
+                }
+                continue;
+            }
             try {
                 safeSqlExecutor.validate(dataSource, generatedQuery.sql());
             } catch (BusinessException validationEx) {
@@ -167,6 +180,16 @@ public class AiApplicationService {
             try {
                 queryResult = safeSqlExecutor.execute(
                         dataSource, generatedQuery.sql(), generatedQuery.parameters());
+                String evidenceError = validateExpectedColumns(generatedQuery.expectedColumns(), queryResult.columns());
+                if (evidenceError != null) {
+                    failedSql = generatedQuery.sql();
+                    databaseError = evidenceError;
+                    queryResult = null;
+                    if (attempt == maxAttempts) {
+                        throw repairedDatabaseQueryFailure(databaseError);
+                    }
+                    continue;
+                }
                 break;
             } catch (SafeSqlExecutor.QueryExecutionException ex) {
                 if (!ex.isRepairable()) {
@@ -181,6 +204,16 @@ public class AiApplicationService {
         }
         if (generatedQuery == null || queryResult == null) {
             throw repairedDatabaseQueryFailure(databaseError == null ? "未生成可执行SQL" : databaseError);
+        }
+
+        if (queryResult.rows().isEmpty()) {
+            DatabaseQueryResponse emptyResult = new DatabaseQueryResponse();
+            emptyResult.setSql(generatedQuery.sql());
+            emptyResult.setColumns(queryResult.columns());
+            emptyResult.setRows(queryResult.rows());
+            emptyResult.setSummary("查询成功，但未查询到符合条件的数据。");
+            emptyResult.setWarnings(List.of("查询结果为空，报告内容不得推断为不存在或已完成。"));
+            return emptyResult;
         }
 
         Map<String, Object> summarizePayload = new LinkedHashMap<>();
@@ -225,7 +258,8 @@ public class AiApplicationService {
         Map<String, Object> generatedData = generated.getData();
         String sql = String.valueOf(generatedData.getOrDefault("sql", ""));
         Map<String, Object> parameters = extractSqlParameters(generatedData.get("parameters"));
-        return new GeneratedQuery(sql, parameters);
+        List<String> expectedColumns = extractExpectedColumns(generatedData.get("plan"));
+        return new GeneratedQuery(sql, parameters, expectedColumns);
     }
 
     private BusinessException databaseQueryFailure(SafeSqlExecutor.QueryExecutionException ex) {
@@ -238,7 +272,34 @@ public class AiApplicationService {
                 "数据库问答查询失败，SQL自动修正后仍失败: " + message);
     }
 
-    private record GeneratedQuery(String sql, Map<String, Object> parameters) {
+    private List<String> extractExpectedColumns(Object planValue) {
+        if (!(planValue instanceof Map<?, ?> plan) || !(plan.get("expectedColumns") instanceof List<?> columns)) {
+            return List.of();
+        }
+        return columns.stream().map(String::valueOf).map(String::trim).filter(value -> !value.isEmpty()).toList();
+    }
+
+    private String validateExpectedColumns(List<String> expectedColumns, List<String> actualColumns) {
+        if (expectedColumns == null || expectedColumns.isEmpty()) {
+            return null;
+        }
+        Set<String> actual = actualColumns.stream()
+                .map(value -> value.toLowerCase(Locale.ROOT))
+                .collect(java.util.stream.Collectors.toSet());
+        List<String> missing = expectedColumns.stream()
+                .filter(value -> !actual.contains(value.toLowerCase(Locale.ROOT)))
+                .toList();
+        return missing.isEmpty() ? null : "查询结果缺少取数计划要求的字段: " + String.join(",", missing);
+    }
+
+    private String sqlFingerprint(String sql) {
+        if (sql == null) {
+            return "";
+        }
+        return sql.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+    }
+
+    private record GeneratedQuery(String sql, Map<String, Object> parameters, List<String> expectedColumns) {
     }
 
     public PageResult<ExternalCallLogResponse> queryExternalCallLogs(ExternalCallLogQueryRequest request) {

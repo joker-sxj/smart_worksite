@@ -31,7 +31,8 @@ public interface ReportMapper {
                             @Param("versionId") Long versionId,
                             @Param("status") String status,
                             @Param("progress") int progress,
-                            @Param("previewUrl") String previewUrl);
+                            @Param("previewUrl") String previewUrl,
+                            @Param("errorMessage") String errorMessage);
 
     int updateReportFailed(@Param("reportId") Long reportId,
                            @Param("status") String status,

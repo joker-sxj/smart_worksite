@@ -580,6 +580,73 @@ def test_database_generate_query_normalizes_list_parameters():
     assert usage["prompt_tokens"] == 1
 
 
+def test_database_generate_query_returns_structured_evidence_plan():
+    from app.models.schemas import DatabaseGenerateQueryRequest
+    from app.services.database_service import DatabaseQaService
+
+    class FakeQwen:
+        async def json_chat(self, messages):
+            return {
+                "sql": "SELECT risk_level, COUNT(*) AS risk_count FROM risk_record GROUP BY risk_level",
+                "parameters": {},
+                "explanation": "按风险等级统计。",
+                "riskLevel": "LOW",
+                "plan": {
+                    "entities": ["risk_record"],
+                    "metrics": [{"name": "risk_count", "aggregation": "COUNT"}],
+                    "dimensions": ["risk_level"],
+                    "filters": [{"field": "project_id", "operator": "=", "valueSource": "projectId"}],
+                    "projectScopeField": "project_id",
+                    "expectedColumns": ["risk_level", "risk_count"],
+                    "expectedShape": "AGGREGATE_ROWS",
+                    "ambiguities": [],
+                },
+            }, {}
+
+    data, _ = asyncio.run(DatabaseQaService(FakeQwen()).generate_query(DatabaseGenerateQueryRequest(
+        question="按风险等级统计当前项目风险",
+        schemaSummary="risk_record(project_id, risk_level)",
+        permissionHints={"projectId": 1, "readOnly": True},
+        projectId=1,
+        databaseType="MYSQL",
+    )))
+
+    assert data.plan.entities == ["risk_record"]
+    assert data.plan.projectScopeField == "project_id"
+    assert data.plan.expectedColumns == ["risk_level", "risk_count"]
+    assert data.plan.expectedShape == "AGGREGATE_ROWS"
+
+
+def test_database_generate_query_accepts_compact_plan_items():
+    from app.models.schemas import DatabaseGenerateQueryRequest
+    from app.services.database_service import DatabaseQaService
+
+    class FakeQwen:
+        async def json_chat(self, messages):
+            return {
+                "sql": "SELECT COUNT(*) AS total FROM project WHERE project_id = ?",
+                "parameters": {"p1": 1},
+                "explanation": "统计当前项目。",
+                "riskLevel": "LOW",
+                "plan": {
+                    "entities": ["project"],
+                    "metrics": ["COUNT(*) AS total"],
+                    "filters": ["project_id = projectId"],
+                    "expectedColumns": ["total"],
+                },
+            }, {}
+
+    data, _ = asyncio.run(DatabaseQaService(FakeQwen()).generate_query(DatabaseGenerateQueryRequest(
+        question="统计当前项目",
+        schemaSummary="project(project_id)",
+        permissionHints={"projectId": 1},
+        projectId=1,
+    )))
+
+    assert data.plan.metrics == ["COUNT(*) AS total"]
+    assert data.plan.filters == ["project_id = projectId"]
+
+
 def test_database_generate_query_prompt_includes_mysql_distinct_order_rule():
     from app.models.schemas import DatabaseGenerateQueryRequest
     from app.services.database_service import DatabaseQaService
@@ -678,6 +745,30 @@ def test_database_summarize_result_normalizes_string_lists():
     assert data.insights == ["项目数量较少。"]
     assert data.warnings == ["样本有限。"]
     assert usage["prompt_tokens"] == 1
+
+
+def test_database_summarize_prompt_forbids_unsupported_facts():
+    from app.models.schemas import DatabaseSummarizeRequest
+    from app.services.database_service import DatabaseQaService
+
+    class FakeQwen:
+        def __init__(self):
+            self.messages = None
+
+        async def json_chat(self, messages):
+            self.messages = messages
+            return {"summary": "高风险1条。", "insights": [], "warnings": []}, {}
+
+    qwen = FakeQwen()
+    asyncio.run(DatabaseQaService(qwen).summarize_result(DatabaseSummarizeRequest(
+        question="统计高风险",
+        sql="select count(*) as total from risk_record",
+        columns=["total"],
+        rows=[{"total": 1}],
+    )))
+
+    assert "不得添加查询结果中不存在" in qwen.messages[0].content
+    assert "空结果" in qwen.messages[0].content
 
 def test_route_normalizes_model_list_fields():
     from app.models.schemas import RouteRequest

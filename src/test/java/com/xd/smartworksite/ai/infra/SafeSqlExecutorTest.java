@@ -40,6 +40,10 @@ class SafeSqlExecutorTest {
                 "syntax error", "42000", 1064, new SQLException()).isRepairable());
         assertTrue(new SafeSqlExecutor.QueryExecutionException(
                 "unknown column", "42S22", 1054, new SQLException()).isRepairable());
+        assertTrue(new SafeSqlExecutor.QueryExecutionException(
+                "distinct order by mismatch", "HY000", 3065, new SQLException()).isRepairable());
+        assertFalse(new SafeSqlExecutor.QueryExecutionException(
+                "generic server error", "HY000", 1105, new SQLException()).isRepairable());
         assertFalse(new SafeSqlExecutor.QueryExecutionException(
                 "access denied", "28000", 1045, new SQLException()).isRepairable());
         assertFalse(new SafeSqlExecutor.QueryExecutionException(

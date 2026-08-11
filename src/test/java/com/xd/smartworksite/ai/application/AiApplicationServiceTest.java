@@ -131,7 +131,7 @@ class AiApplicationServiceTest {
                 eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), any())).thenReturn(summary);
         when(sqlExecutor.execute(dataSource, failedSql, Map.of())).thenThrow(
                 new SafeSqlExecutor.QueryExecutionException(
-                        "Expression #1 of ORDER BY clause is not in SELECT list", "42000", 3065, null));
+                        "Expression #1 of ORDER BY clause is not in SELECT list", "HY000", 3065, null));
         SafeSqlExecutor.QueryResult queryResult = new SafeSqlExecutor.QueryResult(
                 List.of("variable_name", "created_at"), List.of(Map.of("variable_name", "var_risk")));
         when(sqlExecutor.execute(dataSource, correctedSql, Map.of())).thenReturn(queryResult);
@@ -226,7 +226,7 @@ class AiApplicationServiceTest {
                 .thenReturn(provider("summary", Map.of("summary", "查询成功", "warnings", List.of())));
         when(sqlExecutor.execute(dataSource, badDistinct, Map.of())).thenThrow(
                 new SafeSqlExecutor.QueryExecutionException(
-                        "Expression #1 of ORDER BY clause is not in SELECT list", "42000", 3065, null));
+                        "Expression #1 of ORDER BY clause is not in SELECT list", "HY000", 3065, null));
         org.mockito.Mockito.doThrow(new BusinessException(ErrorCode.FORBIDDEN, "数据库问答不允许多语句SQL"))
                 .when(sqlExecutor).validate(dataSource, badMulti);
         SafeSqlExecutor.QueryResult queryResult = new SafeSqlExecutor.QueryResult(
@@ -238,7 +238,81 @@ class AiApplicationServiceTest {
         assertThat(response.getSql()).isEqualTo(correctedSql);
         verify(pythonClient, times(4)).post(eq(properties.getPaths().getDatabaseGenerateQuery()),
                 eq("DATABASE_GENERATE_QUERY"), eq(1L), any());
+        verify(sqlExecutor, times(1)).execute(dataSource, badDistinct, Map.of());
         verify(sqlExecutor, never()).execute(dataSource, badMulti, Map.of());
+    }
+
+    @Test
+    void repairsQueryWhenPlannedEvidenceColumnsAreMissing() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        DataSourceRecord dataSource = dataSource();
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource);
+        when(sqlExecutor.describeSchema(dataSource)).thenReturn("risk_record(id, risk_level, created_at)");
+        String incompleteSql = "SELECT id FROM risk_record";
+        String correctedSql = "SELECT id, risk_level FROM risk_record";
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(
+                        provider("generate-1", Map.of(
+                                "sql", incompleteSql,
+                                "parameters", Map.of(),
+                                "plan", Map.of("expectedColumns", List.of("id", "risk_level")))),
+                        provider("generate-2", Map.of(
+                                "sql", correctedSql,
+                                "parameters", Map.of(),
+                                "plan", Map.of("expectedColumns", List.of("id", "risk_level"))))
+                );
+        when(sqlExecutor.execute(dataSource, incompleteSql, Map.of())).thenReturn(
+                new SafeSqlExecutor.QueryResult(List.of("id"), List.of(Map.of("id", 1))));
+        when(sqlExecutor.execute(dataSource, correctedSql, Map.of())).thenReturn(
+                new SafeSqlExecutor.QueryResult(List.of("id", "risk_level"), List.of(Map.of("id", 1, "risk_level", "HIGH"))));
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseSummarizeResult()),
+                eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), any()))
+                .thenReturn(provider("summary", Map.of("summary", "高风险记录1条", "warnings", List.of())));
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getSql()).isEqualTo(correctedSql);
+        verify(pythonClient).post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), argThat(payload -> {
+                    Map<?, ?> map = (Map<?, ?>) payload;
+                    return String.valueOf(map.get("databaseError")).contains("risk_level")
+                            && incompleteSql.equals(map.get("failedSql"));
+                }));
+    }
+
+    @Test
+    void returnsExplicitEmptyEvidenceWithoutCallingSummaryModel() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        DataSourceRecord dataSource = dataSource();
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource);
+        when(sqlExecutor.describeSchema(dataSource)).thenReturn("risk_record(id, risk_level)");
+        String sql = "SELECT id, risk_level FROM risk_record WHERE risk_level = 'HIGH'";
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(provider("generate", Map.of(
+                        "sql", sql,
+                        "parameters", Map.of(),
+                        "plan", Map.of("expectedColumns", List.of("id", "risk_level")))));
+        when(sqlExecutor.execute(dataSource, sql, Map.of())).thenReturn(
+                new SafeSqlExecutor.QueryResult(List.of("id", "risk_level"), List.of()));
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getSummary()).contains("未查询到符合条件的数据");
+        assertThat(response.getWarnings()).contains("查询结果为空，报告内容不得推断为不存在或已完成。");
+        verify(pythonClient, never()).post(eq(properties.getPaths().getDatabaseSummarizeResult()),
+                eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), any());
     }
 
     @Test

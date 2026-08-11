@@ -87,16 +87,31 @@ public class SafeSqlExecutor {
             try (ResultSet tables = metaData.getTables(catalog, schema, "%", new String[]{"TABLE", "VIEW"})) {
                 while (tables.next() && tableCount < 50) {
                     String tableName = tables.getString("TABLE_NAME");
-                    builder.append(' ').append(tableName).append('(');
+                    String tableRemark = tables.getString("REMARKS");
+                    Map<String, String> keyHints = keyHints(metaData, catalog, schema, tableName);
+                    builder.append(' ').append(tableName);
+                    if (tableRemark != null && !tableRemark.isBlank()) {
+                        builder.append("[").append(tableRemark.trim()).append("]");
+                    }
+                    builder.append('(');
                     int columnCount = 0;
                     try (ResultSet columns = metaData.getColumns(catalog, schema, tableName, "%")) {
                         while (columns.next() && columnCount < 40) {
                             if (columnCount > 0) {
                                 builder.append(", ");
                             }
-                            builder.append(columns.getString("COLUMN_NAME"))
+                            String columnName = columns.getString("COLUMN_NAME");
+                            String columnRemark = columns.getString("REMARKS");
+                            builder.append(columnName)
                                     .append(' ')
                                     .append(columns.getString("TYPE_NAME"));
+                            String keyHint = keyHints.get(columnName);
+                            if (keyHint != null) {
+                                builder.append(' ').append(keyHint);
+                            }
+                            if (columnRemark != null && !columnRemark.isBlank()) {
+                                builder.append("[").append(columnRemark.trim()).append("]");
+                            }
                             columnCount++;
                         }
                     }
@@ -110,6 +125,28 @@ public class SafeSqlExecutor {
         } catch (Exception ex) {
             throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "data source schema inspection failed: " + ex.getMessage());
         }
+    }
+
+    private Map<String, String> keyHints(DatabaseMetaData metaData, String catalog, String schema,
+                                              String tableName) {
+        Map<String, String> hints = new LinkedHashMap<>();
+        try (ResultSet primaryKeys = metaData.getPrimaryKeys(catalog, schema, tableName)) {
+            while (primaryKeys.next()) {
+                hints.put(primaryKeys.getString("COLUMN_NAME"), "PK");
+            }
+        } catch (SQLException ignored) {
+            // Some compatible drivers do not expose key metadata; columns remain usable without it.
+        }
+        try (ResultSet foreignKeys = metaData.getImportedKeys(catalog, schema, tableName)) {
+            while (foreignKeys.next()) {
+                String column = foreignKeys.getString("FKCOLUMN_NAME");
+                String target = foreignKeys.getString("PKTABLE_NAME") + "." + foreignKeys.getString("PKCOLUMN_NAME");
+                hints.merge(column, "FK->" + target, (left, right) -> left + "/" + right);
+            }
+        } catch (SQLException ignored) {
+            // Foreign-key hints improve planning but are not required to generate a safe query.
+        }
+        return hints;
     }
 
     public void validate(DataSourceRecord dataSource, String sql) {
@@ -263,6 +300,9 @@ public class SafeSqlExecutor {
         }
 
         public boolean isRepairable() {
+            if (vendorCode == 3065) {
+                return true;
+            }
             return sqlState != null && sqlState.startsWith("42");
         }
     }

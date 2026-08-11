@@ -98,6 +98,10 @@ class ReportQaApplicationServiceTest {
         assertThat(captor.getAllValues()).extracting(DatabaseQueryRequest::getDataSourceId).containsExactly(20L, 21L);
         assertThat(response.getReferences()).extracting(item -> item.get("type")).containsOnly("DATABASE");
         assertThat(response.getReferences()).extracting(item -> item.get("dataSourceId")).containsExactly(20L, 21L);
+        ArgumentCaptor<ModelInvokeRequest> modelCaptor = ArgumentCaptor.forClass(ModelInvokeRequest.class);
+        verify(gateway).invokeModelForSystem(modelCaptor.capture());
+        assertThat(modelCaptor.getValue().getPrompt())
+                .contains("字段: [count]", "真实数据行: [{count=5}]");
         verify(gateway, never()).searchKnowledgeForSystem(any());
         verify(gateway, never()).routeForSystem(any());
     }

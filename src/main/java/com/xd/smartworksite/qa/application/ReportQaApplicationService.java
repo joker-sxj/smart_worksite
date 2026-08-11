@@ -89,7 +89,7 @@ public class ReportQaApplicationService {
         ModelInvokeRequest model = new ModelInvokeRequest();
         model.setProjectId(request.getProjectId());
         model.setPrompt(question + "\n\n可用资料：\n" + context);
-        model.setSystemPrompt("你是智慧工地报告生成助手。请基于提供的知识库资料和只读数据库查询结果生成可直接替换模板变量的中文正文。不得伪造具体项目数据。只输出正文。");
+        model.setSystemPrompt("你是智慧工地报告生成助手。请基于提供的知识库资料和只读数据库查询结果生成可直接替换模板变量的中文正文。不得伪造具体项目数据；具体数字、状态、日期和风险结论必须能在可用资料中找到直接证据。数据库空结果只表示当前条件下未查询到数据，不表示不存在风险或已完成。只输出正文。");
         model.setContextMessages(List.of());
         model.setParameters(Map.of("temperature", 0.2));
         ModelInvokeResponse generated = aiGateway.invokeModelForSystem(model);
@@ -161,10 +161,23 @@ public class ReportQaApplicationService {
     }
 
     private void appendDatabase(StringBuilder context, List<Map<String, Object>> refs, Long dataSourceId, DatabaseQueryResponse result) {
-        context.append("[数据库 ").append(dataSourceId).append("] ").append(safe(result.getSummary())).append("\nSQL: ").append(safe(result.getSql())).append("\n");
+        List<String> columns = result.getColumns() == null ? List.of() : result.getColumns();
+        List<Map<String, Object>> rows = result.getRows() == null ? List.of() : result.getRows();
+        List<Map<String, Object>> evidenceRows = rows.stream().limit(20).toList();
+        context.append("[数据库 ").append(dataSourceId).append("] ").append(safe(result.getSummary()))
+                .append("\nSQL: ").append(safe(result.getSql()))
+                .append("\n字段: ").append(columns)
+                .append("\n真实数据行: ").append(evidenceRows).append("\n");
+        if (result.getWarnings() != null && !result.getWarnings().isEmpty()) {
+            context.append("证据限制: ").append(result.getWarnings()).append("\n");
+        }
+        if (rows.size() > evidenceRows.size()) {
+            context.append("说明: 仅向报告模型提供前").append(evidenceRows.size()).append("行证据，完整结果已保存在引用记录中。\n");
+        }
         Map<String, Object> ref = new LinkedHashMap<>();
         ref.put("type", "DATABASE"); ref.put("dataSourceId", dataSourceId); ref.put("sql", result.getSql());
-        ref.put("summary", result.getSummary()); ref.put("columns", result.getColumns()); ref.put("rows", result.getRows());
+        ref.put("summary", result.getSummary()); ref.put("columns", columns); ref.put("rows", rows);
+        ref.put("warnings", result.getWarnings());
         refs.add(ref);
     }
 

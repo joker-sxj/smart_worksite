@@ -64,8 +64,8 @@ public class MyBatisReportRepository implements ReportRepository {
     }
 
     @Override
-    public int updateReportSuccess(Long reportId, Long versionId, String status, int progress, String previewUrl) {
-        return reportMapper.updateReportSuccess(reportId, versionId, status, progress, previewUrl);
+    public int updateReportSuccess(Long reportId, Long versionId, String status, int progress, String previewUrl, String errorMessage) {
+        return reportMapper.updateReportSuccess(reportId, versionId, status, progress, previewUrl, errorMessage);
     }
 
     @Override

@@ -178,7 +178,7 @@
             status = #{status},
             progress = #{progress},
             preview_url = #{previewUrl},
-            error_message = null,
+            error_message = #{errorMessage},
             finished_at = current_timestamp,
             updated_by = 1
         where id = #{reportId}

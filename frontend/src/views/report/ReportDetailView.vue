@@ -21,8 +21,8 @@ const logs = ref<TaskStageLog[]>([]);
 const variables = ref<ReportVariableItem[]>([]);
 let refreshTimer: number | undefined;
 
-const downloadableStatuses = new Set(['COMPLETED']);
-const regeneratableStatuses = new Set(['COMPLETED', 'FAILED', 'ARCHIVED']);
+const downloadableStatuses = new Set(['COMPLETED', 'PARTIAL_SUCCESS']);
+const regeneratableStatuses = new Set(['COMPLETED', 'PARTIAL_SUCCESS', 'FAILED', 'ARCHIVED']);
 
 function normalizeStatus(status?: string) {
   return (status || '').toUpperCase();
@@ -64,7 +64,7 @@ async function loadData(silent = false) {
 
 function scheduleRefresh() {
   if (refreshTimer) window.clearTimeout(refreshTimer);
-  if (!report.value || ['COMPLETED', 'FAILED', 'ARCHIVED'].includes(normalizeStatus(report.value.status))) return;
+  if (!report.value || ['COMPLETED', 'PARTIAL_SUCCESS', 'FAILED', 'ARCHIVED'].includes(normalizeStatus(report.value.status))) return;
   refreshTimer = window.setTimeout(async () => {
     await loadData(true);
     scheduleRefresh();
@@ -135,6 +135,15 @@ onBeforeUnmount(() => {
         show-icon
         style="margin-bottom: 12px"
       />
+      <el-alert
+        v-if="report.status === 'PARTIAL_SUCCESS'"
+        :title="report.errorMessage || '部分变量未自动生成，失败位置已写入 Word 报告'"
+        description="报告仍可下载；请在 Word 中查看失败占位说明并人工补充，或点击重新生成仅重试失败变量。"
+        type="warning"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 12px"
+      />
       <div class="page-header">
         <div>
           <h2 class="page-title">报告详情</h2>
@@ -178,7 +187,7 @@ onBeforeUnmount(() => {
       <div class="two-col">
         <el-card class="work-card">
           <h3 class="panel-title">报告预览</h3>
-          <p>报告生成成功后可下载 Word 文件查看。</p>
+          <p>报告完成或部分成功后可下载 Word 文件查看；部分成功报告会标明需人工补充的位置。</p>
         </el-card>
         <el-card class="work-card">
           <h3 class="panel-title">生成进度</h3>

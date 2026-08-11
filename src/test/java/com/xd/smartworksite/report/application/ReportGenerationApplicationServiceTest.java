@@ -167,17 +167,27 @@ class ReportGenerationApplicationServiceTest {
     }
 
     @Test
-    void retryKeepsSuccessfulVariablesAndOnlyRegeneratesFailedOnes() {
+    void partialSuccessCreatesDownloadableReportAndRetryOnlyRegeneratesFailedVariable() throws Exception {
         ReportCreateResponse created = context.service.createReport(request());
         context.answers.put("var_summary", "已生成摘要");
         context.failVariable = "var_risk";
 
-        assertThatThrownBy(() -> context.service.executeReportTask(created.getReportId(), created.getTaskId()))
-                .hasMessageContaining("risk failed");
+        context.service.executeReportTask(created.getReportId(), created.getTaskId());
+
         assertThat(context.repository.variables)
                 .extracting(ReportVariableValue::getStatus)
                 .containsExactly("SUCCESS", "FAILED");
-        assertThat(context.repository.reports.get(0).getStatus()).isEqualTo("FAILED");
+        assertThat(context.repository.reports.get(0).getStatus()).isEqualTo("PARTIAL_SUCCESS");
+        assertThat(context.repository.reports.get(0).getErrorMessage()).contains("var_risk");
+        assertThat(context.repository.versions).hasSize(1);
+        FileObjectRecord partialFile = context.repository.files.stream()
+                .filter(file -> "REPORT_OUTPUT".equals(file.getBizType()))
+                .findFirst().orElseThrow();
+        when(context.storage.openObject(partialFile.getObjectName()))
+                .thenReturn(new ByteArrayInputStream(context.generatedDocx));
+        assertThat(context.service.openDownloadFile(created.getReportId(), "WORD").getFileName())
+                .isEqualTo("智慧工地报告.docx");
+        assertThat(readDocxText(context.generatedDocx)).contains("未自动生成");
 
         context.failVariable = null;
         context.answers.put("var_risk", "重试生成风险");
@@ -186,6 +196,36 @@ class ReportGenerationApplicationServiceTest {
         assertThat(context.repository.variables)
                 .extracting(ReportVariableValue::getVariableValue)
                 .containsExactly("已生成摘要", "重试生成风险");
+        assertThat(context.repository.reports.get(0).getStatus()).isEqualTo("COMPLETED");
+        assertThat(context.repository.versions).hasSize(2);
+        verify(context.qa, times(1)).generateVariableForSystem(
+                org.mockito.ArgumentMatchers.argThat(item -> "var_summary".equals(item.getVariableName())));
+        verify(context.qa, times(2)).generateVariableForSystem(
+                org.mockito.ArgumentMatchers.argThat(item -> "var_risk".equals(item.getVariableName())));
+    }
+
+    @Test
+    void regeneratePartialReportCopiesSuccessfulVariablesAndOnlyQueriesFailures() {
+        ReportCreateResponse created = context.service.createReport(request());
+        context.answers.put("var_summary", "已生成摘要");
+        context.failVariable = "var_risk";
+        context.service.executeReportTask(created.getReportId(), created.getTaskId());
+
+        context.failVariable = null;
+        context.answers.put("var_risk", "重新生成风险");
+        ReportCreateResponse regenerated = context.service.regenerateReport(created.getReportId());
+        List<ReportVariableValue> regeneratedVariables =
+                context.repository.findVariablesByReportId(regenerated.getReportId());
+
+        assertThat(regeneratedVariables)
+                .extracting(ReportVariableValue::getStatus)
+                .containsExactly("SUCCESS", "PENDING");
+        assertThat(regeneratedVariables.get(0).getVariableValue()).isEqualTo("已生成摘要");
+
+        context.service.executeReportTask(regenerated.getReportId(), regenerated.getTaskId());
+
+        assertThat(context.repository.findReportById(regenerated.getReportId()).orElseThrow().getStatus())
+                .isEqualTo("COMPLETED");
         verify(context.qa, times(1)).generateVariableForSystem(
                 org.mockito.ArgumentMatchers.argThat(item -> "var_summary".equals(item.getVariableName())));
         verify(context.qa, times(2)).generateVariableForSystem(
@@ -385,7 +425,7 @@ class ReportGenerationApplicationServiceTest {
         @Override public int updateReportTask(Long reportId, Long taskId) { report(reportId).setTaskId(taskId); return 1; }
         @Override public int updateTaskBizId(Long taskId, Long bizId) { return 1; }
         @Override public int updateReportProcessing(Long reportId, String status, int progress, String currentStage) { Report report = report(reportId); report.setStatus(status); report.setProgress(progress); report.setErrorMessage(null); return 1; }
-        @Override public int updateReportSuccess(Long reportId, Long versionId, String status, int progress, String previewUrl) { Report report = report(reportId); report.setCurrentVersionId(versionId); report.setStatus(status); report.setProgress(progress); report.setErrorMessage(null); return 1; }
+        @Override public int updateReportSuccess(Long reportId, Long versionId, String status, int progress, String previewUrl, String errorMessage) { Report report = report(reportId); report.setCurrentVersionId(versionId); report.setStatus(status); report.setProgress(progress); report.setErrorMessage(errorMessage); return 1; }
         @Override public int updateReportFailed(Long reportId, String status, String errorMessage) { Report report = report(reportId); report.setStatus(status); report.setErrorMessage(errorMessage); return 1; }
         @Override public int updateTaskStatus(Long taskId, String status, String currentStage, String errorMessage) { return 1; }
         @Override public Optional<FileObjectRecord> findFileObjectById(Long fileId) { return files.stream().filter(file -> fileId.equals(file.getId())).findFirst(); }
@@ -398,7 +438,7 @@ class ReportGenerationApplicationServiceTest {
         @Override public int markVariableFailed(Long variableId, Long taskId, String errorMessage) { ReportVariableValue value = variable(variableId); if (!taskId.equals(value.getTaskId()) || !"RUNNING".equals(value.getStatus())) return 0; value.setStatus("FAILED"); value.setErrorMessage(errorMessage); return 1; }
         @Override public int updateVersionWordFile(Long versionId, Long wordFileId, String contentHash) { return 1; }
         @Override public Optional<ReportConfig> findConfigById(Long configId) { return configs.stream().filter(value -> configId.equals(value.getId())).findFirst(); }
-        @Override public Optional<Long> findCurrentWordFileId(Long reportId) { return versions.stream().filter(value -> reportId.equals(value.getReportId())).map(ReportVersion::getWordFileId).findFirst(); }
+        @Override public Optional<Long> findCurrentWordFileId(Long reportId) { return versions.stream().filter(value -> reportId.equals(value.getReportId())).map(ReportVersion::getWordFileId).reduce((first, second) -> second); }
         @Override public Optional<Report> findReportById(Long reportId) { return reports.stream().filter(value -> reportId.equals(value.getId())).findFirst(); }
         @Override public List<Report> findReportPage(Long projectId, List<Long> accessibleProjectIds, String reportType, String status, String keyword) { return reports; }
 

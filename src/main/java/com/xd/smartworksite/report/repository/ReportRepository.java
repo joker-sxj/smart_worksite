@@ -21,7 +21,7 @@ public interface ReportRepository {
     int updateReportTask(Long reportId, Long taskId);
     int updateTaskBizId(Long taskId, Long bizId);
     int updateReportProcessing(Long reportId, String status, int progress, String currentStage);
-    int updateReportSuccess(Long reportId, Long versionId, String status, int progress, String previewUrl);
+    int updateReportSuccess(Long reportId, Long versionId, String status, int progress, String previewUrl, String errorMessage);
     int updateReportFailed(Long reportId, String status, String errorMessage);
     int updateTaskStatus(Long taskId, String status, String currentStage, String errorMessage);
     Optional<FileObjectRecord> findFileObjectById(Long fileId);

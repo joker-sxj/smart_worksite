@@ -57,6 +57,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -114,6 +115,11 @@ public class ReportGenerationApplicationService {
 
     @Transactional
     public ReportCreateResponse createReport(ReportCreateRequest request) {
+        return createReport(request, Map.of());
+    }
+
+    private ReportCreateResponse createReport(ReportCreateRequest request,
+                                              Map<String, ReportVariableValue> reusableVariables) {
         projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
         String reportType = normalizeRequired(request.getReportType(), "报告类型不能为空");
         Long templateId = request.getTemplateId();
@@ -136,7 +142,8 @@ public class ReportGenerationApplicationService {
         requireUpdated(reportRepository.updateReportTask(report.getId(), task.getId()), "report task link update failed");
         requireUpdated(reportRepository.updateTaskBizId(task.getId(), report.getId()), "task biz id update failed");
         requireUpdated(reportRepository.updateTaskStatus(task.getId(), TASK_STATUS_QUEUED, TASK_STAGE_CONFIG_VALIDATE, null), "task queued status update failed");
-        saveReportVariables(report, task, templateFile, knowledgeBaseIds, dataSourceIds, templateVariables);
+        saveReportVariables(report, task, templateFile, knowledgeBaseIds, dataSourceIds, templateVariables,
+                reusableVariables);
         task.setStatus("QUEUED");
         taskOutboxApplicationService.enqueueTask(toSharedTask(task), "report created");
 
@@ -172,6 +179,7 @@ public class ReportGenerationApplicationService {
         return toResponse(report);
     }
 
+    @Transactional
     public ReportCreateResponse regenerateReport(Long reportId) {
         Report report = reportRepository.findReportById(reportId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告不存在"));
@@ -185,7 +193,14 @@ public class ReportGenerationApplicationService {
         request.setTemplateId(report.getTemplateId());
         request.setKnowledgeBaseIds(parseLongList(config.getKnowledgeBaseIds()));
         request.setDataSourceIds(parseLongList(config.getDataSourceIds()));
-        return createReport(request);
+        Map<String, ReportVariableValue> reusableVariables = new LinkedHashMap<>();
+        for (ReportVariableValue variable : reportRepository.findVariablesByReportId(reportId)) {
+            if (ReportVariableStatus.SUCCESS.name().equals(variable.getStatus())
+                    && variable.getVariableValue() != null && !variable.getVariableValue().isBlank()) {
+                reusableVariables.put(variable.getVariableName(), variable);
+            }
+        }
+        return createReport(request, reusableVariables);
     }
 
     public List<ReportVariableResponse> getReportVariables(Long reportId) {
@@ -253,7 +268,8 @@ public class ReportGenerationApplicationService {
         if (!"WORD".equals(normalizedFormat)) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "当前版本尚未生成PDF报告");
         }
-        if (!ReportStatus.COMPLETED.name().equals(report.getStatus())) {
+        if (!(ReportStatus.COMPLETED.name().equals(report.getStatus())
+                || ReportStatus.PARTIAL_SUCCESS.name().equals(report.getStatus()))) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "报告尚未生成成功");
         }
         return reportRepository.findCurrentWordFileId(reportId)
@@ -321,21 +337,30 @@ public class ReportGenerationApplicationService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告模板文件不存在"));
         validateTemplateFile(report.getProjectId(), template, templateFile);
 
-        Map<String, String> variables = generateReportVariables(report, task.getId());
-        byte[] reportBytes = renderDocx(task.getId(), templateFile, variables);
+        VariableGenerationResult generated = generateReportVariables(report, task.getId());
+        byte[] reportBytes = renderDocx(task.getId(), templateFile, generated.values());
 
         requireUpdated(reportRepository.updateTaskStatus(task.getId(), TASK_STATUS_PROCESSING, TASK_STAGE_STORING_RESULT, null), "task storing status update failed");
         Long wordFileId = saveGeneratedWord(report, reportBytes);
         ReportVersion version = saveVersion(report, config, wordFileId, reportBytes);
-        requireUpdated(reportRepository.updateReportSuccess(report.getId(), version.getId(), ReportStatus.COMPLETED.name(), 100, null), "report success status update failed");
+        String finalStatus = generated.failedCount() == 0
+                ? ReportStatus.COMPLETED.name()
+                : ReportStatus.PARTIAL_SUCCESS.name();
+        String partialMessage = generated.failedCount() == 0
+                ? null
+                : "部分变量生成失败，已在报告中标记：" + String.join("、", generated.failedVariables());
+        requireUpdated(reportRepository.updateReportSuccess(
+                report.getId(), version.getId(), finalStatus, 100, null, partialMessage),
+                "report success status update failed");
     }
 
-    private Map<String, String> generateReportVariables(Report report, Long taskId) {
+    private VariableGenerationResult generateReportVariables(Report report, Long taskId) {
         List<ReportVariableValue> variables = reportRepository.findVariablesByReportId(report.getId());
         if (variables.isEmpty()) {
             throw new BusinessException(ErrorCode.CONFLICT, "报告变量记录不存在");
         }
         Map<String, String> values = new LinkedHashMap<>();
+        List<String> failedVariables = new ArrayList<>();
         int total = variables.size();
         int completed = 0;
         for (ReportVariableValue variable : variables) {
@@ -374,7 +399,8 @@ public class ReportGenerationApplicationService {
                     throw new BusinessException(ErrorCode.CONFLICT,
                             "报告变量失败状态保存失败: " + variable.getVariableName() + "; 原因: " + errorMessage);
                 }
-                throw ex;
+                failedVariables.add(variable.getVariableName());
+                generatedValue = failedVariablePlaceholder(variable, errorMessage);
             }
             values.put(variable.getVariableName(), generatedValue);
             completed++;
@@ -384,8 +410,19 @@ public class ReportGenerationApplicationService {
                             TASK_STAGE_AI_CONTENT_GENERATION),
                     "report variable progress update failed");
         }
-        return values;
+        return new VariableGenerationResult(values, failedVariables.size(), failedVariables);
     }
+
+    private String failedVariablePlaceholder(ReportVariableValue variable, String errorMessage) {
+        return "【该部分未自动生成】\n"
+                + "变量：" + variable.getVariableName() + "\n"
+                + "生成要求：" + variable.getVariableDescription() + "\n"
+                + "失败原因：" + normalizeRequired(errorMessage, "未知错误") + "\n"
+                + "处理建议：请重新生成该变量，或下载报告后在此处人工补充内容。";
+    }
+
+    private record VariableGenerationResult(Map<String, String> values, int failedCount,
+                                            List<String> failedVariables) { }
 
     private byte[] renderDocx(Long taskId, FileObjectRecord templateFile, Map<String, String> variables) {
         requireUpdated(reportRepository.updateTaskStatus(taskId, TASK_STATUS_PROCESSING, TASK_STAGE_TEMPLATE_RENDERING, null), "task rendering status update failed");
@@ -627,7 +664,8 @@ public class ReportGenerationApplicationService {
 
     private void saveReportVariables(Report report, GenerateTask task, FileObjectRecord templateFile,
                                      List<Long> knowledgeBaseIds, List<Long> dataSourceIds,
-                                     List<TemplateVariableDescriptionResponse> templateVariables) {
+                                     List<TemplateVariableDescriptionResponse> templateVariables,
+                                     Map<String, ReportVariableValue> reusableVariables) {
         Long operatorId = SecurityUtils.getCurrentUserId();
         for (int index = 0; index < templateVariables.size(); index++) {
             TemplateVariableDescriptionResponse source = templateVariables.get(index);
@@ -638,20 +676,41 @@ public class ReportGenerationApplicationService {
             variable.setTemplateId(report.getTemplateId());
             variable.setTemplateFileId(templateFile.getId());
             variable.setKnowledgeBaseId(knowledgeBaseIds.isEmpty() ? 0L : knowledgeBaseIds.get(0));
-            variable.setKnowledgeBaseIds(toJsonArray(knowledgeBaseIds));
+            String knowledgeBaseIdsJson = toJsonArray(knowledgeBaseIds);
+            variable.setKnowledgeBaseIds(knowledgeBaseIdsJson);
             List<Long> variableDataSourceIds = source.getDataSourceIds() == null || source.getDataSourceIds().isEmpty()
                     ? dataSourceIds
                     : dataSourceIds.stream().filter(source.getDataSourceIds()::contains).toList();
-            variable.setDataSourceIds(toJsonArray(variableDataSourceIds));
+            String dataSourceIdsJson = toJsonArray(variableDataSourceIds);
+            variable.setDataSourceIds(dataSourceIdsJson);
             variable.setVariableName(source.getVariableName());
-            variable.setVariableDescription(source.getDescription().trim());
+            String description = source.getDescription().trim();
+            variable.setVariableDescription(description);
             variable.setSortNo(index + 1);
-            variable.setStatus(ReportVariableStatus.PENDING.name());
-            variable.setReferencesJson("[]");
+            ReportVariableValue reusable = reusableVariables.get(source.getVariableName());
+            if (canReuseVariable(reusable, description, knowledgeBaseIdsJson, dataSourceIdsJson)) {
+                variable.setVariableValue(reusable.getVariableValue());
+                variable.setStatus(ReportVariableStatus.SUCCESS.name());
+                variable.setReferencesJson(reusable.getReferencesJson() == null ? "[]" : reusable.getReferencesJson());
+            } else {
+                variable.setStatus(ReportVariableStatus.PENDING.name());
+                variable.setReferencesJson("[]");
+            }
             variable.setCreatedBy(operatorId);
             variable.setUpdatedBy(operatorId);
             reportRepository.saveVariable(variable);
         }
+    }
+
+    private boolean canReuseVariable(ReportVariableValue reusable, String description,
+                                     String knowledgeBaseIds, String dataSourceIds) {
+        return reusable != null
+                && ReportVariableStatus.SUCCESS.name().equals(reusable.getStatus())
+                && reusable.getVariableValue() != null
+                && !reusable.getVariableValue().isBlank()
+                && description.equals(reusable.getVariableDescription())
+                && knowledgeBaseIds.equals(reusable.getKnowledgeBaseIds())
+                && dataSourceIds.equals(reusable.getDataSourceIds());
     }
 
     private List<Long> parseLongList(String json) {
@@ -680,7 +739,7 @@ public class ReportGenerationApplicationService {
         try {
             return ReportStatus.valueOf(normalized).name();
         } catch (IllegalArgumentException ex) {
-            throw new BusinessException(ErrorCode.PARAM_ERROR, "status must be DRAFT, PENDING, PROCESSING, COMPLETED, FAILED, ARCHIVED or DELETED");
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "status must be DRAFT, PENDING, PROCESSING, COMPLETED, PARTIAL_SUCCESS, FAILED, ARCHIVED or DELETED");
         }
     }
 

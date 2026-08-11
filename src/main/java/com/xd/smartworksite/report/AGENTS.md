@@ -19,8 +19,8 @@ This file supplements the root `AGENTS.md` for knowledge- and database-based rep
 - Worker-side routing, RAG retrieval, database query, and model generation must call `routeForSystem`, `searchKnowledgeForSystem`, `queryDatabaseForSystem`, and `invokeModelForSystem` as applicable. These paths validate project existence/writability without depending on a logged-in request `SecurityContext`; user-facing QA continues to use the normal access-checked methods.
 - Empty RAG results are allowed to continue to the model. The prompt must forbid fabricated concrete project data when only general model knowledge is available.
 - Each variable is persisted immediately. `RUNNING`, `SUCCESS`, and `FAILED` updates must check affected rows and retain provider trace and retrieval references when available.
-- A variable failure marks the whole report task failed but preserves prior successes. Retrying the same task skips non-blank `SUCCESS` variables and regenerates only `PENDING` or `FAILED` rows.
-- DOCX rendering starts only after all variables have non-blank successful values. Body, table, header, and footer placeholders use the same generated value for repeated variable names.
+- A variable failure is persisted but does not stop the remaining variables. The generated DOCX contains an explicit placeholder for each failed variable, and the report ends as `PARTIAL_SUCCESS`; retry skips non-blank `SUCCESS` variables and regenerates only `PENDING` or `FAILED` rows.
+- DOCX rendering uses successful values plus explicit failure placeholders. Body, table, header, and footer placeholders use the same generated value for repeated variable names. `COMPLETED` and `PARTIAL_SUCCESS` reports are downloadable.
 
 ## Query And Frontend Contract
 

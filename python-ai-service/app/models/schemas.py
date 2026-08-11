@@ -146,11 +146,23 @@ class DatabaseGenerateQueryRequest(BaseModel):
     attempt: int = 1
 
 
+class DatabaseQueryPlan(BaseModel):
+    entities: list[str] = Field(default_factory=list)
+    metrics: list[dict[str, Any] | str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=list)
+    filters: list[dict[str, Any] | str] = Field(default_factory=list)
+    projectScopeField: str | None = None
+    expectedColumns: list[str] = Field(default_factory=list)
+    expectedShape: str = "ROWS"
+    ambiguities: list[str] = Field(default_factory=list)
+
+
 class DatabaseGenerateQueryData(BaseModel):
     sql: str
     parameters: dict[str, Any] = Field(default_factory=dict)
     explanation: str
     riskLevel: str = "LOW"
+    plan: DatabaseQueryPlan = Field(default_factory=DatabaseQueryPlan)
 
 
 class DatabaseSummarizeRequest(BaseModel):

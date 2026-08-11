@@ -551,7 +551,7 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 | GET | `/api/reports/{reportId}/download-file?format=WORD` | 经 Java 后端流式下载 Word 报告，适合 Windows 浏览器访问 Linux 服务器部署 |
 | GET | `/api/reports/{reportId}/download?format=WORD` | 兼容接口：获取 MinIO 预签名 Word 报告下载 URL |
 
-报告生成规则：创建时可多选当前项目已启用的 `PROJECT` 知识库和已启用数据库数据源，两类来源至少选择一项；旧字段 `knowledgeBaseId` 仍兼容。`POLICY` 系统政策库会被拒绝。模板必须包含 `{{ var_xx_xx }}` 变量且每个变量都已配置非空描述；变量可配置 `dataSourceIds` 白名单，留空表示允许 AI 在报告所选数据源中自动选择。Worker 按变量调用 AI 路由决定知识检索、只读数据库查询或混合生成，并仅执行路由要求且属于变量快照的数据源；路由不可用时安全回退为混合。数据库 SQL 会按数据源方言生成，由 Java 安全校验并以只读方式执行；可修复 SQL 错误默认最多进行 4 次 SQL 生成/修复尝试，可通过 `AI_DATABASE_QUERY_MAX_ATTEMPTS` 调整。连接、认证和超时错误不会触发 SQL 修正重试。各变量不共享上下文且不写入普通问答会话历史。变量值和状态实时保存到 `report_variable_value`；单变量失败会使报告失败，任务重试时保留成功值并只补失败或未处理变量。资料为空时允许模型生成通用内容，但不得伪造具体项目数据。报告列表 `status` 查询只允许 `DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`FAILED`、`ARCHIVED`、`DELETED`。
+报告生成规则：创建时可多选当前项目已启用的 `PROJECT` 知识库和已启用数据库数据源，两类来源至少选择一项；旧字段 `knowledgeBaseId` 仍兼容。`POLICY` 系统政策库会被拒绝。模板必须包含 `{{ var_xx_xx }}` 变量且每个变量都已配置非空描述；变量可配置 `dataSourceIds` 白名单，留空表示允许 AI 在报告所选数据源中自动选择。Worker 按变量调用 AI 路由决定知识检索、只读数据库查询或混合生成，并仅执行路由要求且属于变量快照的数据源；路由不可用时安全回退为混合。数据库 SQL 会按数据源方言生成，并返回包含实体、指标、维度、过滤条件、项目范围字段和预期结果列的结构化取数计划；Java 会自动读取表/列注释、主外键元数据，执行只读安全校验，并校验实际结果列是否满足计划。可修复 SQL 错误默认最多进行 4 次 SQL 生成/修复尝试，可通过 `AI_DATABASE_QUERY_MAX_ATTEMPTS` 调整；相同失败 SQL 不会重复执行，MySQL 3065（包括 `HY000` SQLState）、多语句、语法和字段错误会进入定向修复，连接、认证和超时错误不会触发 SQL 修正重试。数据库真实列和受限结果行会作为报告模型的直接证据，空结果不会被推断为“不存在风险”或“已经完成”。各变量不共享上下文且不写入普通问答会话历史。变量值和状态实时保存到 `report_variable_value`；单变量失败不会阻断其他变量，Word 中会写入失败占位内容，报告标记为 `PARTIAL_SUCCESS` 并允许下载人工补充；任务重试时保留成功值并只补失败或未处理变量。资料为空时允许模型生成通用内容，但不得伪造具体项目数据。报告列表 `status` 查询允许 `DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`PARTIAL_SUCCESS`、`FAILED`、`ARCHIVED`、`DELETED`。
 
 Report write rule: report generation must check affected rows for report-task linking, task status, processing, success, failed, and version file binding. A zero-row update is a conflict and must not be reported as completed generation.
 
@@ -656,7 +656,7 @@ Knowledge write rule: knowledge-base updates must check affected rows; document 
 | POST | `/api/ai/context/prepare` | 准备模型调用上下文 |
 | GET | `/api/ai/external-call-logs` | 分页查询 AI 外部调用日志 |
 
-数据库问答和报告变量生成会对可修复 SQL 错误进行有限自动修正，默认最多 4 次 SQL 生成/修复尝试，可通过 `AI_DATABASE_QUERY_MAX_ATTEMPTS` 调整。修复范围包括 MySQL `DISTINCT` + `ORDER BY` 规则、本地安全校验发现的多语句 SQL、语法错误和字段错误；数据库认证、连接失败等非 SQL 问题不会重试。
+数据库问答和报告变量生成会对可修复 SQL 错误进行有限自动修正，默认最多 4 次 SQL 生成/修复尝试，可通过 `AI_DATABASE_QUERY_MAX_ATTEMPTS` 调整。修复范围包括 MySQL `DISTINCT` + `ORDER BY` 规则（含错误码 3065、SQLState 为 `HY000` 的情况）、本地安全校验发现的多语句 SQL、语法错误、字段错误和取数计划预期列缺失；相同失败 SQL 不会重复执行。数据库认证、连接失败等非 SQL 问题不会重试。
 
 ### QA
 
