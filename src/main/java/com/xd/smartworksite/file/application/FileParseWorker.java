@@ -1,6 +1,8 @@
 package com.xd.smartworksite.file.application;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.xd.smartworksite.common.exception.BusinessException;
+import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.file.domain.FileObject;
 import com.xd.smartworksite.file.domain.FileParseRecord;
 import com.xd.smartworksite.file.domain.FileParseStage;
@@ -58,6 +60,9 @@ public class FileParseWorker {
         try {
             FileParseRecord record = fileParseRecordRepository.findById(recordId).orElseThrow();
             FileObject fileObject = fileObjectRepository.findById(record.getFileId()).orElseThrow();
+            if (!record.getProjectId().equals(fileObject.getProjectId())) {
+                throw new BusinessException(ErrorCode.FORBIDDEN, "parse record and source file project mismatch");
+            }
 
             update(recordId, FileParseStage.LOADING_SOURCE, 10);
             update(recordId, FileParseStage.PREPARING_INPUT, 25);

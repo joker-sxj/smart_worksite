@@ -10,7 +10,8 @@ import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { FileObject } from '../../api/types';
 import { createFileParsePolling } from './fileParsePolling';
-import { fileParseStatusText, hasActiveFileParse } from './fileParseStatus';
+import { fileParseStatusText, hasActiveFileParse, isRetryableFileParse } from './fileParseStatus';
+import { isParseableFile as supportsFileParse, parseTargetFormat as targetFormatForFile } from './supportedFileParse';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -34,17 +35,8 @@ const fileManageTip = '当前账号没有文件管理权限';
 const bizTypeOptions = [
   { label: '审查文档', value: 'REVIEW_DOC' }
 ];
-const contentReadyStatuses = new Set(['SUCCESS']);
+const contentReadyStatuses = new Set(['PARSED', 'SUCCESS']);
 const retryableParseStatuses = new Set(['FAILED']);
-const parseableExts = new Set(['png', 'jpg', 'jpeg', 'webp', 'pdf', 'doc', 'docx']);
-const parseableContentTypes = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/webp',
-  'application/pdf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-]);
 
 function normalizeStatus(status?: string) {
   return (status || '').toUpperCase();
@@ -55,7 +47,7 @@ function canShowParseContent(record: FileParseRecord) {
 }
 
 function canRetryParse(record: FileParseRecord) {
-  return retryableParseStatuses.has(normalizeStatus(record.status));
+  return isRetryableFileParse(record);
 }
 
 function displayFileName(row: FileObject) {
@@ -74,21 +66,15 @@ function formatFileSize(size?: number) {
 }
 
 function isParseableFile(row: FileObject) {
-  const ext = (row.fileExt || '').trim().toLowerCase();
-  const contentType = (row.contentType || '').split(';', 1)[0].trim().toLowerCase();
-  return parseableExts.has(ext) || parseableContentTypes.has(contentType);
+  return supportsFileParse(row.fileName, row.fileExt, row.contentType);
 }
 
 function parseDisabledReason(row: FileObject) {
-  return isParseableFile(row) ? '' : '当前文件类型不支持解析，仅支持图片、PDF、Word';
+  return isParseableFile(row) ? '' : '当前文件类型不支持解析，仅支持图片、PDF、Word、Excel、PowerPoint';
 }
 
 function parseTargetFormat(row: FileObject) {
-  const ext = (row.fileExt || '').trim().toLowerCase();
-  const contentType = (row.contentType || '').split(';', 1)[0].trim().toLowerCase();
-  return (parseableContentTypes.has(contentType) && contentType.startsWith('image/')) || ['png', 'jpg', 'jpeg', 'webp'].includes(ext)
-    ? 'TEXT'
-    : 'MARKDOWN';
+  return targetFormatForFile(row.fileName, row.fileExt, row.contentType);
 }
 
 async function loadFiles() {

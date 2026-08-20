@@ -113,11 +113,11 @@
 - Modify: `frontend/src/views/file/fileParseStatus.ts`
 - Modify: `frontend/src/views/knowledge/knowledgeDocumentParseState.ts`
 
-- [ ] Create test XLSX/PPTX documents in test code with Apache POI; do not commit binary fixtures unless necessary.
-- [ ] Verify failing tests require sheet/cell-range, merged-cell, cached-formula, slide, table, notes, and reading-order metadata.
-- [ ] Implement parsers with bounded rows/cells/slides and no external formula execution.
-- [ ] Preserve explicit `PARSING` state and idempotent retry behavior.
-- [ ] Run Java and frontend parse-state tests.
+- [x] Create test XLSX/PPTX documents in test code with Apache POI; do not commit binary fixtures unless necessary.
+- [x] Verify failing tests require sheet/cell-range, merged-cell, cached-formula, slide, table, notes, and reading-order metadata.
+- [x] Implement parsers with bounded rows/cells/slides and no external formula execution.
+- [x] Preserve explicit `PARSING` state and idempotent retry behavior.
+- [x] Run Java and frontend parse-state tests.
 - [ ] Commit with `feat: parse Excel and PowerPoint knowledge documents`.
 
 ## Task 6: Add Page-Level PDF OCR Fallback

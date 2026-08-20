@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fileParseStatusText, hasActiveFileParse } from './fileParseStatus';
+import { fileParseStatusText, hasActiveFileParse, isRetryableFileParse } from './fileParseStatus';
 
 describe('fileParseStatusText', () => {
   it.each([
@@ -18,13 +18,25 @@ describe('fileParseStatusText', () => {
 });
 
 describe('hasActiveFileParse', () => {
-  it('returns true while any record is pending or running', () => {
+  it('returns true while any record is pending or parsing', () => {
     expect(hasActiveFileParse([{ status: 'SUCCESS' }, { status: 'RUNNING' }])).toBe(true);
     expect(hasActiveFileParse([{ status: 'PENDING' }])).toBe(true);
+    expect(hasActiveFileParse([{ status: 'PARSING' }])).toBe(true);
   });
 
   it('returns false after all records reach terminal states', () => {
-    expect(hasActiveFileParse([{ status: 'SUCCESS' }, { status: 'FAILED' }])).toBe(false);
+    expect(hasActiveFileParse([{ status: 'PARSED' }, { status: 'FAILED' }])).toBe(false);
     expect(hasActiveFileParse([])).toBe(false);
+  });
+});
+
+
+describe('isRetryableFileParse', () => {
+  it.each(['FAILED', 'CANCELED', 'failed', 'canceled'])('allows retrying %s records', (status) => {
+    expect(isRetryableFileParse({ status })).toBe(true);
+  });
+
+  it.each(['PENDING', 'PARSING', 'RUNNING', 'PARSED', 'SUCCESS'])('rejects retrying %s records', (status) => {
+    expect(isRetryableFileParse({ status })).toBe(false);
   });
 });

@@ -12,7 +12,8 @@ import { useUserStore } from '../../stores/user';
 import type { ID, KnowledgeBase, KnowledgeDocument } from '../../api/types';
 import { createFileParsePolling } from '../file/fileParsePolling';
 import { fileParseStatusText } from '../file/fileParseStatus';
-import { documentParseActionText, documentParseRecord, setDocumentParseRecord, type DocumentParseRecords } from './knowledgeDocumentParseState';
+import { fileExtension, isParseableFileName, parseTargetFormatForFileName } from '../file/supportedFileParse';
+import { documentParseActionText, documentParseRecord, isDocumentParseReady, isParseableKnowledgeDocument, knowledgeDocumentParseTargetFormat, setDocumentParseRecord, type DocumentParseRecords } from './knowledgeDocumentParseState';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -39,7 +40,6 @@ const canManageKnowledge = computed(() => userStore.hasPermission('knowledge:man
 const knowledgeManageTip = '当前账号没有知识库管理权限';
 const indexableStatuses = new Set(['PENDING', 'FAILED']);
 const uploadableExts = new Set(['png', 'jpg', 'jpeg', 'webp', 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'csv']);
-const parseableExts = new Set(['png', 'jpg', 'jpeg', 'webp', 'pdf', 'doc', 'docx']);
 let docsRefreshTimer: number | undefined;
 
 function isPolicyBase(base?: KnowledgeBase | null) {
@@ -54,13 +54,10 @@ function canSubmitIndex(row: KnowledgeDocument) {
   return canManageKnowledge.value && indexableStatuses.has(normalizeStatus(row.indexStatus));
 }
 
-function fileExt(name?: string) {
-  const matched = (name || '').trim().toLowerCase().match(/\.([a-z0-9]+)$/);
-  return matched?.[1] || '';
-}
+
 
 function isParseableDocument(row: KnowledgeDocument) {
-  return Boolean(row.fileId && parseableExts.has(fileExt(row.title)));
+  return isParseableKnowledgeDocument(row);
 }
 
 function canParseDocument(row: KnowledgeDocument) {
@@ -72,7 +69,7 @@ function latestParse(row: KnowledgeDocument) {
 }
 
 function isDocumentParsing(row: KnowledgeDocument) {
-  return ['PENDING', 'RUNNING'].includes(normalizeStatus(latestParse(row)?.status));
+  return ['PENDING', 'PARSING', 'RUNNING'].includes(normalizeStatus(latestParse(row)?.status));
 }
 
 function canStartParse(row: KnowledgeDocument) {
@@ -89,14 +86,15 @@ function parseStatusText(row: KnowledgeDocument) {
 }
 
 function parseTargetFormat(row: KnowledgeDocument) {
-  return ['png', 'jpg', 'jpeg', 'webp'].includes(fileExt(row.title)) ? 'TEXT' : 'MARKDOWN';
+  return knowledgeDocumentParseTargetFormat(row);
 }
 
 function parseDisabledReason(row: KnowledgeDocument) {
   if (!canManageKnowledge.value) return knowledgeManageTip;
   if (isDocumentParsing(row)) return '文件正在解析，请等待当前任务完成';
   if (!row.fileId) return '文档缺少 fileId，无法创建文件解析任务';
-  return `当前文件格式 .${fileExt(row.title) || 'unknown'} 暂不支持解析，无法作为知识库入库来源`;
+  const fileType = row.fileExt || row.contentType || row.title?.split('.').pop()?.toLowerCase() || 'unknown';
+  return `当前文件格式 ${fileType} 暂不支持解析，无法作为知识库入库来源`;
 }
 
 async function refreshDocumentParseRecords(baseId: ID) {
@@ -111,7 +109,7 @@ async function refreshDocumentParseRecords(baseId: ID) {
   }));
   if (String(activeBaseId.value) !== String(baseId)) return false;
   documentParseRecords.value = Object.fromEntries(results.filter((item): item is readonly [string, FileParseRecord] => Boolean(item)));
-  return Object.values(documentParseRecords.value).some((record) => ['PENDING', 'RUNNING'].includes(normalizeStatus(record.status)));
+  return Object.values(documentParseRecords.value).some((record) => ['PENDING', 'PARSING', 'RUNNING'].includes(normalizeStatus(record.status)));
 }
 
 const parsePolling = createFileParsePolling(async () => {
@@ -275,7 +273,7 @@ async function uploadDocs() {
   uploading.value = true;
   docsError.value = '';
   try {
-    const unsupported = selectedFiles.value.filter((file) => !uploadableExts.has(fileExt(file.name)));
+    const unsupported = selectedFiles.value.filter((file) => !uploadableExts.has(fileExtension(file.name)));
     if (unsupported.length) {
       ElMessage.error(`以下文件暂不支持知识库解析入库：${unsupported.map((file) => file.name).join('、')}`);
       return;
@@ -317,7 +315,7 @@ async function handleIndex(row: KnowledgeDocument) {
   if (!canSubmitIndex(row)) return ElMessage.warning(`当前文档状态为 ${row.indexStatus}，不能重复提交入库任务`);
   try {
     const latestParse = await fetchLatestSuccessfulFileParseRecord(row.fileId, row.projectId);
-    if (normalizeStatus(latestParse.status) !== 'SUCCESS') {
+    if (!isDocumentParseReady(latestParse)) {
       ElMessage.warning(`最新成功解析结果状态异常，请重新解析后再入库`);
       return;
     }

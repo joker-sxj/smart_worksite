@@ -51,6 +51,11 @@ public class MyBatisFileParseRecordRepository implements FileParseRecordReposito
     }
 
     @Override
+    public Optional<FileParseRecord> findActive(Long projectId, Long fileId, String sourceFileHash, String resultFormat) {
+        return Optional.ofNullable(fileParseRecordMapper.selectActive(projectId, fileId, sourceFileHash, resultFormat));
+    }
+
+    @Override
     public int updateRunning(Long recordId, String stage, int progress) {
         return fileParseRecordMapper.updateRunning(recordId, stage, progress);
     }

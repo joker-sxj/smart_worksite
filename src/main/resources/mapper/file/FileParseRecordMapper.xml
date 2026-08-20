@@ -75,7 +75,7 @@
         from file_parse_record
         where project_id = #{projectId}
           and file_id = #{fileId}
-          and status = 'SUCCESS'
+          and status in ('PARSED', 'SUCCESS')
           and result_object_name is not null
           and deleted = 0
         order by finished_at desc, id desc
@@ -87,18 +87,31 @@
         from file_parse_record
         where project_id = #{projectId}
           and file_id = #{fileId}
-          and source_file_hash = #{sourceFileHash}
+          and source_file_hash &lt;=&gt; #{sourceFileHash}
           and result_format = #{resultFormat}
-          and status = 'SUCCESS'
+          and status in ('PARSED', 'SUCCESS')
           and result_object_name is not null
           and deleted = 0
         order by finished_at desc, id desc
         limit 1
     </select>
 
+    <select id="selectActive" resultMap="FileParseRecordResultMap">
+        select <include refid="FileParseRecordColumns"/>
+        from file_parse_record
+        where project_id = #{projectId}
+          and file_id = #{fileId}
+          and source_file_hash &lt;=&gt; #{sourceFileHash}
+          and result_format = #{resultFormat}
+          and status in ('PENDING', 'PARSING', 'RUNNING')
+          and deleted = 0
+        order by created_at desc, id desc
+        limit 1
+    </select>
+
     <update id="updateRunning">
         update file_parse_record
-        set status = 'RUNNING',
+        set status = 'PARSING',
             current_stage = #{stage},
             progress = #{progress},
             started_at = coalesce(started_at, current_timestamp),
@@ -109,7 +122,7 @@
 
     <update id="updateSucceeded" parameterType="com.xd.smartworksite.file.domain.FileParseRecord">
         update file_parse_record
-        set status = 'SUCCESS',
+        set status = 'PARSED',
             progress = 100,
             current_stage = #{currentStage},
             result_object_name = #{resultObjectName},

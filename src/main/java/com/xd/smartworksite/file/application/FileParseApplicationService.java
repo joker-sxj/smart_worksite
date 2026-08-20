@@ -37,6 +37,15 @@ public class FileParseApplicationService {
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     );
 
+    private static final Set<String> SPREADSHEET_TYPES = Set.of(
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    private static final Set<String> PRESENTATION_TYPES = Set.of(
+            "application/vnd.ms-powerpoint",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    );
+
     private final FileObjectRepository fileObjectRepository;
     private final FileParseRecordRepository fileParseRecordRepository;
     private final FileParseWorker fileParseWorker;
@@ -69,6 +78,13 @@ public class FileParseApplicationService {
         verifyProject(fileObject, request.getProjectId());
         FileParseResultFormat resultFormat = resolveTargetFormat(fileObject, request.getTargetFormat());
 
+        FileParseRecord activeRecord = fileParseRecordRepository.findActive(
+                        fileObject.getProjectId(), fileObject.getId(), fileObject.getFileHash(), resultFormat.name())
+                .orElse(null);
+        if (activeRecord != null) {
+            return toResponse(activeRecord);
+        }
+
         if (!Boolean.TRUE.equals(request.getForce())) {
             FileParseRecord reusable = fileParseRecordRepository.findReusable(
                             fileObject.getProjectId(),
@@ -94,7 +110,14 @@ public class FileParseApplicationService {
         record.setProgress(0);
         record.setCurrentStage(FileParseStage.CREATED.name());
         record.setMetadata(buildCreateMetadata(request));
-        fileParseRecordRepository.insert(record);
+        try {
+            fileParseRecordRepository.insert(record);
+        } catch (org.springframework.dao.DuplicateKeyException ex) {
+            return fileParseRecordRepository.findActive(
+                            fileObject.getProjectId(), fileObject.getId(), fileObject.getFileHash(), resultFormat.name())
+                    .map(this::toResponse)
+                    .orElseThrow(() -> ex);
+        }
         if (record.getId() == null) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "file parse record id was not generated");
         }
@@ -154,7 +177,7 @@ public class FileParseApplicationService {
     }
 
     private FileParseContentResponse readParseContent(FileParseRecord record) {
-        if (!FileParseStatus.SUCCESS.name().equals(record.getStatus()) || record.getResultObjectName() == null) {
+        if (!FileParseStatus.isParsed(record.getStatus()) || record.getResultObjectName() == null) {
             throw new BusinessException(ErrorCode.CONFLICT, "file parse result is not ready");
         }
         String content;
@@ -176,6 +199,9 @@ public class FileParseApplicationService {
     public FileParseRecordResponse retryParse(Long recordId) {
         FileParseRecord sourceRecord = findRecord(recordId);
         projectAccessApplicationService.requireProjectWritableAccess(sourceRecord.getProjectId());
+        if (!FileParseStatus.isRetryable(sourceRecord.getStatus())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "only failed or canceled parse records can be retried");
+        }
         FileParseRequest request = new FileParseRequest();
         request.setProjectId(sourceRecord.getProjectId());
         request.setTargetFormat(sourceRecord.getResultFormat());
@@ -236,6 +262,12 @@ public class FileParseApplicationService {
         if (isWord(fileObject)) {
             return "WORD_TO_MARKDOWN";
         }
+        if (isSpreadsheet(fileObject)) {
+            return "SPREADSHEET_TO_MARKDOWN";
+        }
+        if (isPresentation(fileObject)) {
+            return "PRESENTATION_TO_MARKDOWN";
+        }
         throw new BusinessException(ErrorCode.PARAM_ERROR, "unsupported file parse content type");
     }
 
@@ -254,6 +286,15 @@ public class FileParseApplicationService {
                 || Set.of("doc", "docx").contains(normalizeExt(fileObject.getFileExt()));
     }
 
+    private boolean isSpreadsheet(FileObject fileObject) {
+        return SPREADSHEET_TYPES.contains(normalizeContentType(fileObject.getContentType()))
+                || Set.of("xls", "xlsx").contains(normalizeExt(fileObject.getFileExt()));
+    }
+
+    private boolean isPresentation(FileObject fileObject) {
+        return PRESENTATION_TYPES.contains(normalizeContentType(fileObject.getContentType()))
+                || Set.of("ppt", "pptx").contains(normalizeExt(fileObject.getFileExt()));
+    }
     private String normalizeContentType(String contentType) {
         if (contentType == null || contentType.isBlank()) {
             return "";

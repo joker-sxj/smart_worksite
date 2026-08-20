@@ -22,6 +22,11 @@ public interface FileParseRecordMapper {
                                    @Param("sourceFileHash") String sourceFileHash,
                                    @Param("resultFormat") String resultFormat);
 
+    FileParseRecord selectActive(@Param("projectId") Long projectId,
+                                 @Param("fileId") Long fileId,
+                                 @Param("sourceFileHash") String sourceFileHash,
+                                 @Param("resultFormat") String resultFormat);
+
     int updateRunning(@Param("recordId") Long recordId, @Param("stage") String stage, @Param("progress") int progress);
 
     int updateSucceeded(FileParseRecord record);

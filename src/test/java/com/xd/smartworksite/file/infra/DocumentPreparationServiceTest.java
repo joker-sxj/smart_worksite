@@ -95,6 +95,33 @@ class DocumentPreparationServiceTest {
         assertThat(prepared.getDocumentId()).isEqualTo(102L);
         assertThat(prepared.getTextContent()).isEqualTo("risk table");
     }
+
+    @Test
+    void delegatesUsingStoredExtensionWhenFileNameAndMimeTypeAreAmbiguous() {
+        byte[] workbook = new byte[]{9, 8, 7};
+        FileObject fileObject = fileObject(10L, 103L, "uploaded-file", "xlsx",
+                "application/octet-stream");
+        StorageAdapter storageAdapter = mock(StorageAdapter.class);
+        when(storageAdapter.openObject(fileObject.getObjectName()))
+                .thenReturn(new ByteArrayInputStream(workbook));
+        DocumentParser parser = new DocumentParser() {
+            @Override
+            public boolean supports(String fileExt, String contentType) {
+                return "xlsx".equals(fileExt);
+            }
+
+            @Override
+            public PreparedDocument parse(FileObject source, byte[] content) {
+                return PreparedDocument.text("xlsx", "risk table", 0, false);
+            }
+        };
+        DocumentPreparationService service = new DocumentPreparationService(
+                storageAdapter, new FileProperties(), java.util.List.of(parser));
+
+        PreparedDocument prepared = service.prepare(fileObject);
+
+        assertThat(prepared.getInputFormat()).isEqualTo("xlsx");
+    }
     private DocumentPreparationService serviceFor(FileObject fileObject, byte[] content) {
         StorageAdapter storageAdapter = mock(StorageAdapter.class);
         when(storageAdapter.openObject(fileObject.getObjectName()))

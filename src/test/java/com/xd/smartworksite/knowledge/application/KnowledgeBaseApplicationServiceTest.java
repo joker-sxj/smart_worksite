@@ -230,6 +230,8 @@ class KnowledgeBaseApplicationServiceTest {
         assertThat(document.getKnowledgeBaseId()).isEqualTo(knowledgeBase.getKnowledgeBaseId());
         assertThat(document.getFileId()).isEqualTo(99L);
         assertThat(document.getIndexStatus()).isEqualTo("PENDING");
+        assertThat(document.getFileExt()).isEqualTo("xlsx");
+        assertThat(document.getContentType()).isEqualTo("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         assertThat(document.getVersionNo()).isEqualTo(1);
     }
 
@@ -417,7 +419,9 @@ class KnowledgeBaseApplicationServiceTest {
         FileObjectResponse response = new FileObjectResponse();
         response.setFileId(99L);
         response.setProjectId(1L);
-        response.setFileName("安全手册.pdf");
+        response.setFileName("安全手册");
+        response.setFileExt("xlsx");
+        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         return response;
     }
 

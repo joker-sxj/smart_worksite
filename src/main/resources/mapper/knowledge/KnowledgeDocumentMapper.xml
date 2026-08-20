@@ -8,6 +8,8 @@
         <result property="knowledgeBaseId" column="knowledge_base_id"/>
         <result property="fileId" column="file_id"/>
         <result property="title" column="title"/>
+        <result property="fileExt" column="file_ext"/>
+        <result property="contentType" column="content_type"/>
         <result property="sourceType" column="source_type"/>
         <result property="indexStatus" column="index_status"/>
         <result property="taskId" column="task_id"/>
@@ -47,12 +49,12 @@
         where knowledge_base_id = #{knowledgeBaseId}
           and deleted = 0
         <if test="indexStatus != null and indexStatus != ''">
-            and index_status = #{indexStatus}
+            and kd.index_status = #{indexStatus}
         </if>
         <if test="keyword != null and keyword != ''">
-            and title like concat('%', #{keyword}, '%')
+            and kd.title like concat('%', #{keyword}, '%')
         </if>
-        order by created_at desc, id desc
+        order by kd.created_at desc, kd.id desc
     </select>
 
     <update id="markIndexQueued">

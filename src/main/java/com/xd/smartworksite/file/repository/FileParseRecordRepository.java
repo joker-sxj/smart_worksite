@@ -19,6 +19,8 @@ public interface FileParseRecordRepository {
 
     Optional<FileParseRecord> findReusable(Long projectId, Long fileId, String sourceFileHash, String resultFormat);
 
+    Optional<FileParseRecord> findActive(Long projectId, Long fileId, String sourceFileHash, String resultFormat);
+
     int updateRunning(Long recordId, String stage, int progress);
 
     int updateSucceeded(FileParseRecord record);

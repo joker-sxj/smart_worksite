@@ -148,6 +148,8 @@ export interface KnowledgeDocument {
   knowledgeBaseId: ID;
   fileId?: ID;
   title: string;
+  fileExt?: string;
+  contentType?: string;
   sourceType?: string;
   indexStatus: Status;
   taskId?: ID;

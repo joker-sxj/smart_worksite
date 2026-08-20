@@ -61,7 +61,7 @@ public class DocumentPreparationService {
             if ("doc".equals(fileExt) || "application/msword".equals(contentType)) {
                 return prepareDoc(bytes).withSource(fileObject.getProjectId(), fileObject.getId());
             }
-            return parserRegistry.find(fileObject.getFileName(), contentType)
+            return parserRegistry.find(fileObject.getFileName(), fileExt, contentType)
                     .map(parser -> parser.parse(fileObject, bytes)
                             .withSource(fileObject.getProjectId(), fileObject.getId()))
                     .orElseThrow(() -> new BusinessException(

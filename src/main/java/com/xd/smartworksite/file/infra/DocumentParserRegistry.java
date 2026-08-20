@@ -16,11 +16,19 @@ public final class DocumentParserRegistry {
     }
 
     public Optional<DocumentParser> find(String fileName, String contentType) {
-        String extension = extensionOf(fileName);
+        return find(fileName, "", contentType);
+    }
+
+    public Optional<DocumentParser> find(String fileName, String fileExt, String contentType) {
+        String extension = normalizeExtension(fileExt);
+        if (extension.isEmpty()) {
+            extension = extensionOf(fileName);
+        }
+        final String resolvedExtension = extension;
         String normalizedContentType = normalizeContentType(contentType);
         if (!extension.isEmpty()) {
             Optional<DocumentParser> extensionMatch = parsers.stream()
-                    .filter(parser -> parser.supports(extension, ""))
+                    .filter(parser -> parser.supports(resolvedExtension, ""))
                     .findFirst();
             if (extensionMatch.isPresent()) {
                 return extensionMatch;
@@ -45,6 +53,14 @@ public final class DocumentParserRegistry {
             return "";
         }
         return fileName.substring(dot + 1).trim().toLowerCase(Locale.ROOT);
+    }
+
+    static String normalizeExtension(String fileExt) {
+        if (fileExt == null || fileExt.isBlank()) {
+            return "";
+        }
+        String normalized = fileExt.trim().toLowerCase(Locale.ROOT);
+        return normalized.startsWith(".") ? normalized.substring(1) : normalized;
     }
 
     static String normalizeContentType(String contentType) {

@@ -8,6 +8,8 @@ public class KnowledgeDocumentResponse {
     private Long knowledgeBaseId;
     private Long fileId;
     private String title;
+    private String fileExt;
+    private String contentType;
     private String sourceType;
     private String indexStatus;
     private Long taskId;
@@ -26,6 +28,10 @@ public class KnowledgeDocumentResponse {
     public void setFileId(Long fileId) { this.fileId = fileId; }
     public String getTitle() { return title; }
     public void setTitle(String title) { this.title = title; }
+    public String getFileExt() { return fileExt; }
+    public void setFileExt(String fileExt) { this.fileExt = fileExt; }
+    public String getContentType() { return contentType; }
+    public void setContentType(String contentType) { this.contentType = contentType; }
     public String getSourceType() { return sourceType; }
     public void setSourceType(String sourceType) { this.sourceType = sourceType; }
     public String getIndexStatus() { return indexStatus; }

@@ -63,6 +63,13 @@ public class FileProperties {
         private int maxPages = 100;
         private int resultPreviewLength = 2000;
         private int maxInputChars = 120000;
+        private int maxSpreadsheetRows = 10000;
+        private int maxSpreadsheetCells = 200000;
+        private int maxSpreadsheetColumnSpan = 16384;
+        private int maxSpreadsheetExpandedCells = 2_000_000;
+        private int maxSlides = 200;
+        private int maxPresentationShapes = 10000;
+        private int maxPresentationCells = 100000;
         private QwenVl qwenVl = new QwenVl();
 
         public boolean isEnabled() {
@@ -95,6 +102,61 @@ public class FileProperties {
 
         public void setMaxInputChars(int maxInputChars) {
             this.maxInputChars = maxInputChars;
+        }
+
+
+        public int getMaxSpreadsheetRows() {
+            return maxSpreadsheetRows;
+        }
+
+        public void setMaxSpreadsheetRows(int maxSpreadsheetRows) {
+            this.maxSpreadsheetRows = maxSpreadsheetRows;
+        }
+
+        public int getMaxSpreadsheetCells() {
+            return maxSpreadsheetCells;
+        }
+
+        public void setMaxSpreadsheetCells(int maxSpreadsheetCells) {
+            this.maxSpreadsheetCells = maxSpreadsheetCells;
+        }
+
+        public int getMaxSpreadsheetColumnSpan() {
+            return maxSpreadsheetColumnSpan;
+        }
+
+        public void setMaxSpreadsheetColumnSpan(int maxSpreadsheetColumnSpan) {
+            this.maxSpreadsheetColumnSpan = maxSpreadsheetColumnSpan;
+        }
+
+        public int getMaxSpreadsheetExpandedCells() {
+            return maxSpreadsheetExpandedCells;
+        }
+
+        public void setMaxSpreadsheetExpandedCells(int maxSpreadsheetExpandedCells) {
+            this.maxSpreadsheetExpandedCells = maxSpreadsheetExpandedCells;
+        }
+        public int getMaxSlides() {
+            return maxSlides;
+        }
+
+        public void setMaxSlides(int maxSlides) {
+            this.maxSlides = maxSlides;
+        }
+        public int getMaxPresentationShapes() {
+            return maxPresentationShapes;
+        }
+
+        public void setMaxPresentationShapes(int maxPresentationShapes) {
+            this.maxPresentationShapes = maxPresentationShapes;
+        }
+
+        public int getMaxPresentationCells() {
+            return maxPresentationCells;
+        }
+
+        public void setMaxPresentationCells(int maxPresentationCells) {
+            this.maxPresentationCells = maxPresentationCells;
         }
 
         public QwenVl getQwenVl() {

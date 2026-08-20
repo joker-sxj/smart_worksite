@@ -171,6 +171,8 @@ public class KnowledgeBaseApplicationService {
         document.setKnowledgeBaseId(knowledgeBase.getId());
         document.setFileId(file.getFileId());
         document.setTitle(normalizeTitle(request.getTitle(), file.getFileName()));
+        document.setFileExt(file.getFileExt());
+        document.setContentType(file.getContentType());
         document.setSourceType(trimToNull(request.getSourceType()));
         document.setIndexStatus(KnowledgeDocumentIndexStatus.PENDING.name());
         document.setVersionNo(1);
@@ -465,6 +467,8 @@ public class KnowledgeBaseApplicationService {
         response.setKnowledgeBaseId(document.getKnowledgeBaseId());
         response.setFileId(document.getFileId());
         response.setTitle(document.getTitle());
+        response.setFileExt(document.getFileExt());
+        response.setContentType(document.getContentType());
         response.setSourceType(document.getSourceType());
         response.setIndexStatus(document.getIndexStatus());
         response.setTaskId(document.getTaskId());

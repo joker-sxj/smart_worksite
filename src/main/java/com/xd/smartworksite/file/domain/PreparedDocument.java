@@ -48,14 +48,22 @@ public final class PreparedDocument {
 
     public static PreparedDocument forFile(Long projectId, Long documentId, String inputFormat,
                                            List<DocumentBlock> blocks, int pageCount, boolean truncated) {
+        return forFile(projectId, documentId, inputFormat, blocks, pageCount, truncated, 0);
+    }
+
+    public static PreparedDocument forFile(Long projectId, Long documentId, String inputFormat,
+                                           List<DocumentBlock> blocks, int pageCount, boolean truncated,
+                                           int maxTextChars) {
         List<DocumentBlock> orderedBlocks = blocks == null ? List.of() : List.copyOf(blocks);
         String text = orderedBlocks.stream()
                 .map(DocumentBlock::getText)
                 .filter(value -> value != null && !value.isBlank())
                 .reduce((left, right) -> left + "\n\n" + right)
                 .orElse(null);
-        return new PreparedDocument(projectId, documentId, inputFormat, text, null,
-                pageCount, truncated, orderedBlocks);
+        boolean textTruncated = maxTextChars > 0 && text != null && text.length() > maxTextChars;
+        String preparedText = textTruncated ? text.substring(0, maxTextChars) : text;
+        return new PreparedDocument(projectId, documentId, inputFormat, preparedText, null,
+                pageCount, truncated || textTruncated, orderedBlocks);
     }
 
     public PreparedDocument withSource(Long projectId, Long documentId) {

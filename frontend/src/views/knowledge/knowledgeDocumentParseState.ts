@@ -1,6 +1,7 @@
 import type { FileParseRecord } from '../../api/file';
-import type { ID } from '../../api/types';
+import type { ID, KnowledgeDocument } from '../../api/types';
 import { hasActiveFileParse } from '../file/fileParseStatus';
+import { isParseableFile, parseTargetFormat } from '../file/supportedFileParse';
 
 export type DocumentParseRecords = Record<string, FileParseRecord>;
 
@@ -12,13 +13,25 @@ export function setDocumentParseRecord(records: DocumentParseRecords, documentId
   return { ...records, [String(documentId)]: record };
 }
 
+export function isDocumentParseReady(record?: FileParseRecord) {
+  return ['PARSED', 'SUCCESS'].includes((record?.status || '').toUpperCase());
+}
+
 export function hasActiveDocumentParses(records: DocumentParseRecords) {
   return hasActiveFileParse(Object.values(records));
 }
 
 export function documentParseActionText(record?: FileParseRecord) {
   const status = (record?.status || '').toUpperCase();
-  if (status === 'PENDING' || status === 'RUNNING') return '解析中';
-  if (status === 'SUCCESS' || status === 'FAILED') return '重新解析';
+  if (['PENDING', 'PARSING', 'RUNNING'].includes(status)) return '解析中';
+  if (['PARSED', 'SUCCESS', 'FAILED', 'CANCELED'].includes(status)) return '重新解析';
   return '解析文件';
+}
+
+export function isParseableKnowledgeDocument(document: KnowledgeDocument) {
+  return Boolean(document.fileId && isParseableFile(document.title, document.fileExt, document.contentType));
+}
+
+export function knowledgeDocumentParseTargetFormat(document: KnowledgeDocument) {
+  return parseTargetFormat(document.title, document.fileExt, document.contentType);
 }
