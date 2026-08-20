@@ -95,11 +95,11 @@
 - Create: `src/test/java/com/xd/smartworksite/ai/dto/EvidenceItemTest.java`
 - Modify: `src/main/java/com/xd/smartworksite/file/infra/DocumentPreparationService.java`
 
-- [ ] Write failing tests for extension/MIME routing, ordered blocks, source location, and project identifiers.
-- [ ] Introduce immutable normalized document/evidence records and parser registry.
-- [ ] Adapt current preparation behavior through compatibility methods so existing PDF/Word flows remain green.
-- [ ] Run focused tests and existing file/knowledge tests.
-- [ ] Commit with `refactor: add shared document parsing and evidence model`.
+- [x] Write failing tests for extension/MIME routing, ordered blocks, source location, and project identifiers.
+- [x] Introduce immutable normalized document/evidence records and parser registry.
+- [x] Adapt current preparation behavior through compatibility methods so existing PDF/Word flows remain green.
+- [x] Run focused tests and existing file/knowledge tests.
+- [x] Commit with `refactor: add shared document parsing and evidence model`.
 
 ## Task 5: Implement Excel and PowerPoint Parsing
 

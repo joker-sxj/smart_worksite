@@ -4,18 +4,21 @@ import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.file.application.FileProperties;
 import com.xd.smartworksite.file.domain.FileObject;
+import com.xd.smartworksite.file.domain.PreparedDocument;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.util.Base64;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -26,10 +29,18 @@ public class DocumentPreparationService {
 
     private final StorageAdapter storageAdapter;
     private final FileProperties fileProperties;
+    private final DocumentParserRegistry parserRegistry;
 
     public DocumentPreparationService(StorageAdapter storageAdapter, FileProperties fileProperties) {
+        this(storageAdapter, fileProperties, List.of());
+    }
+
+    @Autowired
+    public DocumentPreparationService(StorageAdapter storageAdapter, FileProperties fileProperties,
+                                      List<DocumentParser> documentParsers) {
         this.storageAdapter = storageAdapter;
         this.fileProperties = fileProperties;
+        this.parserRegistry = new DocumentParserRegistry(documentParsers);
     }
 
     public PreparedDocument prepare(FileObject fileObject) {
@@ -39,18 +50,22 @@ public class DocumentPreparationService {
             byte[] bytes = readAll(inputStream);
             if (IMAGE_TYPES.contains(contentType)) {
                 return PreparedDocument.image(fileExt, "data:" + contentType + ";base64,"
-                        + Base64.getEncoder().encodeToString(bytes));
+                        + Base64.getEncoder().encodeToString(bytes)).withSource(fileObject.getProjectId(), fileObject.getId());
             }
             if ("application/pdf".equals(contentType) || "pdf".equals(fileExt)) {
-                return preparePdf(bytes);
+                return preparePdf(bytes).withSource(fileObject.getProjectId(), fileObject.getId());
             }
             if ("docx".equals(fileExt) || "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(contentType)) {
-                return prepareDocx(bytes);
+                return prepareDocx(bytes).withSource(fileObject.getProjectId(), fileObject.getId());
             }
             if ("doc".equals(fileExt) || "application/msword".equals(contentType)) {
-                return prepareDoc(bytes);
+                return prepareDoc(bytes).withSource(fileObject.getProjectId(), fileObject.getId());
             }
-            throw new BusinessException(ErrorCode.PARAM_ERROR, "unsupported file parse content type");
+            return parserRegistry.find(fileObject.getFileName(), contentType)
+                    .map(parser -> parser.parse(fileObject, bytes)
+                            .withSource(fileObject.getProjectId(), fileObject.getId()))
+                    .orElseThrow(() -> new BusinessException(
+                            ErrorCode.PARAM_ERROR, "unsupported file parse content type"));
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {

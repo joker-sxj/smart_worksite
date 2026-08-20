@@ -9,7 +9,7 @@ import com.xd.smartworksite.file.infra.DocumentParseModelAdapter;
 import com.xd.smartworksite.file.infra.DocumentParseRequest;
 import com.xd.smartworksite.file.infra.DocumentPreparationService;
 import com.xd.smartworksite.file.infra.ParsedDocument;
-import com.xd.smartworksite.file.infra.PreparedDocument;
+import com.xd.smartworksite.file.domain.PreparedDocument;
 import com.xd.smartworksite.file.infra.StorageAdapter;
 import com.xd.smartworksite.file.repository.FileObjectRepository;
 import com.xd.smartworksite.file.repository.FileParseRecordRepository;
