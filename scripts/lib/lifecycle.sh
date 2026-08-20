@@ -30,9 +30,49 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || { printf 'Required command is not available: %s\n' "$1" >&2; return 1; }
 }
 
+resolve_model_profile() {
+  local root="$1" requested="$2" candidate
+  [[ -n "$requested" ]] || return 1
+  if [[ -f "$requested" ]]; then
+    candidate="$requested"
+  elif [[ -f "$root/$requested" ]]; then
+    candidate="$root/$requested"
+  elif [[ -f "$root/deploy/model-profiles/$requested" ]]; then
+    candidate="$root/deploy/model-profiles/$requested"
+  elif [[ -f "$root/deploy/model-profiles/$requested.env" ]]; then
+    candidate="$root/deploy/model-profiles/$requested.env"
+  elif [[ -f "$root/deploy/model-profiles/$requested.env.example" ]]; then
+    candidate="$root/deploy/model-profiles/$requested.env.example"
+  else
+    printf 'Model profile not found: %s\n' "$requested" >&2
+    return 1
+  fi
+  (cd "$(dirname "$candidate")" && printf '%s/%s\n' "$PWD" "$(basename "$candidate")")
+}
+
+configure_model_profile() {
+  local root="$1" requested="$2" resolved
+  resolved="$(resolve_model_profile "$root" "$requested")" || return 1
+  export MODEL_PROFILE="$requested"
+  export MODEL_PROFILE_FILE="$resolved"
+}
+
+load_active_model_profile() {
+  local root="$1" active_file="$root/logs/run/model-profile"
+  if [[ -z "${MODEL_PROFILE_FILE:-}" && -f "$active_file" ]]; then
+    configure_model_profile "$root" "$(cat "$active_file")"
+  elif [[ -z "${MODEL_PROFILE_FILE:-}" && -n "${MODEL_PROFILE:-}" ]]; then
+    configure_model_profile "$root" "$MODEL_PROFILE"
+  fi
+}
+
 docker_compose() {
   local root="$1"; shift
-  docker compose -f "$root/deploy/docker-compose-env.yml" --env-file "$root/deploy/.env" "$@"
+  local args=(-f "$root/deploy/docker-compose-env.yml" --env-file "$root/deploy/.env")
+  if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
+    args+=(-f "$root/deploy/docker-compose-models.yml" --env-file "$MODEL_PROFILE_FILE")
+  fi
+  docker compose "${args[@]}" "$@"
 }
 
 tcp_check() {

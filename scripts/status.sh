@@ -9,6 +9,8 @@ run_dir="$root/logs/run"
 healthy=true
 
 load_env "$root/deploy/.env" || exit 1
+load_active_model_profile "$root" || exit 1
+[[ -n "${MODEL_PROFILE_FILE:-}" ]] && load_env "$MODEL_PROFILE_FILE"
 printf 'Docker Compose services:\n'
 docker_compose "$root" ps || healthy=false
 
@@ -23,4 +25,10 @@ for index in "${!ports[@]}"; do
 done
 if http_health "http://127.0.0.1:${ports[0]}/actuator/health"; then printf 'Backend health: UP\n'; else printf 'Backend health: DOWN\n'; healthy=false; fi
 if http_health "http://127.0.0.1:${ports[1]}/v1/health"; then printf 'Python AI health: UP\n'; else printf 'Python AI health: DOWN\n'; healthy=false; fi
+if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
+  printf 'Local model profile: %s\n' "${MODEL_PROFILE_NAME:-$MODEL_PROFILE_FILE}"
+  "$script_dir/check-local-models.sh" --model-profile "$MODEL_PROFILE_FILE" || healthy=false
+else
+  printf 'Local model profile: not managed by lifecycle scripts\n'
+fi
 $healthy

@@ -10,12 +10,17 @@ env_example="$root/deploy/.env.example"
 log_dir="$root/logs"
 run_dir="$log_dir/run"
 check_only=false
+model_profile="${MODEL_PROFILE:-}"
 
-case "${1:-}" in
-  '') ;;
-  --check) check_only=true ;;
-  *) printf 'Usage: %s [--check]\n' "$0" >&2; exit 2 ;;
-esac
+while (( $# > 0 )); do
+  case "$1" in
+    --check) check_only=true; shift ;;
+    --model-profile)
+      [[ -n "${2:-}" ]] || { printf '%s\n' '--model-profile requires a profile name or path.' >&2; exit 2; }
+      model_profile="$2"; shift 2 ;;
+    *) printf 'Usage: %s [--check] [--model-profile NAME_OR_PATH]\n' "$0" >&2; exit 2 ;;
+  esac
+done
 
 for command_name in docker java mvn node npm timeout pgrep; do require_command "$command_name"; done
 docker compose version >/dev/null
@@ -25,6 +30,10 @@ if [[ ! -f "$env_file" ]]; then
   exit 1
 fi
 load_env "$env_file"
+if [[ -n "$model_profile" ]]; then
+  configure_model_profile "$root" "$model_profile"
+  load_env "$MODEL_PROFILE_FILE"
+fi
 assert_minimum_free_disk "$root"
 deployment_mode="${AI_DEPLOYMENT_MODE:-CLOUD_ALLOWED}"
 if [[ "${deployment_mode^^}" == 'CLOUD_ALLOWED' && -z "${QWEN_API_KEY:-}" ]]; then
@@ -38,6 +47,15 @@ $check_only && { printf 'Check mode completed; no services were started.\n'; exi
 
 mkdir -p "$run_dir"
 cleanup_stale_project_logs "$log_dir"
+if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
+  printf '%s\n' "$MODEL_PROFILE_FILE" > "$run_dir/model-profile"
+  "$script_dir/check-gpu-runtime.sh" "$MODEL_PROFILE_FILE"
+  printf 'Starting local model services with profile %s...\n' "${MODEL_PROFILE_NAME:-$model_profile}"
+  docker_compose "$root" up -d local-llm local-embedding local-reranker
+  "$script_dir/check-local-models.sh" --model-profile "$MODEL_PROFILE_FILE" --wait "${MODEL_STARTUP_TIMEOUT_SECONDS:-3600}"
+else
+  rm -f "$run_dir/model-profile"
+fi
 printf 'Starting Docker Compose services...\n'
 docker_compose "$root" up -d --build
 mysql_port="$(configured_port MYSQL_PORT 3306)"
@@ -77,4 +95,5 @@ printf '\nSmart Worksite is ready.\n'
 printf 'Frontend: http://localhost:5173\n'
 printf 'Backend health: http://127.0.0.1:%s/actuator/health\n' "$server_port"
 printf 'Python AI health: http://127.0.0.1:%s/v1/health\n' "$ai_port"
+if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then printf 'Local model profile: %s\n' "${MODEL_PROFILE_NAME:-$model_profile}"; fi
 printf 'Logs: %s\n' "$log_dir"
