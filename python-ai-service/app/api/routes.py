@@ -26,6 +26,8 @@ from app.models.schemas import (
     OcrRecognizeData,
     PolicyCrawlRequest,
     PolicyCrawlData,
+    DocumentUnderstandingRequest,
+    DocumentUnderstandingData,
 )
 from app.services.qwen_client import QwenClient
 from app.services.model_service import ModelService, AgentService
@@ -35,6 +37,7 @@ from app.services.database_service import DatabaseQaService
 from app.services.agent_tools import ToolRegistry, ToolSpec
 from app.services.ocr_service import OcrService
 from app.services.policy_crawler_service import PolicyCrawlerService
+from app.services.document_understanding_service import DocumentUnderstandingService
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(verify_service_key)])
 
@@ -83,6 +86,7 @@ def services():
         "database": db,
         "ocr": OcrService(qwen),
         "policy": PolicyCrawlerService(),
+        "documentUnderstanding": DocumentUnderstandingService(qwen),
     }
 
 
@@ -160,4 +164,10 @@ async def ocr_recognize(request: OcrRecognizeRequest):
 @router.post("/policy/crawl", response_model=StandardResponse[PolicyCrawlData])
 async def policy_crawl(request: PolicyCrawlRequest):
     data, usage = await services()["policy"].crawl(request)
+    return ok(data, usage)
+
+
+@router.post("/document/understand", response_model=StandardResponse[DocumentUnderstandingData])
+async def document_understand(request: DocumentUnderstandingRequest):
+    data, usage = await services()["documentUnderstanding"].understand(request)
     return ok(data, usage)

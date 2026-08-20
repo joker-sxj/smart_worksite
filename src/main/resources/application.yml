@@ -115,6 +115,7 @@ app:
         database-summarize-result: /v1/database/summarize-result
         ocr-recognize: /v1/ocr/recognize
         policy-crawl: /v1/policy/crawl
+        document-understand: /v1/document/understand
       database:
         max-rows: ${AI_DATABASE_MAX_ROWS:100}
         query-timeout-seconds: ${AI_DATABASE_QUERY_TIMEOUT_SECONDS:15}

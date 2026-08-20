@@ -235,3 +235,30 @@ class PolicyCrawlData(BaseModel):
     fetchedCount: int = 0
     message: str = ""
     articles: list[PolicyCrawlArticle] = Field(default_factory=list)
+
+
+class DocumentUnderstandingPageInput(BaseModel):
+    pageNo: int
+    nativeText: str = ""
+    imageDataUrl: str | None = None
+
+
+class DocumentUnderstandingRequest(BaseModel):
+    pages: list[DocumentUnderstandingPageInput] = Field(default_factory=list)
+    minNativeTextChars: int = 20
+    maxPages: int = 100
+    maxTextChars: int = 120000
+
+
+class DocumentUnderstandingPageData(BaseModel):
+    pageNo: int
+    source: str
+    text: str = ""
+    truncated: bool = False
+
+
+class DocumentUnderstandingData(BaseModel):
+    text: str = ""
+    totalTextChars: int = 0
+    truncated: bool = False
+    pages: list[DocumentUnderstandingPageData] = Field(default_factory=list)

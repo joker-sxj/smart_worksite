@@ -3,21 +3,38 @@ package com.xd.smartworksite.review.application;
 import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.file.application.FileObjectContent;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.text.PDFTextStripper;
+import com.xd.smartworksite.file.application.FileProperties;
+import com.xd.smartworksite.file.domain.FileObject;
+import com.xd.smartworksite.file.domain.PreparedDocument;
+import com.xd.smartworksite.file.infra.DocumentParser;
+import com.xd.smartworksite.file.infra.DocumentParserRegistry;
+import com.xd.smartworksite.file.infra.PdfDocumentParser;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.List;
 import java.util.Locale;
 
 @Service
 public class ReviewDocumentTextExtractor {
     private static final int MAX_TEXT_CHARS = 20000;
+
+    private final DocumentParserRegistry parserRegistry;
+
+    public ReviewDocumentTextExtractor() {
+        this(List.of(new PdfDocumentParser(new FileProperties(), (page, image) -> "", 0)));
+    }
+
+    @Autowired
+    public ReviewDocumentTextExtractor(List<DocumentParser> documentParsers) {
+        this.parserRegistry = new DocumentParserRegistry(documentParsers);
+    }
 
     public ExtractedText extract(FileObjectContent content) {
         try (var inputStream = content.getInputStream()) {
@@ -25,8 +42,11 @@ public class ReviewDocumentTextExtractor {
             String ext = extension(content.getFileName());
             String contentType = normalizeContentType(content.getContentType());
             String text;
+            boolean parserTruncated = false;
             if ("pdf".equals(ext) || "application/pdf".equals(contentType)) {
-                text = extractPdf(bytes);
+                PreparedDocument prepared = extractPdf(content, bytes, ext, contentType);
+                text = prepared.getTextContent();
+                parserTruncated = prepared.isTruncated();
             } else if ("docx".equals(ext) || "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(contentType)) {
                 text = extractDocx(bytes);
             } else if ("doc".equals(ext) || "application/msword".equals(contentType)) {
@@ -39,7 +59,8 @@ public class ReviewDocumentTextExtractor {
             }
             String normalized = text.replace("\r\n", "\n").replace('\r', '\n').trim();
             boolean truncated = normalized.length() > MAX_TEXT_CHARS;
-            return new ExtractedText(truncated ? normalized.substring(0, MAX_TEXT_CHARS) : normalized, truncated);
+            return new ExtractedText(truncated ? normalized.substring(0, MAX_TEXT_CHARS) : normalized,
+                    parserTruncated || truncated);
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -53,10 +74,20 @@ public class ReviewDocumentTextExtractor {
         return outputStream.toByteArray();
     }
 
-    private String extractPdf(byte[] bytes) throws Exception {
-        try (PDDocument document = PDDocument.load(bytes)) {
-            return new PDFTextStripper().getText(document);
-        }
+    private PreparedDocument extractPdf(FileObjectContent content, byte[] bytes,
+                                        String ext, String contentType) {
+        FileObject fileObject = new FileObject();
+        fileObject.setId(content.getFileId());
+        fileObject.setProjectId(content.getProjectId());
+        fileObject.setBizId(content.getBizId());
+        fileObject.setFileName(content.getFileName());
+        fileObject.setFileExt(ext);
+        fileObject.setContentType(contentType);
+        fileObject.setFileSize(content.getFileSize());
+        return parserRegistry.find(content.getFileName(), ext, contentType)
+                .map(parser -> parser.parse(fileObject, bytes))
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PARAM_ERROR, "pdf parser is unavailable"));
     }
 
     private String extractDocx(byte[] bytes) throws Exception {

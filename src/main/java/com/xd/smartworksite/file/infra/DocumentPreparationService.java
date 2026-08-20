@@ -5,8 +5,6 @@ import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.file.application.FileProperties;
 import com.xd.smartworksite.file.domain.FileObject;
 import com.xd.smartworksite.file.domain.PreparedDocument;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
@@ -32,7 +30,8 @@ public class DocumentPreparationService {
     private final DocumentParserRegistry parserRegistry;
 
     public DocumentPreparationService(StorageAdapter storageAdapter, FileProperties fileProperties) {
-        this(storageAdapter, fileProperties, List.of());
+        this(storageAdapter, fileProperties, List.of(new PdfDocumentParser(
+                fileProperties, (page, image) -> "", 0)));
     }
 
     @Autowired
@@ -53,7 +52,7 @@ public class DocumentPreparationService {
                         + Base64.getEncoder().encodeToString(bytes)).withSource(fileObject.getProjectId(), fileObject.getId());
             }
             if ("application/pdf".equals(contentType) || "pdf".equals(fileExt)) {
-                return preparePdf(bytes).withSource(fileObject.getProjectId(), fileObject.getId());
+                return parseRegistered(fileObject, bytes, fileExt, contentType);
             }
             if ("docx".equals(fileExt) || "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(contentType)) {
                 return prepareDocx(bytes).withSource(fileObject.getProjectId(), fileObject.getId());
@@ -61,11 +60,7 @@ public class DocumentPreparationService {
             if ("doc".equals(fileExt) || "application/msword".equals(contentType)) {
                 return prepareDoc(bytes).withSource(fileObject.getProjectId(), fileObject.getId());
             }
-            return parserRegistry.find(fileObject.getFileName(), fileExt, contentType)
-                    .map(parser -> parser.parse(fileObject, bytes)
-                            .withSource(fileObject.getProjectId(), fileObject.getId()))
-                    .orElseThrow(() -> new BusinessException(
-                            ErrorCode.PARAM_ERROR, "unsupported file parse content type"));
+            return parseRegistered(fileObject, bytes, fileExt, contentType);
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -73,16 +68,13 @@ public class DocumentPreparationService {
         }
     }
 
-    private PreparedDocument preparePdf(byte[] bytes) throws Exception {
-        try (PDDocument document = PDDocument.load(bytes)) {
-            int pageCount = document.getNumberOfPages();
-            if (pageCount > fileProperties.getParse().getMaxPages()) {
-                throw new BusinessException(ErrorCode.PARAM_ERROR, "pdf page count exceeds parse limit");
-            }
-            PDFTextStripper stripper = new PDFTextStripper();
-            String text = stripper.getText(document);
-            return preparedText("pdf", text, pageCount);
-        }
+    private PreparedDocument parseRegistered(FileObject fileObject, byte[] bytes,
+                                             String fileExt, String contentType) {
+        return parserRegistry.find(fileObject.getFileName(), fileExt, contentType)
+                .map(parser -> parser.parse(fileObject, bytes)
+                        .withSource(fileObject.getProjectId(), fileObject.getId()))
+                .orElseThrow(() -> new BusinessException(
+                        ErrorCode.PARAM_ERROR, "unsupported file parse content type"));
     }
 
     private PreparedDocument prepareDocx(byte[] bytes) throws Exception {

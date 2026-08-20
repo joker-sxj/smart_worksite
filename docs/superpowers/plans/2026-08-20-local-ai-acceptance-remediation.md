@@ -30,12 +30,12 @@
 - Create externally: `C:\Users\23883\Desktop\智慧工地验收（宋经纬）\2026-08-20-本地模型整改验收\scripts\run-offline-tests.sh`
 - Create externally: `C:\Users\23883\Desktop\智慧工地验收（宋经纬）\2026-08-20-本地模型整改验收\scripts\scan-sensitive-output.ps1`
 
-- [ ] Create the approved directory tree without overwriting existing customer files.
-- [ ] Generate `manifest.json` from existing fixtures with relative source path, SHA-256, size, extension, and intended capability tag.
-- [ ] Define machine-readable acceptance cases for local-only inference, XLSX/PPTX/PDF parsing, Q&A follow-ups, database evidence, multi-reference review, report consistency, project isolation, and OCR completeness.
-- [ ] Add PowerShell API runner that loads `acceptance.env`, authenticates, executes case definitions, and writes timestamped JSON without printing secrets.
-- [ ] Add Linux shell runners that check GPU visibility, local model health, offline model behavior, log bounds, and disk usage; destructive operations are excluded.
-- [ ] Run a syntax/dry-run validation and save the baseline result as `NOT_RUN` where a live Linux service is required.
+- [x] Create the approved directory tree without overwriting existing customer files.
+- [x] Generate `manifest.json` from existing fixtures with relative source path, SHA-256, size, extension, and intended capability tag.
+- [x] Define machine-readable acceptance cases for local-only inference, XLSX/PPTX/PDF parsing, Q&A follow-ups, database evidence, multi-reference review, report consistency, project isolation, and OCR completeness.
+- [x] Add PowerShell API runner that loads `acceptance.env`, authenticates, executes case definitions, and writes timestamped JSON without printing secrets.
+- [x] Add Linux shell runners that check GPU visibility, local model health, offline model behavior, log bounds, and disk usage; destructive operations are excluded.
+- [x] Run a syntax/dry-run validation and save the baseline result as `NOT_RUN` where a live Linux service is required.
 
 ## Task 2: Add Strict Local Model Provider Configuration
 
@@ -51,15 +51,15 @@
 - Modify: `deploy/.env.example`
 - Modify: `deploy/docker-compose-env.yml`
 
-- [ ] Write tests proving `LOCAL_ONLY` accepts loopback, Docker service names, and private IP endpoints.
-- [ ] Run `python -m pytest tests/test_local_only_configuration.py -q` and confirm failure because deployment mode validation does not exist.
-- [ ] Write tests proving public DashScope/OpenAI/arbitrary public hosts are rejected and cloud keys are not required locally.
-- [ ] Add `AiDeploymentMode`, endpoint classification, sanitized dependency descriptors, and provider protocols.
-- [ ] Convert the existing client into an OpenAI-compatible provider while keeping a temporary `QwenClient` alias for existing service compatibility.
-- [ ] Return configured local dependency/model details from health without exposing keys.
-- [ ] Change deployment examples to `AI_DEPLOYMENT_MODE=LOCAL_ONLY` and local container endpoints.
-- [ ] Run the focused test, all Python tests, and compose configuration rendering.
-- [ ] Commit with `feat: enforce local-only AI provider configuration`.
+- [x] Write tests proving `LOCAL_ONLY` accepts loopback, Docker service names, and private IP endpoints.
+- [x] Run `python -m pytest tests/test_local_only_configuration.py -q` and confirm failure because deployment mode validation does not exist.
+- [x] Write tests proving public DashScope/OpenAI/arbitrary public hosts are rejected and cloud keys are not required locally.
+- [x] Add `AiDeploymentMode`, endpoint classification, sanitized dependency descriptors, and provider protocols.
+- [x] Convert the existing client into an OpenAI-compatible provider while keeping a temporary `QwenClient` alias for existing service compatibility.
+- [x] Return configured local dependency/model details from health without exposing keys.
+- [x] Change deployment examples to `AI_DEPLOYMENT_MODE=LOCAL_ONLY` and local container endpoints.
+- [x] Run the focused test, all Python tests, and compose configuration rendering.
+- [x] Commit with `feat: enforce local-only AI provider configuration`.
 
 ## Task 3: Add Linux Model Deployment Profiles and Validation
 
@@ -74,13 +74,13 @@
 - Modify: `scripts/status.sh`
 - Modify: `deploy/README.md`
 
-- [ ] Write shell contract tests for required profile values, no public endpoints, H100 tensor parallel size 1, and A6000 tensor parallel size 2.
-- [ ] Run the contract test and confirm it fails before profiles exist.
-- [ ] Add configurable local model containers/endpoints, cache volumes, health checks, bounded logging, GPU reservation, context limits, and concurrency limits.
-- [ ] Add a non-destructive NVIDIA Container Toolkit check using a configurable CUDA image.
-- [ ] Make lifecycle scripts select a model profile without embedding secrets and report each model dependency separately.
-- [ ] Run shell syntax checks, compose rendering for both profiles, and lifecycle contract tests.
-- [ ] Commit with `feat: add H100 and A6000 local model profiles`.
+- [x] Write shell contract tests for required profile values, no public endpoints, H100 tensor parallel size 1, and A6000 tensor parallel size 2.
+- [x] Run the contract test and confirm it fails before profiles exist.
+- [x] Add configurable local model containers/endpoints, cache volumes, health checks, bounded logging, GPU reservation, context limits, and concurrency limits.
+- [x] Add a non-destructive NVIDIA Container Toolkit check using a configurable CUDA image.
+- [x] Make lifecycle scripts select a model profile without embedding secrets and report each model dependency separately.
+- [x] Run shell syntax checks, compose rendering for both profiles, and lifecycle contract tests.
+- [x] Commit with `feat: add H100 and A6000 local model profiles`.
 
 ## Task 4: Introduce the Shared Document and Evidence Model
 
@@ -118,7 +118,7 @@
 - [x] Implement parsers with bounded rows/cells/slides and no external formula execution.
 - [x] Preserve explicit `PARSING` state and idempotent retry behavior.
 - [x] Run Java and frontend parse-state tests.
-- [ ] Commit with `feat: parse Excel and PowerPoint knowledge documents`.
+- [x] Commit with `feat: parse Excel and PowerPoint knowledge documents`.
 
 ## Task 6: Add Page-Level PDF OCR Fallback
 
@@ -132,12 +132,12 @@
 - Modify: `python-ai-service/app/api/routes.py`
 - Modify: `python-ai-service/app/models/schemas.py`
 
-- [ ] Write failing tests for native-text, scanned, and mixed PDFs with page-level location.
-- [ ] Add local document-understanding request/response contracts and bounded page processing.
-- [ ] Implement direct PDFBox extraction with per-page OCR fallback when usable text is below the configured threshold.
-- [ ] Route review-template and knowledge parsing through the same parser.
-- [ ] Run Python document tests and Java PDF/review parser tests.
-- [ ] Commit with `feat: add page-level OCR fallback for PDFs`.
+- [x] Write failing tests for native-text, scanned, and mixed PDFs with page-level location.
+- [x] Add local document-understanding request/response contracts and bounded page processing.
+- [x] Implement direct PDFBox extraction with per-page OCR fallback when usable text is below the configured threshold.
+- [x] Route review-template and knowledge parsing through the same parser.
+- [x] Run Python document tests and Java PDF/review parser tests.
+- [x] Commit with `feat: add page-level OCR fallback for PDFs`.
 
 ## Task 7: Enforce Project Scope Across Retrieval and Resources
 
