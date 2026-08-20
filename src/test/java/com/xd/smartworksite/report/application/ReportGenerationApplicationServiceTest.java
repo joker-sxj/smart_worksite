@@ -50,6 +50,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -142,6 +143,63 @@ class ReportGenerationApplicationServiceTest {
         assertThat(captor.getAllValues())
                 .extracting(ReportVariableQaRequest::getDataSourceIds)
                 .containsOnly(List.of());
+    }
+
+    @Test
+    void regenerateReportRejectsConfigurationThatDoesNotBelongToReportProject() {
+        ReportCreateResponse created = context.service.createReport(request());
+        Report report = context.repository.findReportById(created.getReportId()).orElseThrow();
+        ReportConfig config = context.repository.findConfigById(report.getConfigId()).orElseThrow();
+        config.setProjectId(2L);
+
+        assertThatThrownBy(() -> context.service.regenerateReport(created.getReportId()))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(com.xd.smartworksite.common.result.ErrorCode.FORBIDDEN.getCode()));
+        assertThat(context.repository.reports).hasSize(1);
+        assertThat(context.repository.tasks).hasSize(1);
+    }
+
+    @Test
+    void executeReportTaskRejectsTaskThatDoesNotBelongToReport() {
+        ReportCreateResponse created = context.service.createReport(request());
+
+        assertThatThrownBy(() -> context.service.executeReportTask(created.getReportId(), created.getTaskId() + 1))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(com.xd.smartworksite.common.result.ErrorCode.CONFLICT.getCode()));
+        assertThat(context.repository.findReportById(created.getReportId()).orElseThrow().getStatus())
+                .isEqualTo("PENDING");
+    }
+
+    @Test
+    void executeReportTaskRejectsConfigurationThatDoesNotBelongToReportProject() {
+        ReportCreateResponse created = context.service.createReport(request());
+        Report report = context.repository.findReportById(created.getReportId()).orElseThrow();
+        ReportConfig config = context.repository.findConfigById(report.getConfigId()).orElseThrow();
+        config.setProjectId(2L);
+
+        assertThatThrownBy(() -> context.service.executeReportTask(created.getReportId(), created.getTaskId()))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(com.xd.smartworksite.common.result.ErrorCode.FORBIDDEN.getCode()));
+        assertThat(context.repository.findReportById(created.getReportId()).orElseThrow().getStatus())
+                .isEqualTo("PENDING");
+        verify(context.qa, times(0)).generateVariableForSystem(any());
+    }
+
+    @Test
+    void downloadRejectsOutputFileThatDoesNotBelongToReportProject() {
+        ReportCreateResponse created = context.service.createReport(request());
+        context.service.executeReportTask(created.getReportId(), created.getTaskId());
+        FileObjectRecord generatedFile = context.repository.files.stream()
+                .filter(file -> "REPORT_OUTPUT".equals(file.getBizType()))
+                .findFirst()
+                .orElseThrow();
+        generatedFile.setProjectId(2L);
+        clearInvocations(context.storage);
+
+        assertThatThrownBy(() -> context.service.openDownloadFile(created.getReportId(), "WORD"))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(com.xd.smartworksite.common.result.ErrorCode.FORBIDDEN.getCode()));
+        verify(context.storage, times(0)).openObject(any());
     }
 
     @Test

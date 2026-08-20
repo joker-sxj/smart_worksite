@@ -144,10 +144,14 @@ public class FileParseWorker {
 
     private String buildMetadata(ParsedDocument parsedDocument, PreparedDocument preparedDocument) throws Exception {
         Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("projectId", preparedDocument.getProjectId());
+        metadata.put("documentId", preparedDocument.getDocumentId());
+        metadata.put("fileId", preparedDocument.getDocumentId());
         metadata.put("provider", "QWEN_VL");
         metadata.put("model", parsedDocument.getModelName());
         metadata.put("pageCount", preparedDocument.getPageCount());
         metadata.put("inputTruncated", preparedDocument.isTruncated());
+        metadata.put("blocks", preparedDocument.getBlocks());
         if (parsedDocument.getMetadata() != null && !parsedDocument.getMetadata().isBlank()) {
             metadata.put("modelMetadata", objectMapper.readTree(parsedDocument.getMetadata()));
         }

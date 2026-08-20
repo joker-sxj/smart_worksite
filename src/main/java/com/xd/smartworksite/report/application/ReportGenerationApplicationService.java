@@ -186,6 +186,9 @@ public class ReportGenerationApplicationService {
         projectAccessApplicationService.requireProjectWritableAccess(report.getProjectId());
         ReportConfig config = reportRepository.findConfigById(report.getConfigId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告生成配置不存在"));
+        if (!report.getProjectId().equals(config.getProjectId())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "报告配置不属于当前项目");
+        }
         ReportCreateRequest request = new ReportCreateRequest();
         request.setProjectId(report.getProjectId());
         request.setReportName(report.getReportName());
@@ -216,8 +219,14 @@ public class ReportGenerationApplicationService {
         Report report = reportRepository.findReportById(reportId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告不存在"));
         projectAccessApplicationService.requireProjectWritableForSystem(report.getProjectId());
+        if (taskId == null || !taskId.equals(report.getTaskId())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "报告任务不匹配");
+        }
         ReportConfig config = reportRepository.findConfigById(report.getConfigId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告生成配置不存在"));
+        if (!report.getProjectId().equals(config.getProjectId())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "报告配置不属于当前项目");
+        }
         GenerateTask task = new GenerateTask();
         task.setId(taskId);
         task.setProjectId(report.getProjectId());
@@ -272,9 +281,15 @@ public class ReportGenerationApplicationService {
                 || ReportStatus.PARTIAL_SUCCESS.name().equals(report.getStatus()))) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "报告尚未生成成功");
         }
-        return reportRepository.findCurrentWordFileId(reportId)
+        FileObjectRecord file = reportRepository.findCurrentWordFileId(reportId)
                 .flatMap(reportRepository::findFileObjectById)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告文件不存在"));
+        if (!report.getProjectId().equals(file.getProjectId())
+                || !report.getId().equals(file.getBizId())
+                || !"REPORT_OUTPUT".equals(file.getBizType())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "报告文件不属于当前项目或报告");
+        }
+        return file;
     }
 
     private ReportConfig saveConfig(ReportCreateRequest request, String reportType, String reportName, Long templateId) {

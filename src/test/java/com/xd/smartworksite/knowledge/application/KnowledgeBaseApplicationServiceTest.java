@@ -33,6 +33,7 @@ import com.xd.smartworksite.task.repository.TaskRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -306,6 +307,78 @@ class KnowledgeBaseApplicationServiceTest {
                         && knowledgeBase.getKnowledgeBaseId().equals(request.getKnowledgeBaseId())
                         && request.getDocuments().size() == 1
                         && "解析后的知识内容".equals(request.getDocuments().get(0).getContent())));
+    }
+
+    @Test
+    void executeIndexTaskPreservesStructuredBlocksFromAuthoritativeParseMetadata() {
+        var knowledgeBase = service.createKnowledgeBase(1L, createRequest("安全规范"));
+        KnowledgeDocument document = knowledgeDocumentRepository.insert(
+                document(1L, knowledgeBase.getKnowledgeBaseId(), "风险台账"));
+        knowledgeDocumentRepository.markIndexQueued(document.getId(), 500L, 2L);
+        FileParseRecordResponse parseRecord = parseRecord();
+        parseRecord.setMetadata("""
+                {
+                  "projectId": 1,
+                  "documentId": 99,
+                  "blocks": [
+                    {
+                      "blockId": "risk-row-2",
+                      "type": "TABLE",
+                      "text": "一级 | 张三",
+                      "structuredData": {"values": ["一级", "张三"]},
+                      "location": {"sheet": "风险", "cellRange": "A2:B2"}
+                    }
+                  ]
+                }
+                """);
+        when(fileParseApplicationService.getLatestSuccessfulFileParseRecordForSystem(99L, 1L))
+                .thenReturn(parseRecord);
+        when(fileParseApplicationService.getParseContentForSystem(700L))
+                .thenReturn(parseContent("解析后的回退内容"));
+        RagIndexResponse ragResponse = new RagIndexResponse();
+        ragResponse.setIndexedDocuments(1);
+        ragResponse.setIndexedChunks(1);
+        when(aiApplicationService.indexKnowledgeForSystem(any(RagIndexRequest.class))).thenReturn(ragResponse);
+
+        service.executeIndexTask(document.getId(), 500L);
+
+        ArgumentCaptor<RagIndexRequest> requestCaptor = ArgumentCaptor.forClass(RagIndexRequest.class);
+        verify(aiApplicationService).indexKnowledgeForSystem(requestCaptor.capture());
+        var ragDocument = requestCaptor.getValue().getDocuments().get(0);
+        assertThat(ragDocument.getBlocks()).hasSize(1);
+        var block = ragDocument.getBlocks().get(0);
+        assertThat(block.getBlockId()).isEqualTo("risk-row-2");
+        assertThat(block.getBlockType()).isEqualTo("TABLE");
+        assertThat(block.getContent()).isEqualTo("一级 | 张三");
+        assertThat(block.getLocation()).containsEntry("sheet", "风险").containsEntry("cellRange", "A2:B2");
+        assertThat(block.getStructuredData()).containsEntry("values", List.of("一级", "张三"));
+    }
+
+    @Test
+    void executeIndexTaskRejectsParseMetadataFromAnotherProject() {
+        var knowledgeBase = service.createKnowledgeBase(1L, createRequest("安全规范"));
+        KnowledgeDocument document = knowledgeDocumentRepository.insert(
+                document(1L, knowledgeBase.getKnowledgeBaseId(), "风险台账"));
+        knowledgeDocumentRepository.markIndexQueued(document.getId(), 500L, 2L);
+        FileParseRecordResponse parseRecord = parseRecord();
+        parseRecord.setMetadata("""
+                {
+                  "projectId": 2,
+                  "documentId": 99,
+                  "blocks": [{"blockId":"foreign","type":"TEXT","text":"foreign"}]
+                }
+                """);
+        when(fileParseApplicationService.getLatestSuccessfulFileParseRecordForSystem(99L, 1L))
+                .thenReturn(parseRecord);
+        when(fileParseApplicationService.getParseContentForSystem(700L))
+                .thenReturn(parseContent("解析后的回退内容"));
+
+        assertThatThrownBy(() -> service.executeIndexTask(document.getId(), 500L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("project mismatch");
+
+        verify(aiApplicationService, org.mockito.Mockito.never())
+                .indexKnowledgeForSystem(any(RagIndexRequest.class));
     }
 
     @Test

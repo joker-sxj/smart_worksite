@@ -1,5 +1,5 @@
 from typing import Any, Generic, TypeVar
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PositiveInt, model_validator
 
 T = TypeVar("T")
 
@@ -52,12 +52,17 @@ class AgentInvokeData(BaseModel):
 
 class RagSearchRequest(BaseModel):
     query: str
-    projectId: int | None = None
-    knowledgeBaseIds: list[int] = Field(default_factory=list)
+    projectId: PositiveInt
+    knowledgeBaseIds: list[PositiveInt] = Field(min_length=1)
     libraryTypes: list[str] = Field(default_factory=list)
     topK: int = 5
     scoreThreshold: float | None = None
     rerankEnabled: bool = True
+
+    @model_validator(mode="after")
+    def normalize_scope(self):
+        self.knowledgeBaseIds = list(dict.fromkeys(self.knowledgeBaseIds))
+        return self
 
 
 class RagRecord(BaseModel):
@@ -73,21 +78,43 @@ class RagSearchData(BaseModel):
     records: list[RagRecord] = Field(default_factory=list)
 
 
+class RagDocumentBlock(BaseModel):
+    blockId: str = Field(min_length=1)
+    blockType: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    location: dict[str, Any] = Field(default_factory=dict)
+    structuredData: dict[str, Any] = Field(default_factory=dict)
+
+
 class RagDocument(BaseModel):
-    documentId: str
-    title: str
+    documentId: str = Field(min_length=1)
+    title: str = Field(min_length=1)
     content: str
     sourceType: str = "DOCUMENT"
     sourceId: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    blocks: list[RagDocumentBlock] = Field(default_factory=list)
 
 
 class RagIndexRequest(BaseModel):
-    projectId: int
-    knowledgeBaseId: int | None = None
-    documents: list[RagDocument] = Field(default_factory=list)
+    projectId: PositiveInt
+    knowledgeBaseId: PositiveInt
+    documents: list[RagDocument] = Field(min_length=1)
     chunkSize: int | None = None
     chunkOverlap: int | None = None
+
+    @model_validator(mode="after")
+    def normalize_documents(self):
+        document_ids: list[str] = []
+        for document in self.documents:
+            document.documentId = document.documentId.strip()
+            document.title = document.title.strip()
+            if not document.documentId or not document.title:
+                raise ValueError("document identity must not be blank")
+            document_ids.append(document.documentId)
+        if len(document_ids) != len(set(document_ids)):
+            raise ValueError("documentId must be unique within an index request")
+        return self
 
 
 class RagIndexData(BaseModel):
@@ -97,10 +124,18 @@ class RagIndexData(BaseModel):
 
 
 class RagDeleteRequest(BaseModel):
-    projectId: int
-    sourceType: str
-    sourceIds: list[str] = Field(default_factory=list)
-    excludeKnowledgeBaseId: int | None = None
+    projectId: PositiveInt
+    sourceType: str = Field(min_length=1)
+    sourceIds: list[str] = Field(min_length=1)
+    excludeKnowledgeBaseId: PositiveInt | None = None
+
+    @model_validator(mode="after")
+    def normalize_scope(self):
+        self.sourceType = self.sourceType.strip()
+        self.sourceIds = list(dict.fromkeys(value.strip() for value in self.sourceIds))
+        if not self.sourceType or any(not value for value in self.sourceIds):
+            raise ValueError("delete scope must not contain blank values")
+        return self
 
 
 class RagDeleteData(BaseModel):

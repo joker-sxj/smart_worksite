@@ -54,7 +54,7 @@ def test_rag_index_and_search_local_hash():
     assert index_response.status_code == 200
     assert index_response.json()["success"] is True
 
-    response = client.post("/v1/rag/search", json={"projectId": 1, "query": "安全帽规范", "topK": 1})
+    response = client.post("/v1/rag/search", json={"projectId": 1, "query": "安全帽规范", "topK": 1, "knowledgeBaseIds": [1]})
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True

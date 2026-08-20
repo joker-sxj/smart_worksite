@@ -46,27 +46,65 @@ class RagService:
         chunk_records: list[ChunkRecord] = []
         usage_total: dict[str, Any] = {}
         for document in request.documents:
-            chunks = split_text(document.content, chunk_size, overlap)
-            if not chunks:
-                continue
-            embeddings, usage = await self.embed_batched(chunks)
-            usage_total = merge_usage(usage_total, usage)
-            for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                raw_id = f"{request.projectId}:{request.knowledgeBaseId}:{document.documentId}:{idx}:{chunk}"
-                chunk_id = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
-                chunk_records.append(ChunkRecord(
-                    id=chunk_id,
-                    projectId=request.projectId,
-                    knowledgeBaseId=request.knowledgeBaseId,
-                    documentId=document.documentId,
-                    title=document.title,
-                    content=chunk,
-                    sourceType=document.sourceType,
-                    sourceId=document.sourceId,
-                    metadata={**document.metadata, "chunkIndex": idx},
-                    embedding=embedding,
-                ))
-        await self.store.upsert(chunk_records)
+            document_records: list[ChunkRecord] = []
+            units = [
+                (
+                    block.content,
+                    {
+                        "blockId": block.blockId,
+                        "blockType": block.blockType,
+                        "location": block.location,
+                        "structuredData": block.structuredData,
+                    },
+                )
+                for block in document.blocks
+                if block.content.strip()
+            ] or [(document.content, {})]
+            for unit_index, (unit_content, unit_metadata) in enumerate(units):
+                chunks = split_text(unit_content, chunk_size, overlap)
+                if not chunks:
+                    continue
+                embeddings, usage = await self.embed_batched(chunks)
+                usage_total = merge_usage(usage_total, usage)
+                for chunk_index, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+                    block_key = unit_metadata.get("blockId", f"document-{unit_index}")
+                    raw_id = f"{request.projectId}:{request.knowledgeBaseId}:{document.documentId}:{block_key}:{chunk_index}:{chunk}"
+                    chunk_id = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()
+                    document_records.append(ChunkRecord(
+                        id=chunk_id,
+                        chunkId=chunk_id,
+                        projectId=request.projectId,
+                        knowledgeBaseId=request.knowledgeBaseId,
+                        documentId=document.documentId,
+                        title=document.title,
+                        content=chunk,
+                        sourceType=document.sourceType,
+                        sourceId=document.sourceId,
+                        metadata={
+                            **document.metadata,
+                            **unit_metadata,
+                            "projectId": request.projectId,
+                            "knowledgeBaseId": request.knowledgeBaseId,
+                            "documentId": document.documentId,
+                            "chunkId": chunk_id,
+                            "chunkIndex": chunk_index,
+                            "unitIndex": unit_index,
+                        },
+                        embedding=embedding,
+                    ))
+            chunk_records.extend(document_records)
+        # Prepare every document before replacing any stored chunks, so a failed
+        # embedding call cannot leave the index partially refreshed.
+        document_chunks: dict[str, list[ChunkRecord]] = {}
+        for chunk in chunk_records:
+            document_chunks.setdefault(chunk.documentId, []).append(chunk)
+        for document in request.documents:
+            await self.store.replace_document(
+                request.projectId,
+                request.knowledgeBaseId,
+                document.documentId,
+                document_chunks.get(document.documentId, []),
+            )
         return RagIndexData(indexedDocuments=len(request.documents), indexedChunks=len(chunk_records), provider=self.settings.rag_provider.upper()), usage_total
 
     async def delete(self, request: RagDeleteRequest) -> RagDeleteData:
@@ -101,7 +139,14 @@ class RagService:
                 sourceType=chunk.sourceType,
                 sourceId=chunk.sourceId or chunk.documentId,
                 score=float(score),
-                metadata={**chunk.metadata, "rerankScore": float(rerank_score), "documentId": chunk.documentId, "chunkId": chunk.id},
+                metadata={
+                    **chunk.metadata,
+                    "projectId": chunk.projectId,
+                    "knowledgeBaseId": chunk.knowledgeBaseId,
+                    "documentId": chunk.documentId,
+                    "chunkId": chunk.chunkId,
+                    "rerankScore": float(rerank_score),
+                },
             )
             for chunk, score, rerank_score in records[: request.topK]
         ]

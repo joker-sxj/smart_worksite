@@ -1,5 +1,7 @@
 package com.xd.smartworksite.knowledge.application;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
@@ -8,6 +10,7 @@ import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.common.result.PageResult;
 import com.xd.smartworksite.common.security.SecurityUtils;
 import com.xd.smartworksite.ai.application.AiApplicationService;
+import com.xd.smartworksite.ai.dto.RagDocumentBlockRequest;
 import com.xd.smartworksite.ai.dto.RagDocumentRequest;
 import com.xd.smartworksite.ai.dto.RagIndexRequest;
 import com.xd.smartworksite.ai.dto.RagIndexResponse;
@@ -40,6 +43,8 @@ import com.xd.smartworksite.task.repository.TaskRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -250,7 +255,7 @@ public class KnowledgeBaseApplicationService {
             FileParseContentResponse content = fileParseApplicationService.getParseContentForSystem(parseRecord.getRecordId());
             String parsedContent = normalizeParsedContent(content.getContent());
 
-            RagIndexResponse response = aiApplicationService.indexKnowledgeForSystem(buildRagIndexRequest(document, parsedContent));
+            RagIndexResponse response = aiApplicationService.indexKnowledgeForSystem(buildRagIndexRequest(document, parsedContent, parseRecord.getMetadata()));
             if (response == null || response.getIndexedDocuments() == null || response.getIndexedDocuments() <= 0) {
                 throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "RAG index returned no indexed documents");
             }
@@ -335,7 +340,7 @@ public class KnowledgeBaseApplicationService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "knowledge base not found"));
     }
 
-    private RagIndexRequest buildRagIndexRequest(KnowledgeDocument document, String content) {
+    private RagIndexRequest buildRagIndexRequest(KnowledgeDocument document, String content, String parseMetadata) {
         RagDocumentRequest ragDocument = new RagDocumentRequest();
         ragDocument.setDocumentId(String.valueOf(document.getId()));
         ragDocument.setTitle(document.getTitle());
@@ -348,12 +353,90 @@ public class KnowledgeBaseApplicationService {
                 "fileId", document.getFileId(),
                 "versionNo", document.getVersionNo()
         ));
+        ragDocument.setBlocks(parseStructuredBlocks(document, parseMetadata));
 
         RagIndexRequest request = new RagIndexRequest();
         request.setProjectId(document.getProjectId());
         request.setKnowledgeBaseId(document.getKnowledgeBaseId());
         request.setDocuments(List.of(ragDocument));
         return request;
+    }
+
+    private List<RagDocumentBlockRequest> parseStructuredBlocks(KnowledgeDocument document, String parseMetadata) {
+        if (parseMetadata == null || parseMetadata.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode root = objectMapper.readTree(parseMetadata);
+            validateParseMetadataIdentity(document, root);
+            JsonNode blocks = root.path("blocks");
+            if (blocks.isMissingNode() || blocks.isNull()) {
+                return List.of();
+            }
+            if (!blocks.isArray()) {
+                throw new BusinessException(ErrorCode.CONFLICT, "file parse metadata blocks must be an array");
+            }
+            if (blocks.size() > 10_000) {
+                throw new BusinessException(ErrorCode.CONFLICT, "file parse metadata contains too many blocks");
+            }
+            List<RagDocumentBlockRequest> result = new ArrayList<>();
+            for (JsonNode block : blocks) {
+                String blockId = requiredMetadataText(block, "blockId");
+                String blockType = requiredMetadataText(block, "type");
+                String blockContent = metadataText(block, "text");
+                if (blockContent == null || blockContent.isBlank()) {
+                    continue;
+                }
+                RagDocumentBlockRequest request = new RagDocumentBlockRequest();
+                request.setBlockId(blockId);
+                request.setBlockType(blockType);
+                request.setContent(blockContent);
+                request.setLocation(toMap(block.path("location")));
+                request.setStructuredData(toMap(block.path("structuredData")));
+                result.add(request);
+            }
+            return result;
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(ErrorCode.CONFLICT, "file parse metadata is invalid");
+        }
+    }
+
+    private void validateParseMetadataIdentity(KnowledgeDocument document, JsonNode root) {
+        JsonNode projectId = root.get("projectId");
+        if (projectId != null && (!projectId.canConvertToLong()
+                || !document.getProjectId().equals(projectId.longValue()))) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "file parse metadata project mismatch");
+        }
+        JsonNode fileId = root.has("fileId") ? root.get("fileId") : root.get("documentId");
+        if (fileId != null && (!fileId.canConvertToLong()
+                || !document.getFileId().equals(fileId.longValue()))) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "file parse metadata document mismatch");
+        }
+    }
+
+    private String requiredMetadataText(JsonNode node, String field) {
+        String value = metadataText(node, field);
+        if (value == null || value.isBlank()) {
+            throw new BusinessException(ErrorCode.CONFLICT, "file parse metadata block " + field + " is required");
+        }
+        return value;
+    }
+
+    private String metadataText(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? null : value.asText();
+    }
+
+    private Map<String, Object> toMap(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return Map.of();
+        }
+        if (!node.isObject()) {
+            throw new BusinessException(ErrorCode.CONFLICT, "file parse metadata block object is invalid");
+        }
+        return objectMapper.convertValue(node, new TypeReference<LinkedHashMap<String, Object>>() { });
     }
 
     private String normalizeParsedContent(String content) {
