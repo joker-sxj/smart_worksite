@@ -88,7 +88,13 @@ def services():
 
 @router.get("/health")
 async def health():
-    return ok({"status": "UP", "service": "python-ai-service"})
+    settings = get_settings()
+    return ok({
+        "status": "UP",
+        "service": "python-ai-service",
+        "deploymentMode": settings.ai_deployment_mode.value,
+        "dependencies": settings.ai_dependency_descriptors(),
+    })
 
 
 @router.post("/model/invoke", response_model=StandardResponse[ModelInvokeData])

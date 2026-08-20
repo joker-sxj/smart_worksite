@@ -17,12 +17,15 @@ try {
 
     if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) {
         if (Test-Path -LiteralPath $envExample -PathType Leaf) { Copy-Item -LiteralPath $envExample -Destination $envFile }
-        throw "Created $envFile. Configure its local values, especially QWEN_API_KEY, then run this script again."
+        throw "Created $envFile. Configure its local model endpoints, then run this script again."
     }
 
     Import-DotEnv -Path $envFile
     Assert-MinimumFreeDisk -Path $projectRoot
-    if ([string]::IsNullOrWhiteSpace($env:QWEN_API_KEY)) { throw 'QWEN_API_KEY is empty in deploy/.env. Configure it before starting the complete project.' }
+    $deploymentMode = if ([string]::IsNullOrWhiteSpace($env:AI_DEPLOYMENT_MODE)) { 'CLOUD_ALLOWED' } else { $env:AI_DEPLOYMENT_MODE.ToUpperInvariant() }
+    if ($deploymentMode -eq 'CLOUD_ALLOWED' -and [string]::IsNullOrWhiteSpace($env:QWEN_API_KEY)) {
+        throw 'QWEN_API_KEY is required when AI_DEPLOYMENT_MODE=CLOUD_ALLOWED.'
+    }
 
     $javaVersionOutput = (& cmd.exe /d /c 'java -version 2>&1') -join "`n"
     if ($javaVersionOutput -notmatch 'version\s+"(?<major>\d+)') { throw "Unable to determine Java version from: $javaVersionOutput" }

@@ -101,13 +101,18 @@ services:
       AI_SERVICE_PORT: 8015
       AI_SERVICE_API_KEY: ${AI_PYTHON_API_KEY:-dev-ai-service-key}
       AI_ACCESS_LOG: ${AI_ACCESS_LOG:-false}
-      QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      AI_DEPLOYMENT_MODE: ${AI_DEPLOYMENT_MODE:-LOCAL_ONLY}
+      QWEN_BASE_URL: ${QWEN_BASE_URL:-http://local-llm:8000/v1}
       QWEN_API_KEY: ${QWEN_API_KEY:-}
-      QWEN_MODEL: ${QWEN_MODEL:-qwen-plus}
-      QWEN_VL_ENDPOINT: ${QWEN_VL_ENDPOINT:-https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions}
+      QWEN_MODEL: ${QWEN_MODEL:-smart-worksite-chat}
+      QWEN_VL_ENDPOINT: ${QWEN_VL_ENDPOINT:-http://local-vlm:8000/v1/chat/completions}
       QWEN_VL_API_KEY: ${QWEN_VL_API_KEY:-}
-      QWEN_VL_MODEL: ${QWEN_VL_MODEL:-qwen-vl-plus}
-      QWEN_EMBEDDING_MODEL: ${QWEN_EMBEDDING_MODEL:-text-embedding-v4}
+      QWEN_VL_MODEL: ${QWEN_VL_MODEL:-smart-worksite-vlm}
+      QWEN_EMBEDDING_BASE_URL: ${QWEN_EMBEDDING_BASE_URL:-http://local-embedding:8000/v1}
+      QWEN_EMBEDDING_MODEL: ${QWEN_EMBEDDING_MODEL:-smart-worksite-embedding}
+      QWEN_RERANK_BASE_URL: ${QWEN_RERANK_BASE_URL:-http://local-reranker:8081/v1/rerank}
+      QWEN_RERANK_MODEL: ${QWEN_RERANK_MODEL:-smart-worksite-reranker}
+      QWEN_RERANK_API_STYLE: ${QWEN_RERANK_API_STYLE:-QWEN3}
       RAG_PROVIDER: ${RAG_PROVIDER:-LOCAL}
       RAG_DATA_DIR: /app/data/rag
       MILVUS_URI: ${MILVUS_URI:-http://milvus:19530}

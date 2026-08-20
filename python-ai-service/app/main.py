@@ -1,13 +1,35 @@
 import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+
 from app.api.routes import router
+from app.core.settings import get_settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("python-ai-service")
 
-app = FastAPI(title="Smart Worksite Python AI Service", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Construct settings during startup so an invalid LOCAL_ONLY endpoint fails
+    # before the service accepts requests.
+    settings = get_settings()
+    logger.info(
+        "AI deployment configured mode=%s dependencies=%s",
+        settings.ai_deployment_mode.value,
+        settings.ai_dependency_descriptors(),
+    )
+    yield
+
+
+app = FastAPI(
+    title="Smart Worksite Python AI Service",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 app.include_router(router)
 
 

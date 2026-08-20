@@ -7,17 +7,17 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from app.core.deployment import AiDeploymentMode
 from app.core.settings import Settings
 from app.models.schemas import Message
 
 
-class QwenClient:
+class OpenAICompatibleProvider:
     def __init__(self, settings: Settings):
         self.settings = settings
 
     async def chat(self, messages: list[Message], model: str | None = None, parameters: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
-        if not self.settings.qwen_api_key:
-            raise RuntimeError("QWEN_API_KEY is not configured")
+        self._require_api_key(self.settings.qwen_api_key, "QWEN_API_KEY")
         payload: dict[str, Any] = {
             "model": model or self.settings.qwen_model,
             "messages": [{"role": item.role, "content": item.content} for item in messages],
@@ -25,11 +25,7 @@ class QwenClient:
         if parameters:
             payload.update(parameters)
         url = self.settings.qwen_base_url.rstrip("/") + "/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.settings.qwen_api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        headers = self._json_headers(self.settings.qwen_api_key)
         async with httpx.AsyncClient(timeout=self.settings.qwen_timeout_seconds) as client:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
@@ -54,8 +50,7 @@ class QwenClient:
 
     async def vision_json_chat(self, prompt: str, file_sources: str | list[str], content_type: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
         api_key = self.settings.qwen_vl_api_key or self.settings.qwen_api_key
-        if not api_key:
-            raise RuntimeError("QWEN_VL_API_KEY is not configured")
+        self._require_api_key(api_key, "QWEN_VL_API_KEY")
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         normalized_type = self._normalize_mime_type(content_type)
         sources = [file_sources] if isinstance(file_sources, str) else file_sources
@@ -67,11 +62,7 @@ class QwenClient:
             else:
                 image_data_url = await self._download_image_as_data_url(file_url, normalized_type)
                 content.append({"type": "image_url", "image_url": {"url": image_data_url}})
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        headers = self._json_headers(api_key)
         body = await self._post_qwen_vl(content, headers)
         try:
             return self._parse_vision_json_body(body)
@@ -339,8 +330,7 @@ class QwenClient:
     async def embed(self, texts: list[str], model: str | None = None) -> tuple[list[list[float]], dict[str, Any]]:
         if not texts:
             return [], {}
-        if not self.settings.qwen_api_key:
-            raise RuntimeError("QWEN_API_KEY is not configured")
+        self._require_api_key(self.settings.qwen_api_key, "QWEN_API_KEY")
         payload: dict[str, Any] = {
             "model": model or self.settings.qwen_embedding_model,
             "input": texts,
@@ -348,12 +338,9 @@ class QwenClient:
         if self.settings.qwen_embedding_dimensions > 0:
             payload["dimensions"] = self.settings.qwen_embedding_dimensions
         payload["encoding_format"] = "float"
-        url = self.settings.qwen_base_url.rstrip("/") + "/embeddings"
-        headers = {
-            "Authorization": f"Bearer {self.settings.qwen_api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        url_base = self.settings.qwen_embedding_base_url or self.settings.qwen_base_url
+        url = url_base.rstrip("/") + "/embeddings"
+        headers = self._json_headers(self.settings.qwen_api_key)
         async with httpx.AsyncClient(timeout=self.settings.qwen_timeout_seconds) as client:
             try:
                 response = await client.post(url, headers=headers, json=payload)
@@ -388,16 +375,11 @@ class QwenClient:
     async def rerank(self, query: str, documents: list[str], top_n: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if not documents:
             return [], {}
-        if not self.settings.qwen_api_key:
-            raise RuntimeError("QWEN_API_KEY is not configured")
+        self._require_api_key(self.settings.qwen_api_key, "QWEN_API_KEY")
         url_base = (self.settings.qwen_rerank_base_url or self.settings.qwen_base_url).rstrip("/")
         payload = self._build_rerank_payload(query, documents, top_n)
-        url = url_base if "/services/rerank/" in url_base else url_base + "/rerank"
-        headers = {
-            "Authorization": f"Bearer {self.settings.qwen_api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
+        url = url_base if "/services/rerank/" in url_base or url_base.endswith("/rerank") else url_base + "/rerank"
+        headers = self._json_headers(self.settings.qwen_api_key)
         async with httpx.AsyncClient(timeout=self.settings.qwen_timeout_seconds) as client:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
@@ -406,6 +388,18 @@ class QwenClient:
         results = output.get("results") or body.get("results") or []
         return results, body.get("usage") or {}
 
+    def _require_api_key(self, api_key: str, setting_name: str) -> None:
+        if not api_key and self.settings.ai_deployment_mode != AiDeploymentMode.LOCAL_ONLY:
+            raise RuntimeError(f"{setting_name} is not configured")
+
+    def _json_headers(self, api_key: str) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
     def _build_rerank_payload(self, query: str, documents: list[str], top_n: int) -> dict[str, Any]:
         model = self.settings.qwen_rerank_model
         api_style = self.settings.qwen_rerank_api_style.upper()
@@ -430,3 +424,7 @@ class QwenClient:
                 "instruction": self.settings.qwen_rerank_instruct,
             },
         }
+
+
+# Backward-compatible name while callers migrate to provider protocols.
+QwenClient = OpenAICompatibleProvider

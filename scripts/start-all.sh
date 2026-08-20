@@ -21,12 +21,16 @@ for command_name in docker java mvn node npm timeout pgrep; do require_command "
 docker compose version >/dev/null
 if [[ ! -f "$env_file" ]]; then
   [[ -f "$env_example" ]] && cp "$env_example" "$env_file"
-  printf 'Created %s. Configure its local values, especially QWEN_API_KEY, then run this script again.\n' "$env_file" >&2
+  printf 'Created %s. Configure its local model endpoints, then run this script again.\n' "$env_file" >&2
   exit 1
 fi
 load_env "$env_file"
 assert_minimum_free_disk "$root"
-[[ -n "${QWEN_API_KEY:-}" ]] || { printf 'QWEN_API_KEY is empty in deploy/.env. Configure it before starting the complete project.\n' >&2; exit 1; }
+deployment_mode="${AI_DEPLOYMENT_MODE:-CLOUD_ALLOWED}"
+if [[ "${deployment_mode^^}" == 'CLOUD_ALLOWED' && -z "${QWEN_API_KEY:-}" ]]; then
+  printf 'QWEN_API_KEY is required when AI_DEPLOYMENT_MODE=CLOUD_ALLOWED.\n' >&2
+  exit 1
+fi
 java_major="$(java_major_version || true)"
 [[ "$java_major" =~ ^[0-9]+$ ]] && (( java_major >= 17 )) || { printf 'Java 17 or newer is required.\n' >&2; exit 1; }
 printf 'Prerequisite and configuration checks passed.\n'
