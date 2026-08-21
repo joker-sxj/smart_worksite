@@ -723,6 +723,10 @@ Review read APIs require `review:view`; submit/retry/delete/archive/update-issue
 审查执行失败写入规则：Python Agent 返回失败、空结果或无效 JSON 时，审查记录必须标记为 `FAILED` 并记录错误信息；如果失败状态无法落库，必须直接返回冲突错误，不允许丢失可观测性。
 审查创建写入规则：提交审查记录后必须校验生成 ID 并读回持久化记录；读回失败时不调用 Python Agent，直接返回系统错误。
 
+审查异步执行规则：提交接口不等待 Python/Qwen 完成。Worker 领取 `COMPLIANCE_REVIEW` 任务后使用系统安全访问方法重新校验项目、模板和文件，并通过 `invokeAgentForSystem` 调用 Python Agent，不读取请求线程登录态；随后写入 `PROCESSING`，完成后写入 `COMPLETED` 及问题 JSON，失败则同时保留审查记录和任务错误。前端按 `recordId` 每 2 秒轮询非终态记录，并可通过 `taskId` 查询阶段日志。
+
+合规审查支持一个待审主文件、多个参考 PDF/Word 文件和多个项目知识库。参考文件与知识库 ID 会在审查记录中快照，Worker 执行前重新校验项目归属和启用状态；模型返回的引用必须匹配已提供来源，Java 会过滤并持久化可验证的 `references`。
+
 ### 审计
 
 | 方法 | 路径 | 说明 |

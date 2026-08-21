@@ -26,6 +26,7 @@ public interface ReviewRecordMapper {
     int markCompleted(@Param("recordId") Long recordId,
                       @Param("issuesJson") String issuesJson,
                       @Param("resultJson") String resultJson,
+                      @Param("referencesJson") String referencesJson,
                       @Param("updatedBy") Long updatedBy);
 
     int markFailed(@Param("recordId") Long recordId,

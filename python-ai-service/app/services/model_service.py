@@ -45,9 +45,11 @@ class AgentService:
     async def _invoke_compliance_review(self, request: AgentInvokeRequest) -> tuple[AgentInvokeData, dict]:
         parameters = request.parameters or {}
         system = (
-            "你是智慧工地合规审查智能体。必须基于审查模板和被审查文件正文识别问题，"
-            "只能返回合法JSON对象，字段为summary、score、issues、metadata。"
+            "你是智慧工地合规审查智能体。必须基于审查模板、被审查文件正文和提供的参考来源识别问题，"
+            "只能返回合法JSON对象，字段为summary、score、issues、references、metadata。"
             "issues为数组，每项包含issueId、severity、location、ruleName、description、suggestion、status。"
+            "references为实际用于结论的来源数组，每项只能使用输入referenceSources中的sourceType和sourceId，"
+            "并包含location和excerpt；没有使用参考来源时返回空数组。"
             "不要输出Markdown代码块、解释性前后缀或非JSON文本。"
         )
         prompt = {
@@ -58,6 +60,7 @@ class AgentService:
             "reviewFileName": parameters.get("reviewFileName"),
             "reviewFileContent": parameters.get("reviewFileContent") or "",
             "reviewFileContentTruncated": bool(parameters.get("reviewFileContentTruncated")),
+            "referenceSources": parameters.get("referenceSources") or [],
             "expectedResultSchema": parameters.get("expectedResultSchema"),
         }
         messages = [
@@ -87,6 +90,23 @@ class AgentService:
             normalized.setdefault("status", "OPEN")
             normalized_issues.append(normalized)
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        allowed_sources = {
+            (str(item.get("sourceType")), str(item.get("sourceId")))
+            for item in parameters.get("referenceSources", [])
+            if isinstance(item, dict)
+        }
+        references = []
+        for item in result.get("references", []) if isinstance(result.get("references"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            key = (str(item.get("sourceType")), str(item.get("sourceId")))
+            if key in allowed_sources:
+                references.append({
+                    "sourceType": key[0],
+                    "sourceId": key[1],
+                    "location": item.get("location"),
+                    "excerpt": item.get("excerpt"),
+                })
         metadata.update({
             "recordId": parameters.get("recordId"),
             "templateId": parameters.get("templateId"),
@@ -97,6 +117,7 @@ class AgentService:
             "summary": str(result.get("summary") or "合规审查已完成。"),
             "score": result.get("score") if isinstance(result.get("score"), (int, float)) else 0,
             "issues": normalized_issues,
+            "references": references,
             "metadata": metadata,
         }
 
@@ -106,6 +127,7 @@ class AgentService:
             "summary": "审查智能体未能产出合法JSON，系统已保留任务并返回可落库结果；请检查模型配置或稍后重试。",
             "score": 0,
             "issues": [],
+            "references": [],
             "metadata": {
                 "recordId": parameters.get("recordId"),
                 "templateId": parameters.get("templateId"),

@@ -7,11 +7,14 @@ import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import com.xd.smartworksite.ai.dto.AgentInvokeRequest;
 import com.xd.smartworksite.ai.dto.AgentInvokeResponse;
+import com.xd.smartworksite.ai.dto.RagSearchRequest;
+import com.xd.smartworksite.ai.dto.RagSearchResponse;
 import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.common.result.PageResult;
 import com.xd.smartworksite.common.security.SecurityUtils;
 import com.xd.smartworksite.file.application.FileObjectApplicationService;
+import com.xd.smartworksite.file.application.FileObjectContent;
 import com.xd.smartworksite.file.dto.FileObjectResponse;
 import com.xd.smartworksite.file.dto.FileUploadRequest;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
@@ -24,6 +27,7 @@ import com.xd.smartworksite.review.dto.ReviewSubmitRequest;
 import com.xd.smartworksite.review.repository.ReviewRecordRepository;
 import com.xd.smartworksite.template.application.TemplateApplicationService;
 import com.xd.smartworksite.template.dto.TemplateResponse;
+import com.xd.smartworksite.knowledge.application.KnowledgeBaseApplicationService;
 import com.xd.smartworksite.task.application.TaskOutboxApplicationService;
 import com.xd.smartworksite.task.application.TaskWorkerApplicationService;
 import com.xd.smartworksite.task.domain.GenerateTask;
@@ -32,18 +36,23 @@ import com.xd.smartworksite.task.repository.TaskRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
 
 @Service
 public class ReviewApplicationService {
     private static final int MAX_ERROR_LENGTH = 2000;
     private static final String TASK_TYPE_COMPLIANCE_REVIEW = "COMPLIANCE_REVIEW";
     private static final String BIZ_TYPE_REVIEW_RECORD = "REVIEW_RECORD";
+    private static final int MAX_REFERENCE_FILES = 5;
+    private static final int MAX_REFERENCE_TEXT_CHARS = 8000;
 
     private final ReviewRecordRepository reviewRecordRepository;
     private final ProjectAccessApplicationService projectAccessApplicationService;
@@ -55,6 +64,7 @@ public class ReviewApplicationService {
     private final TaskRepository taskRepository;
     private final TaskOutboxApplicationService taskOutboxApplicationService;
     private final TaskWorkerApplicationService taskWorkerApplicationService;
+    private final KnowledgeBaseApplicationService knowledgeBaseApplicationService;
 
     public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
                                     ProjectAccessApplicationService projectAccessApplicationService,
@@ -64,7 +74,7 @@ public class ReviewApplicationService {
                                     ReviewDocumentTextExtractor documentTextExtractor,
                                     ObjectMapper objectMapper) {
         this(reviewRecordRepository, projectAccessApplicationService, fileObjectApplicationService, templateApplicationService,
-                reviewAiGateway, documentTextExtractor, objectMapper, null, null, null);
+                reviewAiGateway, documentTextExtractor, objectMapper, null, null, null, null);
     }
 
     @Autowired
@@ -77,7 +87,8 @@ public class ReviewApplicationService {
                                     ObjectMapper objectMapper,
                                     TaskRepository taskRepository,
                                     TaskOutboxApplicationService taskOutboxApplicationService,
-                                    TaskWorkerApplicationService taskWorkerApplicationService) {
+                                    TaskWorkerApplicationService taskWorkerApplicationService,
+                                    KnowledgeBaseApplicationService knowledgeBaseApplicationService) {
         this.reviewRecordRepository = reviewRecordRepository;
         this.projectAccessApplicationService = projectAccessApplicationService;
         this.fileObjectApplicationService = fileObjectApplicationService;
@@ -88,25 +99,49 @@ public class ReviewApplicationService {
         this.taskRepository = taskRepository;
         this.taskOutboxApplicationService = taskOutboxApplicationService;
         this.taskWorkerApplicationService = taskWorkerApplicationService;
+        this.knowledgeBaseApplicationService = knowledgeBaseApplicationService;
     }
 
     @Transactional
     public ReviewRecordResponse submitReview(ReviewSubmitRequest request) {
         projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
         TemplateResponse template = requireReviewTemplate(request.getProjectId(), request.getTemplateId());
+        List<MultipartFile> referenceFiles = request.getReferenceFiles().stream()
+                .filter(reference -> reference != null && !reference.isEmpty()).toList();
+        if (referenceFiles.size() > MAX_REFERENCE_FILES) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "参考资料最多上传 5 个");
+        }
+        for (MultipartFile reference : referenceFiles) {
+            String fileName = reference.getOriginalFilename();
+            if (!isReferenceDocument(fileName)) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "参考资料只支持 PDF、DOC、DOCX 文件");
+            }
+        }
+        List<Long> knowledgeBaseIds = normalizeIds(request.getKnowledgeBaseIds());
+        knowledgeBaseApplicationService.validateEnabledForReview(request.getProjectId(), knowledgeBaseIds);
         FileUploadRequest uploadRequest = new FileUploadRequest();
         uploadRequest.setProjectId(request.getProjectId());
         uploadRequest.setBizType("REVIEW_DOC");
         uploadRequest.setFile(request.getFile());
         FileObjectResponse file = fileObjectApplicationService.upload(uploadRequest);
-
+        List<Long> referenceFileIds = new ArrayList<>();
+        for (MultipartFile reference : referenceFiles) {
+            FileUploadRequest referenceUpload = new FileUploadRequest();
+            referenceUpload.setProjectId(request.getProjectId());
+            referenceUpload.setBizType("REVIEW_REFERENCE");
+            referenceUpload.setFile(reference);
+            referenceFileIds.add(fileObjectApplicationService.upload(referenceUpload).getFileId());
+        }
         ReviewRecord record = new ReviewRecord();
         record.setProjectId(request.getProjectId());
         record.setTemplateId(template.getTemplateId());
         record.setFileId(file.getFileId());
+        record.setReferenceFileIds(writeJson(referenceFileIds));
+        record.setKnowledgeBaseIds(writeJson(knowledgeBaseIds));
         record.setStatus(ReviewStatus.PENDING.name());
         record.setIssuesJson("[]");
         record.setResultJson("{}");
+        record.setReferencesJson("[]");
         record.setCreatedBy(SecurityUtils.getCurrentUserId());
         record.setUpdatedBy(SecurityUtils.getCurrentUserId());
         reviewRecordRepository.insert(record);
@@ -207,7 +242,8 @@ public class ReviewApplicationService {
         }
         Map<String, Object> result = readMap(record.getResultJson());
         result.put("issues", issues);
-        int updated = reviewRecordRepository.markCompleted(recordId, writeJson(issues), writeJson(result), SecurityUtils.getCurrentUserId());
+        int updated = reviewRecordRepository.markCompleted(recordId, writeJson(issues), writeJson(result),
+                record.getReferencesJson(), SecurityUtils.getCurrentUserId());
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, "review issue update failed");
         }
@@ -253,14 +289,19 @@ public class ReviewApplicationService {
             FileObjectResponse file = fileObjectApplicationService.getFileForSystem(record.getFileId());
             ReviewDocumentTextExtractor.ExtractedText reviewText = extractReviewFileTextForSystem(record, file);
             ReviewDocumentTextExtractor.ExtractedText templateText = extractTemplateTextForSystem(template);
+            List<Map<String, Object>> sourceEvidence = collectReferences(record, reviewText, true);
             recordProgress(taskId, workerId, leaseSeconds, "REVIEW_AI", "正在调用审查模型");
-            AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgentForSystem(buildAgentRequest(record, template, file, reviewText, templateText));
+            AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgentForSystem(
+                    buildAgentRequest(record, template, file, reviewText, templateText, sourceEvidence));
             Map<String, Object> result = parseAgentResult(aiResponse);
             result.put("providerTraceId", aiResponse.getProviderTraceId());
             if (aiResponse.getSteps() != null && !aiResponse.getSteps().isEmpty()) result.put("steps", aiResponse.getSteps());
             List<Map<String, Object>> issues = extractIssues(result);
+            List<Map<String, Object>> references = extractReferences(result, sourceEvidence);
+            result.put("references", references);
             recordProgress(taskId, workerId, leaseSeconds, "REVIEW_PERSISTING", "正在保存审查结果");
-            if (reviewRecordRepository.markCompleted(recordId, writeJson(issues), writeJson(result), 1L) == 0) {
+            if (reviewRecordRepository.markCompleted(
+                    recordId, writeJson(issues), writeJson(result), writeJson(references), 1L) == 0) {
                 throw new BusinessException(ErrorCode.CONFLICT, "review record complete state changed");
             }
         } catch (RuntimeException ex) {
@@ -294,14 +335,19 @@ public class ReviewApplicationService {
             FileObjectResponse file = fileObjectApplicationService.getFile(record.getFileId());
             ReviewDocumentTextExtractor.ExtractedText reviewText = extractReviewFileText(record, file);
             ReviewDocumentTextExtractor.ExtractedText templateText = extractTemplateText(template);
-            AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgent(buildAgentRequest(record, template, file, reviewText, templateText));
+            List<Map<String, Object>> sourceEvidence = collectReferences(record, reviewText, false);
+            AgentInvokeRequest agentRequest = buildAgentRequest(record, template, file, reviewText, templateText, sourceEvidence);
+            AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgent(agentRequest);
             Map<String, Object> result = parseAgentResult(aiResponse);
             result.put("providerTraceId", aiResponse.getProviderTraceId());
             if (aiResponse.getSteps() != null && !aiResponse.getSteps().isEmpty()) {
                 result.put("steps", aiResponse.getSteps());
             }
             List<Map<String, Object>> issues = extractIssues(result);
-            int completed = reviewRecordRepository.markCompleted(recordId, writeJson(issues), writeJson(result), SecurityUtils.getCurrentUserId());
+            List<Map<String, Object>> references = extractReferences(result, sourceEvidence);
+            result.put("references", references);
+            int completed = reviewRecordRepository.markCompleted(recordId, writeJson(issues), writeJson(result),
+                    writeJson(references), SecurityUtils.getCurrentUserId());
             if (completed == 0) {
                 throw new BusinessException(ErrorCode.CONFLICT, "review record complete state changed");
             }
@@ -344,9 +390,61 @@ public class ReviewApplicationService {
         }
     }
 
+    private List<Map<String, Object>> collectReferences(ReviewRecord record,
+                                                        ReviewDocumentTextExtractor.ExtractedText reviewText,
+                                                        boolean systemExecution) {
+        List<Map<String, Object>> evidence = new ArrayList<>();
+        for (Long fileId : readLongList(record.getReferenceFileIds())) {
+            FileObjectResponse file = systemExecution
+                    ? fileObjectApplicationService.getFileForSystem(fileId)
+                    : fileObjectApplicationService.getFile(fileId);
+            if (!record.getProjectId().equals(file.getProjectId())
+                    || file.getFileName() == null
+                    || !isReferenceDocument(file.getFileName())) {
+                throw new BusinessException(ErrorCode.CONFLICT, "参考资料不属于当前项目或格式无效");
+            }
+            FileObjectContent content = systemExecution
+                    ? fileObjectApplicationService.openFileContentForSystem(fileId, record.getProjectId(), null)
+                    : fileObjectApplicationService.openFileContent(fileId, record.getProjectId(), null);
+            ReviewDocumentTextExtractor.ExtractedText extracted = documentTextExtractor.extract(content);
+            Map<String, Object> source = new LinkedHashMap<>();
+            source.put("sourceType", "REFERENCE_FILE");
+            source.put("sourceId", String.valueOf(fileId));
+            source.put("title", file.getFileName());
+            source.put("content", extracted.text().substring(0, Math.min(extracted.text().length(), MAX_REFERENCE_TEXT_CHARS)));
+            source.put("contentTruncated", extracted.truncated() || extracted.text().length() > MAX_REFERENCE_TEXT_CHARS);
+            evidence.add(source);
+        }
+        List<Long> knowledgeBaseIds = normalizeIds(readLongList(record.getKnowledgeBaseIds()));
+        if (systemExecution) knowledgeBaseApplicationService.validateEnabledForReviewForSystem(record.getProjectId(), knowledgeBaseIds);
+        else knowledgeBaseApplicationService.validateEnabledForReview(record.getProjectId(), knowledgeBaseIds);
+        if (!knowledgeBaseIds.isEmpty()) {
+            RagSearchRequest search = new RagSearchRequest();
+            search.setProjectId(record.getProjectId());
+            search.setKnowledgeBaseIds(knowledgeBaseIds);
+            search.setQuery(reviewText.text().substring(0, Math.min(reviewText.text().length(), 3000)));
+            search.setTopK(10);
+            RagSearchResponse response = reviewAiGateway.searchKnowledgeForSystem(search);
+            List<RagSearchResponse.Record> records = response == null || response.getRecords() == null
+                    ? List.of() : response.getRecords();
+            for (RagSearchResponse.Record item : records) {
+                Map<String, Object> source = new LinkedHashMap<>();
+                source.put("sourceType", "KNOWLEDGE_BASE");
+                source.put("sourceId", item.getSourceId() == null ? item.getTitle() : item.getSourceId());
+                source.put("title", item.getTitle());
+                source.put("content", item.getContentSnippet());
+                source.put("score", item.getRerankScore() == null ? item.getScore() : item.getRerankScore());
+                source.put("metadata", item.getMetadata());
+                evidence.add(source);
+            }
+        }
+        return evidence;
+    }
+
     private AgentInvokeRequest buildAgentRequest(ReviewRecord record, TemplateResponse template, FileObjectResponse file,
                                                  ReviewDocumentTextExtractor.ExtractedText reviewText,
-                                                 ReviewDocumentTextExtractor.ExtractedText templateText) {
+                                                 ReviewDocumentTextExtractor.ExtractedText templateText,
+                                                 List<Map<String, Object>> references) {
         AgentInvokeRequest request = new AgentInvokeRequest();
         request.setProjectId(record.getProjectId());
         request.setGoal("COMPLIANCE_REVIEW");
@@ -362,6 +460,7 @@ public class ReviewApplicationService {
         parameters.put("reviewFileContentTruncated", reviewText.truncated());
         parameters.put("templateContent", templateText.text());
         parameters.put("templateContentTruncated", templateText.truncated());
+        parameters.put("referenceSources", references);
         parameters.put("instruction", "请基于审查模板和被审查文件内容进行合规审查，只返回合法JSON对象，不要输出Markdown或解释文字。");
         parameters.put("expectedResultSchema", Map.of(
                 "issues", "array of {issueId,severity,location,ruleName,description,suggestion,status}",
@@ -457,6 +556,36 @@ public class ReviewApplicationService {
         return issues;
     }
 
+    private List<Map<String, Object>> extractReferences(Map<String, Object> result,
+                                                        List<Map<String, Object>> evidence) {
+        Object value = result.get("references");
+        if (!(value instanceof List<?> requested)) return List.of();
+        Map<String, Map<String, Object>> allowed = new LinkedHashMap<>();
+        for (Map<String, Object> item : evidence) {
+            allowed.put(item.get("sourceType") + ":" + item.get("sourceId"), item);
+        }
+        List<Map<String, Object>> references = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (Object raw : requested) {
+            if (!(raw instanceof Map<?, ?> map)) continue;
+            String type = String.valueOf(map.get("sourceType"));
+            String id = String.valueOf(map.get("sourceId"));
+            String key = type + ":" + id;
+            Map<String, Object> source = allowed.get(key);
+            if (source == null || !seen.add(key)) continue;
+            Map<String, Object> citation = new LinkedHashMap<>();
+            citation.put("sourceType", type);
+            citation.put("sourceId", id);
+            citation.put("title", source.get("title"));
+            citation.put("location", map.get("location"));
+            citation.put("excerpt", map.get("excerpt"));
+            citation.put("score", source.get("score"));
+            citation.put("metadata", source.get("metadata"));
+            references.add(citation);
+        }
+        return references;
+    }
+
     private TemplateResponse requireReviewTemplate(Long projectId, Long templateId) {
         TemplateResponse template = templateApplicationService.getTemplate(templateId);
         if (!projectId.equals(template.getProjectId())) {
@@ -526,10 +655,13 @@ public class ReviewApplicationService {
         response.setProjectId(record.getProjectId());
         response.setTemplateId(record.getTemplateId());
         response.setFileId(record.getFileId());
+        response.setReferenceFileIds(readLongList(record.getReferenceFileIds()));
+        response.setKnowledgeBaseIds(readLongList(record.getKnowledgeBaseIds()));
         response.setTaskId(record.getTaskId());
         response.setStatus(record.getStatus());
         response.setIssues(readList(record.getIssuesJson()));
         response.setResult(readMap(record.getResultJson()));
+        response.setReferences(readList(record.getReferencesJson()));
         response.setErrorMessage(record.getErrorMessage());
         response.setCreatedAt(record.getCreatedAt());
         response.setUpdatedAt(record.getUpdatedAt());
@@ -553,6 +685,22 @@ public class ReviewApplicationService {
         } catch (JsonProcessingException ex) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "review issues json parse failed");
         }
+    }
+
+    private List<Long> readLongList(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try { return objectMapper.readValue(json, new TypeReference<List<Long>>() {}); }
+        catch (JsonProcessingException ex) { throw new BusinessException(ErrorCode.SYSTEM_ERROR, "review source ids json parse failed"); }
+    }
+
+    private List<Long> normalizeIds(List<Long> ids) {
+        return ids == null ? List.of() : ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
+    }
+
+    private boolean isReferenceDocument(String fileName) {
+        if (fileName == null) return false;
+        String normalized = fileName.toLowerCase(Locale.ROOT);
+        return normalized.endsWith(".pdf") || normalized.endsWith(".doc") || normalized.endsWith(".docx");
     }
 
     private Map<String, Object> readMap(String json) {

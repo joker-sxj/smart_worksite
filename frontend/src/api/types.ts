@@ -224,10 +224,13 @@ export interface ReviewRecord {
   projectId: ID;
   taskId?: ID;
   fileId?: ID;
+  referenceFileIds?: ID[];
+  knowledgeBaseIds?: ID[];
   templateId: ID;
   status: Status;
   issues: ReviewIssue[];
   result?: Record<string, unknown>;
+  references?: Array<{ sourceType: string; sourceId: string; title?: string; location?: string; excerpt?: string; score?: number; metadata?: Record<string, unknown> }>;
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;

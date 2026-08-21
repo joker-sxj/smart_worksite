@@ -5,6 +5,7 @@ import java.util.Locale;
 public enum FileBizType {
     KNOWLEDGE_DOC,
     REVIEW_DOC,
+    REVIEW_REFERENCE,
     REPORT_TEMPLATE,
     REVIEW_TEMPLATE,
     REPORT_OUTPUT,

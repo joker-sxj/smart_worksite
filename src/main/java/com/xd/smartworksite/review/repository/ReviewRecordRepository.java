@@ -18,7 +18,7 @@ public interface ReviewRecordRepository {
 
     default int markProcessing(Long recordId, Long taskId, Long updatedBy) { return markProcessing(recordId, updatedBy); }
 
-    int markCompleted(Long recordId, String issuesJson, String resultJson, Long updatedBy);
+    int markCompleted(Long recordId, String issuesJson, String resultJson, String referencesJson, Long updatedBy);
 
     int markFailed(Long recordId, String errorMessage, Long updatedBy);
 

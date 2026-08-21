@@ -15,6 +15,7 @@ import com.xd.smartworksite.file.dto.FileUploadRequest;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
 import com.xd.smartworksite.project.domain.Project;
 import com.xd.smartworksite.project.repository.ProjectRepository;
+import com.xd.smartworksite.knowledge.application.KnowledgeBaseApplicationService;
 import com.xd.smartworksite.review.domain.ReviewRecord;
 import com.xd.smartworksite.review.dto.ReviewIssueUpdateRequest;
 import com.xd.smartworksite.review.dto.ReviewRecordQueryRequest;
@@ -72,7 +73,10 @@ class ReviewApplicationServiceTest {
                 templateService,
                 reviewAiGateway,
                 extractor,
-                new ObjectMapper()
+                new ObjectMapper(),
+                taskRepository,
+                taskOutboxApplicationService,
+                mock(KnowledgeBaseApplicationService.class)
         );
     }
 
@@ -93,6 +97,34 @@ class ReviewApplicationServiceTest {
         assertThat(reviewAiGateway.lastRequest.getParameters()).containsEntry("reviewFileId", 99L);
         assertThat(reviewAiGateway.lastRequest.getTools()).isEmpty();
         assertThat(reviewAiGateway.lastRequest.getParameters()).containsEntry("reviewFileContent", "施工方案内容：临边未设置防护栏杆。");
+    }
+
+    @Test
+    void submitReviewAcceptsWordReferenceFiles() {
+        ReviewSubmitRequest request = submitRequest(1L, 10L);
+        request.setReferenceFiles(List.of(
+                new MockMultipartFile("referenceFiles", "rule.doc", "application/msword", "doc".getBytes()),
+                new MockMultipartFile("referenceFiles", "standard.docx",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx".getBytes())
+        ));
+
+        var response = service.submitReview(request);
+
+        assertThat(response.getReferenceFileIds()).containsExactly(99L, 99L);
+    }
+
+    @Test
+    void submitReviewRejectsUnsupportedReferenceFile() {
+        ReviewSubmitRequest request = submitRequest(1L, 10L);
+        request.setReferenceFiles(List.of(
+                new MockMultipartFile("referenceFiles", "rules.xlsx", "application/vnd.ms-excel", "sheet".getBytes())
+        ));
+
+        assertThatThrownBy(() -> service.submitReview(request))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode());
+                    assertThat(ex.getMessage()).contains("PDF、DOC、DOCX");
+                });
     }
 
 
@@ -319,12 +351,13 @@ class ReviewApplicationServiceTest {
         }
 
         @Override
-        public int markCompleted(Long recordId, String issuesJson, String resultJson, Long updatedBy) {
+        public int markCompleted(Long recordId, String issuesJson, String resultJson, String referencesJson, Long updatedBy) {
             return findById(recordId).filter(record -> "PROCESSING".equals(record.getStatus()) || "COMPLETED".equals(record.getStatus()))
                     .map(record -> {
                         record.setStatus("COMPLETED");
                         record.setIssuesJson(issuesJson);
-                        record.setResultJson(resultJson);
+            record.setResultJson(resultJson);
+            record.setReferencesJson(referencesJson);
                         record.setErrorMessage(null);
                         record.setUpdatedBy(updatedBy);
                         return 1;

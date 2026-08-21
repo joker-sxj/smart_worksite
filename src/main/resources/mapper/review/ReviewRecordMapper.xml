@@ -7,10 +7,13 @@
         <result property="projectId" column="project_id"/>
         <result property="templateId" column="template_id"/>
         <result property="fileId" column="file_id"/>
+        <result property="referenceFileIds" column="reference_file_ids"/>
+        <result property="knowledgeBaseIds" column="knowledge_base_ids"/>
         <result property="taskId" column="task_id"/>
         <result property="status" column="status"/>
         <result property="issuesJson" column="issues_json"/>
         <result property="resultJson" column="result_json"/>
+        <result property="referencesJson" column="references_json"/>
         <result property="errorMessage" column="error_message"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
@@ -19,17 +22,20 @@
     </resultMap>
 
     <sql id="ReviewRecordColumns">
-        id, project_id, template_id, file_id, task_id, status, issues_json,
-        result_json, error_message, created_at, updated_at, created_by, updated_by
+        id, project_id, template_id, file_id, reference_file_ids, knowledge_base_ids,
+        task_id, status, issues_json, result_json, references_json, error_message,
+        created_at, updated_at, created_by, updated_by
     </sql>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         insert into review_record (
-            project_id, template_id, file_id, task_id, status, issues_json,
-            result_json, error_message, created_by, updated_by
+            project_id, template_id, file_id, reference_file_ids, knowledge_base_ids,
+            task_id, status, issues_json, result_json, references_json,
+            error_message, created_by, updated_by
         ) values (
-            #{projectId}, #{templateId}, #{fileId}, #{taskId}, #{status}, #{issuesJson},
-            #{resultJson}, #{errorMessage}, #{createdBy}, #{updatedBy}
+            #{projectId}, #{templateId}, #{fileId}, #{referenceFileIds}, #{knowledgeBaseIds},
+            #{taskId}, #{status}, #{issuesJson}, #{resultJson}, #{referencesJson},
+            #{errorMessage}, #{createdBy}, #{updatedBy}
         )
     </insert>
 
@@ -91,6 +97,7 @@
         set status = 'COMPLETED',
             issues_json = #{issuesJson},
             result_json = #{resultJson},
+            references_json = #{referencesJson},
             error_message = null,
             updated_by = #{updatedBy}
         where id = #{recordId}

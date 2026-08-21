@@ -27,7 +27,7 @@ export async function fetchReviewTemplates(projectId?: ID) {
   return request.get<ReviewTemplate[]>('/review/templates', { params: { projectId, status: 'ENABLED' } });
 }
 
-export async function submitReviewRecord(data: { projectId: ID; templateId: ID; file: File }) {
+export async function submitReviewRecord(data: { projectId: ID; templateId: ID; file: File; referenceFiles?: File[]; knowledgeBaseIds?: ID[] }) {
   if (useReviewRecordMock) {
     const now = new Date().toISOString();
     const id = mockId();
@@ -39,6 +39,8 @@ export async function submitReviewRecord(data: { projectId: ID; templateId: ID; 
   form.append('projectId', String(data.projectId));
   form.append('templateId', String(data.templateId));
   form.append('file', data.file);
+  for (const reference of data.referenceFiles || []) form.append('referenceFiles', reference);
+  for (const knowledgeBaseId of data.knowledgeBaseIds || []) form.append('knowledgeBaseIds', String(knowledgeBaseId));
   return request.post<{ recordId: ID; taskId: ID; status: string }>('/review/records', form);
 }
 

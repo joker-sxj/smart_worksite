@@ -134,6 +134,19 @@ class MigrationContractTest {
     }
 
     @Test
+    void reviewMultiSourceMigrationAddsSourceSnapshotsAndCitations() throws IOException {
+        String migration = Files.readString(
+                MIGRATION_DIR.resolve("V21__add_review_multi_sources.sql"),
+                StandardCharsets.UTF_8
+        );
+
+        assertThat(migration).contains("review_record");
+        assertThat(migration).contains("reference_file_ids JSON");
+        assertThat(migration).contains("knowledge_base_ids JSON");
+        assertThat(migration).contains("references_json JSON");
+    }
+
+    @Test
     void fileDownloadContractUsesAccessUrlEndpoint() throws IOException {
         String readme = Files.readString(README, StandardCharsets.UTF_8);
         String frontendFileApi = Files.readString(FRONTEND_FILE_API, StandardCharsets.UTF_8);
