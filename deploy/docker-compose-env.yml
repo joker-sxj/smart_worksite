@@ -105,9 +105,9 @@ services:
       QWEN_BASE_URL: ${QWEN_BASE_URL:-http://local-llm:8000/v1}
       QWEN_API_KEY: ${QWEN_API_KEY:-}
       QWEN_MODEL: ${QWEN_MODEL:-smart-worksite-chat}
-      QWEN_VL_ENDPOINT: ${QWEN_VL_ENDPOINT:-http://local-vlm:8000/v1/chat/completions}
+      QWEN_VL_ENDPOINT: ${QWEN_VL_CONTAINER_ENDPOINT:-http://local-llm:8000/v1/chat/completions}
       QWEN_VL_API_KEY: ${QWEN_VL_API_KEY:-}
-      QWEN_VL_MODEL: ${QWEN_VL_MODEL:-smart-worksite-vlm}
+      QWEN_VL_MODEL: ${QWEN_VL_MODEL:-smart-worksite-chat}
       QWEN_EMBEDDING_BASE_URL: ${QWEN_EMBEDDING_BASE_URL:-http://local-embedding:8000/v1}
       QWEN_EMBEDDING_MODEL: ${QWEN_EMBEDDING_MODEL:-smart-worksite-embedding}
       QWEN_EMBEDDING_DIMENSIONS: ${QWEN_EMBEDDING_DIMENSIONS:-0}

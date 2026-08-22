@@ -39,13 +39,15 @@ public class QwenVlDocumentParseAdapter implements DocumentParseModelAdapter {
 
         try {
             String requestBody = objectMapper.writeValueAsString(buildRequestBody(request, qwenVl.getModel()));
-            HttpRequest httpRequest = HttpRequest.newBuilder()
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(qwenVl.getEndpoint()))
                     .timeout(Duration.ofMillis(qwenVl.getReadTimeoutMs()))
-                    .header("Authorization", "Bearer " + qwenVl.getApiKey())
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                    .build();
+                    .POST(HttpRequest.BodyPublishers.ofString(requestBody));
+            if (qwenVl.getApiKey() != null && !qwenVl.getApiKey().isBlank()) {
+                requestBuilder.header("Authorization", "Bearer " + qwenVl.getApiKey());
+            }
+            HttpRequest httpRequest = requestBuilder.build();
 
             HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -81,8 +83,7 @@ public class QwenVlDocumentParseAdapter implements DocumentParseModelAdapter {
     }
 
     private boolean isQwenConfigured(FileProperties.QwenVl qwenVl) {
-        return qwenVl.getEndpoint() != null && !qwenVl.getEndpoint().isBlank()
-                && qwenVl.getApiKey() != null && !qwenVl.getApiKey().isBlank();
+        return qwenVl.getEndpoint() != null && !qwenVl.getEndpoint().isBlank();
     }
 
     private ParsedDocument parsePreparedTextLocally(DocumentParseRequest request) {

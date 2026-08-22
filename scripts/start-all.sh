@@ -34,6 +34,7 @@ if [[ -n "$model_profile" ]]; then
   configure_model_profile "$root" "$model_profile"
   load_env "$MODEL_PROFILE_FILE"
 fi
+normalize_host_model_endpoints
 assert_minimum_free_disk "$root"
 deployment_mode="${AI_DEPLOYMENT_MODE:-CLOUD_ALLOWED}"
 if [[ "${deployment_mode^^}" == 'CLOUD_ALLOWED' && -z "${QWEN_API_KEY:-}" ]]; then

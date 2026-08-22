@@ -30,6 +30,15 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || { printf 'Required command is not available: %s\n' "$1" >&2; return 1; }
 }
 
+normalize_host_model_endpoints() {
+  local chat_host_port="${CHAT_HOST_PORT:-18000}"
+  case "${QWEN_VL_ENDPOINT:-}" in
+    http://local-vlm:8000/v1/chat/completions|http://local-llm:8000/v1/chat/completions|http://127.0.0.1:*/v1/chat/completions)
+      export QWEN_VL_ENDPOINT="http://127.0.0.1:${chat_host_port}/v1/chat/completions"
+      ;;
+  esac
+}
+
 resolve_model_profile() {
   local root="$1" requested="$2" candidate
   [[ -n "$requested" ]] || return 1

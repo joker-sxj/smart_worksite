@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import vector_store
 from app.services.vector_store import ChunkRecord, LocalJsonVectorStore, MilvusVectorStore, PgVectorStore
 
 
@@ -522,11 +523,121 @@ def test_local_vector_search_skips_records_from_an_old_embedding_dimension(tmp_p
     assert [record.chunkId for record, _ in results] == ["compatible"]
 
 
-def test_local_vector_search_fails_when_all_scoped_records_use_old_dimension(tmp_path):
-    store = LocalJsonVectorStore(str(tmp_path))
+def test_local_vector_search_reembeds_scoped_records_from_an_old_dimension(tmp_path):
+    async def reembed(texts):
+        return [[1.0, 0.0] for _ in texts]
+
+    store = LocalJsonVectorStore(str(tmp_path), reembed=reembed)
     incompatible = chunk("old-dimension")
     incompatible.embedding = [1.0, 0.0, 0.0]
     asyncio.run(store.upsert([incompatible]))
 
-    with pytest.raises(RuntimeError, match="reindex"):
-        asyncio.run(store.search([1.0, 0.0], 1, [10], 10))
+    results = asyncio.run(store.search([1.0, 0.0], 1, [10], 10))
+
+    assert [record.chunkId for record, _ in results] == ["old-dimension"]
+    assert store._load()[0].embedding == [1.0, 0.0]
+
+
+def test_local_vector_search_only_reembeds_incompatible_records_in_selected_scope(tmp_path):
+    calls = []
+
+    async def reembed(texts):
+        calls.append(texts)
+        return [[1.0, 0.0] for _ in texts]
+
+    store = LocalJsonVectorStore(str(tmp_path), reembed=reembed)
+    selected = chunk("selected-old")
+    selected.embedding = [1.0, 0.0, 0.0]
+    other_project = chunk("other-project-old", project_id=2)
+    other_project.embedding = [1.0, 0.0, 0.0]
+    asyncio.run(store.upsert([selected, other_project]))
+
+    asyncio.run(store.search([1.0, 0.0], 1, [10], 10))
+
+    stored = {record.chunkId: record for record in store._load()}
+    assert calls == [[selected.content]]
+    assert stored["selected-old"].embedding == [1.0, 0.0]
+    assert stored["other-project-old"].embedding == [1.0, 0.0, 0.0]
+
+def test_legacy_migration_preserves_chunks_written_while_embedding_is_running(tmp_path):
+    migration_started = asyncio.Event()
+    allow_migration_to_finish = asyncio.Event()
+
+    async def reembed(texts):
+        migration_started.set()
+        await allow_migration_to_finish.wait()
+        return [[1.0, 0.0] for _ in texts]
+
+    async def scenario():
+        store = LocalJsonVectorStore(str(tmp_path), reembed=reembed)
+        writer = LocalJsonVectorStore(str(tmp_path))
+        legacy = chunk("legacy")
+        legacy.embedding = [1.0, 0.0, 0.0]
+        await store.upsert([legacy])
+
+        search_task = asyncio.create_task(store.search([1.0, 0.0], 1, [10], 10))
+        await migration_started.wait()
+        await writer.upsert([chunk("added-during-migration")])
+        allow_migration_to_finish.set()
+        await search_task
+        return {record.chunkId: record for record in store._load()}
+
+    stored = asyncio.run(scenario())
+
+    assert set(stored) == {"legacy", "added-during-migration"}
+    assert stored["legacy"].embedding == [1.0, 0.0]
+
+def test_legacy_migration_persists_completed_batches_before_a_later_failure(tmp_path):
+    calls = 0
+
+    async def reembed(texts):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("embedding unavailable")
+        return [[1.0, 0.0] for _ in texts]
+
+    store = LocalJsonVectorStore(str(tmp_path), reembed=reembed)
+    records = []
+    for index in range(33):
+        record = chunk(f"legacy-{index}")
+        record.embedding = [1.0, 0.0, 0.0]
+        records.append(record)
+    asyncio.run(store.upsert(records))
+
+    results = asyncio.run(store.search([1.0, 0.0], 1, [10], 50))
+
+    dimensions = [len(record.embedding) for record in store._load()]
+    assert len(results) == 32
+    assert dimensions.count(2) == 32
+    assert dimensions.count(3) == 1
+
+
+def test_legacy_migration_failure_uses_existing_compatible_chunks(tmp_path):
+    async def reembed(_texts):
+        raise RuntimeError("embedding unavailable")
+
+    store = LocalJsonVectorStore(str(tmp_path), reembed=reembed)
+    compatible = chunk("compatible")
+    legacy = chunk("legacy")
+    legacy.embedding = [1.0, 0.0, 0.0]
+    asyncio.run(store.upsert([compatible, legacy]))
+
+    results = asyncio.run(store.search([1.0, 0.0], 1, [10], 10))
+
+    assert [record.chunkId for record, _ in results] == ["compatible"]
+
+
+def test_local_vector_store_syncs_parent_directory_on_posix(tmp_path, monkeypatch):
+    store = LocalJsonVectorStore(str(tmp_path))
+    synced = []
+    closed = []
+    monkeypatch.setattr(vector_store.os, "name", "posix")
+    monkeypatch.setattr(vector_store.os, "open", lambda path, flags: 9876)
+    monkeypatch.setattr(vector_store.os, "fsync", synced.append)
+    monkeypatch.setattr(vector_store.os, "close", closed.append)
+
+    store._sync_parent_directory()
+
+    assert synced == [9876]
+    assert closed == [9876]

@@ -38,7 +38,11 @@ class RagService:
             return MilvusVectorStore(settings.milvus_uri, settings.milvus_token, settings.milvus_collection)
         if provider == "PGVECTOR":
             return PgVectorStore(settings.pgvector_dsn, settings.pgvector_table)
-        return LocalJsonVectorStore(settings.rag_data_dir)
+        return LocalJsonVectorStore(settings.rag_data_dir, reembed=self._embed_for_legacy)
+
+    async def _embed_for_legacy(self, texts: list[str]) -> list[list[float]]:
+        embeddings, _ = await self.embed_batched(texts)
+        return embeddings
 
     async def index(self, request: RagIndexRequest) -> tuple[RagIndexData, dict[str, Any]]:
         chunk_size = request.chunkSize or self.settings.rag_chunk_size

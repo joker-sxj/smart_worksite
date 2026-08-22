@@ -1,16 +1,34 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
+import tempfile
+import threading
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Awaitable, Callable, Protocol
 
 import numpy as np
 
 
 logger = logging.getLogger(__name__)
+
+_LOCAL_MIGRATION_LOCKS: dict[Path, asyncio.Lock] = {}
+_LOCAL_WRITE_LOCKS: dict[Path, threading.RLock] = {}
+_LOCAL_LOCK_REGISTRY_GUARD = threading.Lock()
+LEGACY_MIGRATION_BATCH_SIZE = 32
+LEGACY_MIGRATION_MAX_CHUNKS_PER_SEARCH = 64
+
+
+def local_store_locks(path: Path) -> tuple[asyncio.Lock, threading.RLock]:
+    resolved = path.resolve()
+    with _LOCAL_LOCK_REGISTRY_GUARD:
+        migration_lock = _LOCAL_MIGRATION_LOCKS.setdefault(resolved, asyncio.Lock())
+        write_lock = _LOCAL_WRITE_LOCKS.setdefault(resolved, threading.RLock())
+    return migration_lock, write_lock
 
 
 @dataclass
@@ -66,9 +84,11 @@ def cosine(a: list[float], b: list[float]) -> float:
 
 
 class LocalJsonVectorStore:
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, reembed: Callable[[list[str]], Awaitable[list[list[float]]]] | None = None):
         self.path = Path(data_dir) / "chunks.jsonl"
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.reembed = reembed
+        self._migration_lock, self._write_lock = local_store_locks(self.path)
 
     def _load(self) -> list[ChunkRecord]:
         if not self.path.exists():
@@ -79,64 +99,171 @@ class LocalJsonVectorStore:
                 records.append(ChunkRecord(**json.loads(line)))
         return records
 
+    def _write(self, records: list[ChunkRecord]) -> None:
+        text = "\n".join(json.dumps(asdict(item), ensure_ascii=False) for item in records)
+        payload = text + ("\n" if text else "")
+        fd, temporary_path = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, self.path)
+            self._sync_parent_directory()
+        except Exception:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+            raise
+
+    def _sync_parent_directory(self) -> None:
+        if os.name != "posix":
+            return
+        directory_fd = os.open(self.path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
     async def upsert(self, chunks: list[ChunkRecord]) -> None:
-        existing = {item.id: item for item in self._load()}
-        for chunk in chunks:
-            existing[chunk.id] = chunk
-        text = "\n".join(json.dumps(asdict(item), ensure_ascii=False) for item in existing.values())
-        self.path.write_text(text + ("\n" if text else ""), encoding="utf-8")
+        with self._write_lock:
+            existing = {item.id: item for item in self._load()}
+            for chunk in chunks:
+                existing[chunk.id] = chunk
+            self._write(list(existing.values()))
 
     async def replace_document(self, project_id: int, knowledge_base_id: int, document_id: str, chunks: list[ChunkRecord]) -> None:
         validate_document_scope(project_id, knowledge_base_id, document_id, chunks)
-        existing = {
-            item.id: item
-            for item in self._load()
-            if not (
-                item.projectId == project_id
-                and item.knowledgeBaseId == knowledge_base_id
-                and item.documentId == document_id
-            )
-        }
-        for chunk in chunks:
-            existing[chunk.id] = chunk
-        text = "\n".join(json.dumps(asdict(item), ensure_ascii=False) for item in existing.values())
-        self.path.write_text(text + ("\n" if text else ""), encoding="utf-8")
+        with self._write_lock:
+            existing = {
+                item.id: item
+                for item in self._load()
+                if not (
+                    item.projectId == project_id
+                    and item.knowledgeBaseId == knowledge_base_id
+                    and item.documentId == document_id
+                )
+            }
+            for chunk in chunks:
+                existing[chunk.id] = chunk
+            self._write(list(existing.values()))
 
     async def delete_sources(self, project_id: int, source_type: str, source_ids: list[str], exclude_knowledge_base_id: int | None) -> int:
         validate_delete_scope(project_id, source_type, source_ids, exclude_knowledge_base_id)
         source_filter = set(source_ids)
-        records = self._load()
-        kept = [item for item in records if not (
-            item.projectId == project_id
-            and item.sourceType == source_type
-            and item.sourceId in source_filter
-            and (exclude_knowledge_base_id is None or item.knowledgeBaseId != exclude_knowledge_base_id)
-        )]
-        deleted = len(records) - len(kept)
-        text = "\n".join(json.dumps(asdict(item), ensure_ascii=False) for item in kept)
-        self.path.write_text(text + ("\n" if text else ""), encoding="utf-8")
-        return deleted
+        with self._write_lock:
+            records = self._load()
+            kept = [item for item in records if not (
+                item.projectId == project_id
+                and item.sourceType == source_type
+                and item.sourceId in source_filter
+                and (exclude_knowledge_base_id is None or item.knowledgeBaseId != exclude_knowledge_base_id)
+            )]
+            deleted = len(records) - len(kept)
+            self._write(kept)
+            return deleted
 
     async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]:
         validate_search_scope(project_id, knowledge_base_ids)
-        results: list[tuple[ChunkRecord, float]] = []
         kb_filter = set(knowledge_base_ids)
         query_dimension = len(query_embedding)
-        skipped_dimensions: dict[int, int] = {}
-        for chunk in self._load():
-            if chunk.projectId != project_id:
-                continue
-            if chunk.knowledgeBaseId not in kb_filter:
-                continue
-            chunk_dimension = len(chunk.embedding)
-            if chunk_dimension != query_dimension:
-                skipped_dimensions[chunk_dimension] = skipped_dimensions.get(chunk_dimension, 0) + 1
-                continue
-            results.append((chunk, cosine(query_embedding, chunk.embedding)))
+        records = self._load()
+        scoped = [
+            chunk for chunk in records
+            if chunk.projectId == project_id and chunk.knowledgeBaseId in kb_filter
+        ]
+        skipped_dimensions = dimension_counts(scoped, query_dimension)
+        if skipped_dimensions and self.reembed:
+            logger.warning(
+                "local RAG contains legacy embedding dimensions; attempting scoped migration: "
+                "project_id=%s knowledge_base_ids=%s query_dimension=%s skipped=%s",
+                project_id,
+                knowledge_base_ids,
+                query_dimension,
+                skipped_dimensions,
+            )
+            async with self._migration_lock:
+                migrated_total = 0
+                while migrated_total < LEGACY_MIGRATION_MAX_CHUNKS_PER_SEARCH:
+                    records = self._load()
+                    selected_legacy = [
+                        record for record in records
+                        if record.projectId == project_id
+                        and record.knowledgeBaseId in kb_filter
+                        and len(record.embedding) != query_dimension
+                    ][:LEGACY_MIGRATION_BATCH_SIZE]
+                    if not selected_legacy:
+                        break
+                    try:
+                        embeddings = await self.reembed([record.content for record in selected_legacy])
+                        if len(embeddings) != len(selected_legacy) or any(
+                            len(vector) != query_dimension for vector in embeddings
+                        ):
+                            raise RuntimeError("Legacy RAG migration returned an incompatible embedding dimension")
+                    except Exception:
+                        has_compatible = any(
+                            record.projectId == project_id
+                            and record.knowledgeBaseId in kb_filter
+                            and len(record.embedding) == query_dimension
+                            for record in records
+                        )
+                        if migrated_total == 0 and not has_compatible:
+                            raise
+                        logger.exception(
+                            "legacy local RAG migration stopped; using compatible chunks: "
+                            "project_id=%s knowledge_base_ids=%s migrated=%s",
+                            project_id,
+                            knowledge_base_ids,
+                            migrated_total,
+                        )
+                        break
+                    snapshots = {record.id: record.content for record in selected_legacy}
+                    embeddings_by_id = {
+                        record.id: embedding for record, embedding in zip(selected_legacy, embeddings)
+                    }
+                    migrated_count = 0
+                    with self._write_lock:
+                        current = self._load()
+                        for record in current:
+                            embedding = embeddings_by_id.get(record.id)
+                            if (
+                                embedding is not None
+                                and snapshots.get(record.id) == record.content
+                                and record.projectId == project_id
+                                and record.knowledgeBaseId in kb_filter
+                                and len(record.embedding) != query_dimension
+                            ):
+                                record.embedding = embedding
+                                migrated_count += 1
+                        if migrated_count:
+                            self._write(current)
+                    migrated_total += migrated_count
+                    if migrated_count == 0:
+                        break
+                if migrated_total:
+                    logger.info(
+                        "migrated legacy local RAG chunks: project_id=%s knowledge_base_ids=%s chunks=%s",
+                        project_id,
+                        knowledge_base_ids,
+                        migrated_total,
+                    )
+            records = self._load()
+            scoped = [
+                chunk for chunk in records
+                if chunk.projectId == project_id and chunk.knowledgeBaseId in kb_filter
+            ]
+            skipped_dimensions = dimension_counts(scoped, query_dimension)
+
+        results = [
+            (chunk, cosine(query_embedding, chunk.embedding))
+            for chunk in scoped
+            if len(chunk.embedding) == query_dimension
+        ]
         if skipped_dimensions:
             logger.warning(
                 "skipped local RAG chunks with incompatible embedding dimensions: "
-                "project_id=%s knowledge_base_ids=%s query_dimension=%s skipped=%s; reindex affected documents",
+                "project_id=%s knowledge_base_ids=%s query_dimension=%s skipped=%s",
                 project_id,
                 knowledge_base_ids,
                 query_dimension,
@@ -145,10 +272,19 @@ class LocalJsonVectorStore:
             if not results:
                 raise RuntimeError(
                     "Local RAG index embedding dimension is incompatible with the current model; "
-                    "reindex the selected knowledge base documents"
+                    "legacy document migration did not produce searchable chunks"
                 )
         results.sort(key=lambda item: item[1], reverse=True)
         return results[:top_k]
+
+
+def dimension_counts(records: list[ChunkRecord], expected_dimension: int) -> dict[int, int]:
+    counts: dict[int, int] = {}
+    for record in records:
+        dimension = len(record.embedding)
+        if dimension != expected_dimension:
+            counts[dimension] = counts.get(dimension, 0) + 1
+    return counts
 
 
 class PgVectorStore:

@@ -48,10 +48,27 @@ for profile in h100-fp8 a6000x2-bf16; do
   fi
   grep -Eq '^AI_DEPLOYMENT_MODE=LOCAL_ONLY$' "$repo_root/$file" || fail "$profile must enforce AI_DEPLOYMENT_MODE=LOCAL_ONLY"
   grep -Eq '^QWEN_BASE_URL=http://local-llm:8000/v1$' "$repo_root/$file" || fail "$profile must route chat to the local-llm service"
-  grep -Eq '^QWEN_VL_ENDPOINT=http://local-llm:8000/v1/chat/completions$' "$repo_root/$file" || fail "$profile must route vision to the local multimodal model"
+  grep -Eq '^QWEN_VL_ENDPOINT=http://127\.0\.0\.1:18000/v1/chat/completions$' "$repo_root/$file" || fail "$profile must expose vision to the host-side Java parser"
+  grep -Eq '^QWEN_VL_CONTAINER_ENDPOINT=http://local-llm:8000/v1/chat/completions$' "$repo_root/$file" || fail "$profile must route container-side vision to the local multimodal model"
   grep -Eq '^QWEN_EMBEDDING_BASE_URL=http://local-embedding:8000/v1$' "$repo_root/$file" || fail "$profile must route embeddings locally"
   grep -Eq '^QWEN_RERANK_BASE_URL=http://local-reranker:8000/v1/rerank$' "$repo_root/$file" || fail "$profile must route reranking locally"
 done
+
+grep -Eq '^QWEN_VL_ENDPOINT=http://127\.0\.0\.1:18000/v1/chat/completions$' \
+  "$repo_root/deploy/.env.example" \
+  || fail 'The default Java vision endpoint must use the host-published model port.'
+
+grep -Eq '^QWEN_VL_CONTAINER_ENDPOINT=http://local-llm:8000/v1/chat/completions$' \
+  "$repo_root/deploy/.env.example" \
+  || fail 'The default Python vision endpoint must use Compose service DNS.'
+
+grep -Fq 'QWEN_VL_ENDPOINT: ${QWEN_VL_CONTAINER_ENDPOINT:-http://local-llm:8000/v1/chat/completions}' \
+  "$repo_root/deploy/docker-compose-env.yml" \
+  || fail 'The Python container must receive the container-side vision endpoint.'
+
+if ! bash -c 'set -euo pipefail; source "$1"; CHAT_HOST_PORT=19000; QWEN_VL_ENDPOINT=http://local-vlm:8000/v1/chat/completions; normalize_host_model_endpoints; [[ "$QWEN_VL_ENDPOINT" == http://127.0.0.1:19000/v1/chat/completions ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
+  fail 'Lifecycle must migrate the legacy Docker-only vision endpoint for the host-side Java parser.'
+fi
 
 h100="$repo_root/deploy/model-profiles/h100-fp8.env.example"
 a6000="$repo_root/deploy/model-profiles/a6000x2-bf16.env.example"

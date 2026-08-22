@@ -158,7 +158,10 @@ http://local-reranker:8000/v1/rerank
 ```env
 AI_DEPLOYMENT_MODE=LOCAL_ONLY
 QWEN_BASE_URL=http://local-llm:8000/v1
-QWEN_VL_ENDPOINT=http://local-llm:8000/v1/chat/completions
+# Java backend runs on the host and reaches the published vLLM port.
+QWEN_VL_ENDPOINT=http://127.0.0.1:18000/v1/chat/completions
+# Python AI runs in Compose and uses the service DNS name.
+QWEN_VL_CONTAINER_ENDPOINT=http://local-llm:8000/v1/chat/completions
 QWEN_EMBEDDING_BASE_URL=http://local-embedding:8000/v1
 QWEN_RERANK_BASE_URL=http://local-reranker:8000/v1/rerank
 ```
