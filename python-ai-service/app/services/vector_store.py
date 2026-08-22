@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -117,12 +121,32 @@ class LocalJsonVectorStore:
         validate_search_scope(project_id, knowledge_base_ids)
         results: list[tuple[ChunkRecord, float]] = []
         kb_filter = set(knowledge_base_ids)
+        query_dimension = len(query_embedding)
+        skipped_dimensions: dict[int, int] = {}
         for chunk in self._load():
             if chunk.projectId != project_id:
                 continue
             if chunk.knowledgeBaseId not in kb_filter:
                 continue
+            chunk_dimension = len(chunk.embedding)
+            if chunk_dimension != query_dimension:
+                skipped_dimensions[chunk_dimension] = skipped_dimensions.get(chunk_dimension, 0) + 1
+                continue
             results.append((chunk, cosine(query_embedding, chunk.embedding)))
+        if skipped_dimensions:
+            logger.warning(
+                "skipped local RAG chunks with incompatible embedding dimensions: "
+                "project_id=%s knowledge_base_ids=%s query_dimension=%s skipped=%s; reindex affected documents",
+                project_id,
+                knowledge_base_ids,
+                query_dimension,
+                skipped_dimensions,
+            )
+            if not results:
+                raise RuntimeError(
+                    "Local RAG index embedding dimension is incompatible with the current model; "
+                    "reindex the selected knowledge base documents"
+                )
         results.sort(key=lambda item: item[1], reverse=True)
         return results[:top_k]
 

@@ -78,7 +78,14 @@ if [[ -f "$repo_root/$compose" ]]; then
   assert_contains "$compose" 'CHAT_MODEL_REVISION' 'Chat model revision must be pinned and configurable.'
   assert_contains "$compose" 'EMBEDDING_MODEL_REVISION' 'Embedding model revision must be pinned and configurable.'
   assert_contains "$compose" 'RERANK_MODEL_REVISION' 'Reranker model revision must be pinned and configurable.'
+  assert_contains "$compose" 'HF_ENDPOINT:.*HF_ENDPOINT' 'Model containers must receive the configurable Hugging Face download endpoint.'
+  if grep -q -- '--task' "$repo_root/$compose"; then
+    fail 'Model Compose must not use the removed vLLM --task argument.'
+  fi
+  grep -A25 '^  local-embedding:' "$repo_root/$compose" | grep -q -- '--runner' || fail 'Embedding service must select the vLLM pooling runner.'
   assert_contains "$compose" 'healthcheck:' 'Every local model service must have a health check.'
+  [[ "$(grep -Ec 'test: \["CMD-SHELL", "python3 -c' "$repo_root/$compose")" == 3 ]] || fail 'Every vLLM health check must use python3 from the serving image.'
+  [[ "$(grep -Ec 'vllm-cache:/root/.cache/vllm' "$repo_root/$compose")" == 3 ]] || fail 'Every vLLM service must persist its compile cache.'
   [[ "$(grep -Ec '^    ipc: host$' "$repo_root/$compose")" == 3 ]] || fail 'Every vLLM service must use host IPC for PyTorch/NCCL shared memory.'
   assert_contains "$compose" 'DOCKER_LOG_MAX_SIZE' 'Model container logs must be bounded.'
   assert_contains "$compose" 'reservations:' 'Model containers must declare GPU reservations.'

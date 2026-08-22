@@ -186,9 +186,13 @@ public class TemplateVariableApplicationService {
     }
 
     private List<String> readVariables(FileObjectContent file) {
+        if (TemplateFileSupport.isPdf(file.getFileName())) {
+            closeQuietly(file);
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "unsupported template variable format: PDF");
+        }
         if (!TemplateFileSupport.isSupported(file.getFileName())) {
             closeQuietly(file);
-            String format = TemplateFileSupport.isPdf(file.getFileName()) ? "PDF" : TemplateFileSupport.extension(file.getFileName());
+            String format = TemplateFileSupport.extension(file.getFileName());
             throw new BusinessException(ErrorCode.PARAM_ERROR, "unsupported template variable format: " + format);
         }
         try (InputStream inputStream = file.getInputStream()) {

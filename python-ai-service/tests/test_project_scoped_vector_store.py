@@ -508,3 +508,25 @@ def test_rag_index_rejects_blank_or_duplicate_document_identity():
     assert blank.status_code == 422
     assert duplicate.status_code == 422
     assert empty.status_code == 422
+
+
+def test_local_vector_search_skips_records_from_an_old_embedding_dimension(tmp_path):
+    store = LocalJsonVectorStore(str(tmp_path))
+    compatible = chunk("compatible")
+    incompatible = chunk("old-dimension")
+    incompatible.embedding = [1.0, 0.0, 0.0]
+    asyncio.run(store.upsert([compatible, incompatible]))
+
+    results = asyncio.run(store.search([1.0, 0.0], 1, [10], 10))
+
+    assert [record.chunkId for record, _ in results] == ["compatible"]
+
+
+def test_local_vector_search_fails_when_all_scoped_records_use_old_dimension(tmp_path):
+    store = LocalJsonVectorStore(str(tmp_path))
+    incompatible = chunk("old-dimension")
+    incompatible.embedding = [1.0, 0.0, 0.0]
+    asyncio.run(store.upsert([incompatible]))
+
+    with pytest.raises(RuntimeError, match="reindex"):
+        asyncio.run(store.search([1.0, 0.0], 1, [10], 10))

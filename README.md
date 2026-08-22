@@ -518,7 +518,7 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 | POST | `/api/templates/{templateId}/enable` | 启用模板 |
 | POST | `/api/templates/{templateId}/disable` | 停用模板 |
 | DELETE | `/api/templates/{templateId}` | 删除模板 |
-| GET | `/api/templates/{templateId}/preview` | 通过 Java 后端获取模板预览文件流，不暴露 MinIO 地址 |
+| GET | `/api/templates/{templateId}/preview` | 通过 Java 后端获取 PDF、Word、Excel/CSV、文本模板预览文件流，不暴露 MinIO 地址 |
 | GET | `/api/templates/{templateId}/variables` | 扫描 DOC、DOCX、XLS、XLSX、CSV、TXT、MD 中的 `{{ var_xx_xx }}` 变量并按首次出现顺序去重 |
 | GET | `/api/templates/{templateId}/variables/descriptions` | 按模板变量顺序查询变量名和已有描述，未配置描述返回空字符串 |
 | PUT | `/api/templates/{templateId}/variables/descriptions` | 对当前模板文件的全部变量描述和可选数据源白名单执行新增或修改 |
@@ -748,7 +748,7 @@ Python AI 服务支持 RAG 索引和检索。文档会在 Python 服务中切片
 ```env
 EMBEDDING_PROVIDER=QWEN
 QWEN_EMBEDDING_MODEL=text-embedding-v4
-QWEN_EMBEDDING_DIMENSIONS=1024
+QWEN_EMBEDDING_DIMENSIONS=0
 QWEN_EMBEDDING_BATCH_SIZE=10
 RERANK_PROVIDER=QWEN
 QWEN_RERANK_BASE_URL=https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
@@ -763,7 +763,7 @@ MILVUS_TOKEN=
 MILVUS_COLLECTION=smart_worksite_chunks
 ```
 
-`EMBEDDING_PROVIDER=QWEN` 是生产路径，`LOCAL_HASH` 仅用于离线测试和无模型额度开发。Java 不直接访问向量数据库。
+`EMBEDDING_PROVIDER=QWEN` 是生产路径，`LOCAL_HASH` 仅用于离线测试和无模型额度开发。`QWEN_EMBEDDING_DIMENSIONS=0` 表示使用本地模型原生向量维度，避免切换模型或维度后新旧索引混用；改变模型或维度后必须重新索引受影响文档。Java 不直接访问向量数据库。
 
 `RAG_PROVIDER` 控制 Python 服务使用的向量存储实现：
 

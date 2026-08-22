@@ -45,9 +45,9 @@
 
     <select id="selectPage" resultMap="KnowledgeDocumentResultMap">
         select <include refid="KnowledgeDocumentColumns"/>
-        from knowledge_document
-        where knowledge_base_id = #{knowledgeBaseId}
-          and deleted = 0
+        from knowledge_document kd
+        where kd.knowledge_base_id = #{knowledgeBaseId}
+          and kd.deleted = 0
         <if test="indexStatus != null and indexStatus != ''">
             and kd.index_status = #{indexStatus}
         </if>

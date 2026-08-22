@@ -237,22 +237,12 @@ curl --noproxy '*' --fail-with-body \
 - 响应状态为 200，文件长度大于 0。
 - 返回的 `Content-Type` 与模板文件类型一致。
 - 返回 `Content-Disposition: inline` 和原始文件名。
-- 下载文件可以被对应的 DOCX、表格或文本预览组件读取。
+- 下载文件可以被对应的 PDF、DOCX、表格或文本预览组件读取。
 - 前端请求目标是 Java 接口，响应不包含 MinIO 对象名或访问地址。
-- PDF 模板返回明确的格式不支持错误。
+- PDF 模板以 `application/pdf` 文件流返回；PDF 仍不参与报告变量扫描。
 - 模板不存在、跨项目访问、文件不存在和 MinIO 读取失败返回统一错误 JSON。
 
-失败响应示例：
-
-```json
-{
-  "code": 40000,
-  "message": "unsupported template preview format: PDF",
-  "data": null,
-  "requestId": "REQ-xxx",
-  "timestamp": "2026-07-16T23:00:00+08:00"
-}
-```
+不支持的其他格式仍返回统一错误 JSON；PDF 预览不再返回格式不支持错误。
 
 ### 6.2 获取模板变量列表
 
@@ -498,7 +488,7 @@ curl --noproxy '*' --fail-with-body \
 | 重复变量扫描 | 按首次出现顺序去重 |
 | 变量跨 Word Run | 合并文本后能够识别 |
 | 合法模板没有变量 | 成功返回空数组 |
-| PDF 模板 | 返回格式不支持错误 |
+| PDF 模板预览 | 返回 `application/pdf` 文件流；变量扫描仍返回格式不支持错误 |
 | 查询变量描述 | 按文件顺序返回变量名，未配置描述返回空字符串 |
 | 首次保存描述 | 为所有变量新增记录 |
 | 再次保存描述 | 更新已有记录，不产生重复数据 |

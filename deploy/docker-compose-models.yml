@@ -15,6 +15,8 @@ services:
       CUDA_VISIBLE_DEVICES: ${CHAT_CUDA_VISIBLE_DEVICES:-0}
       HF_HOME: /root/.cache/huggingface
       TRANSFORMERS_CACHE: /root/.cache/huggingface
+      VLLM_CACHE_ROOT: /root/.cache/vllm
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
       VLLM_ENABLE_CUDA_COMPATIBILITY: ${VLLM_ENABLE_CUDA_COMPATIBILITY:-1}
     command:
       - --model
@@ -40,6 +42,7 @@ services:
       - "127.0.0.1:${CHAT_HOST_PORT:-18000}:8000"
     volumes:
       - model-cache:/root/.cache/huggingface
+      - vllm-cache:/root/.cache/vllm
     deploy:
       resources:
         reservations:
@@ -48,7 +51,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)\""]
       interval: 15s
       timeout: 10s
       retries: 20
@@ -64,6 +67,8 @@ services:
       CUDA_VISIBLE_DEVICES: ${EMBEDDING_CUDA_VISIBLE_DEVICES:-0}
       HF_HOME: /root/.cache/huggingface
       TRANSFORMERS_CACHE: /root/.cache/huggingface
+      VLLM_CACHE_ROOT: /root/.cache/vllm
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
       VLLM_ENABLE_CUDA_COMPATIBILITY: ${VLLM_ENABLE_CUDA_COMPATIBILITY:-1}
     command:
       - --model
@@ -72,8 +77,8 @@ services:
       - ${EMBEDDING_MODEL_REVISION:?EMBEDDING_MODEL_REVISION is required}
       - --served-model-name
       - ${EMBEDDING_MODEL_NAME:-smart-worksite-embedding}
-      - --task
-      - embed
+      - --runner
+      - pooling
       - --host
       - 0.0.0.0
       - --port
@@ -89,6 +94,7 @@ services:
       - "127.0.0.1:${EMBEDDING_HOST_PORT:-18001}:8000"
     volumes:
       - model-cache:/root/.cache/huggingface
+      - vllm-cache:/root/.cache/vllm
     deploy:
       resources:
         reservations:
@@ -97,7 +103,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)\""]
       interval: 15s
       timeout: 10s
       retries: 20
@@ -113,6 +119,8 @@ services:
       CUDA_VISIBLE_DEVICES: ${RERANK_CUDA_VISIBLE_DEVICES:-0}
       HF_HOME: /root/.cache/huggingface
       TRANSFORMERS_CACHE: /root/.cache/huggingface
+      VLLM_CACHE_ROOT: /root/.cache/vllm
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
       VLLM_ENABLE_CUDA_COMPATIBILITY: ${VLLM_ENABLE_CUDA_COMPATIBILITY:-1}
     command:
       - --model
@@ -140,6 +148,7 @@ services:
       - "127.0.0.1:${RERANK_HOST_PORT:-18002}:8000"
     volumes:
       - model-cache:/root/.cache/huggingface
+      - vllm-cache:/root/.cache/vllm
     deploy:
       resources:
         reservations:
@@ -148,7 +157,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)\""]
       interval: 15s
       timeout: 10s
       retries: 20
@@ -157,3 +166,5 @@ services:
 volumes:
   model-cache:
     name: ${MODEL_CACHE_VOLUME:-smart-worksite-model-cache}
+  vllm-cache:
+    name: ${VLLM_CACHE_VOLUME:-smart-worksite-vllm-cache}

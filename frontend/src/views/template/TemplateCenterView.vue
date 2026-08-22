@@ -37,8 +37,9 @@ const previewLoading = ref(false);
 const previewingId = ref<string | number | null>(null);
 const previewError = ref('');
 const previewTitle = ref('模板预览');
-const previewKind = ref<'docx' | 'table' | 'text' | 'unsupported' | ''>('');
+const previewKind = ref<'docx' | 'pdf' | 'table' | 'text' | 'unsupported' | ''>('');
 const previewText = ref('');
+const previewPdfUrl = ref('');
 const previewSheets = ref<{ name: string; rows: string[][] }[]>([]);
 const activePreviewSheet = ref(0);
 const docxContainer = ref<HTMLElement | null>(null);
@@ -239,6 +240,10 @@ function parseCsv(text: string) {
 }
 
 function resetPreview() {
+  if (previewPdfUrl.value) {
+    URL.revokeObjectURL(previewPdfUrl.value);
+    previewPdfUrl.value = '';
+  }
   previewError.value = '';
   previewKind.value = '';
   previewText.value = '';
@@ -266,7 +271,10 @@ async function openPreview(row: TemplateItem) {
     if (sequence !== previewRequestSequence || !previewVisible.value) return;
     const extension = getFileExtension(preview.fileName);
     previewTitle.value = `模板预览：${preview.fileName}`;
-    if (extension === 'docx') {
+    if (extension === 'pdf') {
+      previewKind.value = 'pdf';
+      previewPdfUrl.value = URL.createObjectURL(preview.blob);
+    } else if (extension === 'docx') {
       previewKind.value = 'docx';
       await nextTick();
       if (!docxContainer.value) throw new Error('模板预览容器初始化失败');
@@ -431,6 +439,9 @@ onMounted(async () => {
     <el-dialog v-model="previewVisible" :title="previewTitle" width="86vw" top="5vh" destroy-on-close @closed="onPreviewClosed">
       <div v-loading="previewLoading" class="preview-shell">
         <el-alert v-if="previewError" :title="previewError" type="error" show-icon :closable="false" />
+        <object v-if="previewKind === 'pdf' && previewPdfUrl" :data="previewPdfUrl" type="application/pdf" class="pdf-preview">
+          <a :href="previewPdfUrl" target="_blank" rel="noopener">浏览器无法内嵌 PDF，点击新窗口查看。</a>
+        </object>
         <div v-show="previewKind === 'docx'" ref="docxContainer" class="docx-container" />
         <template v-if="previewKind === 'table' && currentPreviewSheet">
           <div v-if="previewSheets.length > 1" class="sheet-selector">
@@ -477,6 +488,7 @@ onMounted(async () => {
 .variable-dialog-body { min-height: 220px; }
 .preview-shell { min-height: 320px; max-height: 76vh; overflow: auto; padding: 12px; background: #f4f7fb; border-radius: 6px; }
 .docx-container { min-height: 280px; }
+.pdf-preview { width: 100%; height: 70vh; border: 0; background: #fff; }
 .sheet-selector { position: sticky; top: -12px; z-index: 2; display: flex; gap: 12px; align-items: center; padding: 10px 0; background: #f4f7fb; }
 .table-preview { overflow: auto; background: #fff; border: 1px solid #dcdfe6; }
 .table-preview table { min-width: 100%; border-collapse: collapse; table-layout: auto; }

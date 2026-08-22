@@ -257,7 +257,7 @@ Request IDs are handled by `common.config.RequestIdFilter`. The response header 
 - Policy/news crawler UI may use an explicit `VITE_USE_POLICY_MOCK` switch until Java backend policy APIs exist; frontend must still never crawl external websites or call Python services directly.
 - AI results should expose traceable information where available, such as sources, confidence, raw JSON, or document references.
 - Frontend report-template upload APIs must pass explicit `templateName` and `templateType`; do not derive them from the filename or rely on backend fallback metadata.
-- Template center must display the backend `templateId` and fetch preview content only through the Java `GET /api/templates/{templateId}/preview` API. DOCX, XLSX/CSV, and text previews should be rendered locally from the returned Blob, and unsupported formats or preview failures must remain visible to users. REPORT rows must expose a template-variable dialog that loads current variable descriptions from Java, keeps variable names read-only, and submits the complete non-blank description list through the backend update API.
+- Template center must display the backend `templateId` and fetch preview content only through the Java `GET /api/templates/{templateId}/preview` API. PDF, DOCX, XLSX/CSV, and text previews should be rendered locally from the returned Blob, and unsupported formats or preview failures must remain visible to users. REPORT rows must expose a template-variable dialog that loads current variable descriptions from Java, keeps variable names read-only, and submits the complete non-blank description list through the backend update API.
 
 ## Frontend UI Style
 

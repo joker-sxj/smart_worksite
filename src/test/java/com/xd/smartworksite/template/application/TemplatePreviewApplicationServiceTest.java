@@ -1,7 +1,5 @@
 package com.xd.smartworksite.template.application;
 
-import com.xd.smartworksite.common.exception.BusinessException;
-import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.file.application.FileObjectApplicationService;
 import com.xd.smartworksite.file.application.FileObjectContent;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
@@ -14,7 +12,6 @@ import java.io.ByteArrayInputStream;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -44,14 +41,24 @@ class TemplatePreviewApplicationServiceTest {
     }
 
     @Test
-    void rejectsPdfTemplates() {
+    void returnsPdfPreviewWithBrowserCompatibleContentType() throws Exception {
         Fixture fixture = fixture("template.pdf");
+        byte[] bytes = "%PDF-test".getBytes();
+        when(fixture.fileObjectApplicationService.openFileContent(20L, 1L, 10L))
+                .thenReturn(new FileObjectContent(
+                        20L,
+                        1L,
+                        10L,
+                        "template.pdf",
+                        "application/octet-stream",
+                        bytes.length,
+                        new ByteArrayInputStream(bytes)
+                ));
 
-        assertThatThrownBy(() -> fixture.service.openPreview(10L))
-                .isInstanceOfSatisfying(BusinessException.class, ex -> {
-                    assertThat(ex.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode());
-                    assertThat(ex.getMessage()).contains("PDF");
-                });
+        TemplatePreviewFile preview = fixture.service.openPreview(10L);
+
+        assertThat(preview.getContentType()).isEqualTo("application/pdf");
+        assertThat(preview.getInputStream().readAllBytes()).isEqualTo(bytes);
     }
 
     private Fixture fixture(String fileName) {
