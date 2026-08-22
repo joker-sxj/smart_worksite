@@ -79,7 +79,7 @@ try {
             } finally { Pop-Location }
         }
         Start-ManagedProcess -Name 'Vue frontend' -ProjectRoot $projectRoot -WorkingDirectory $frontendDirectory `
-            -Command '& npm run dev' -Marker 'npm run dev' `
+            -Command '& npm run dev -- --host 0.0.0.0' -Marker 'npm run dev' `
             -PidFile (Join-Path $runDirectory 'frontend.pid') `
             -StdOutFile (Join-Path $logDirectory 'frontend.out.log') `
             -StdErrFile (Join-Path $logDirectory 'frontend.err.log') | Out-Null
@@ -90,7 +90,8 @@ try {
 
     Write-Host ''
     Write-Host 'Smart Worksite is ready.' -ForegroundColor Green
-    Write-Host 'Frontend: http://localhost:5173'
+    Write-Host 'Frontend (local): http://localhost:5173'
+    Write-Host 'Frontend (LAN): http://<this-computer-ip>:5173'
     Write-Host "Backend health: http://127.0.0.1:$serverPort/actuator/health"
     Write-Host "Python AI health: http://127.0.0.1:$aiPort/v1/health"
     Write-Host "Logs: $logDirectory"

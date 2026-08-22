@@ -55,6 +55,9 @@ if [[ -f "$repo_root/scripts/start-all.sh" ]]; then
   grep -q 'http_ready' "$repo_root/scripts/start-all.sh" || fail 'scripts/start-all.sh must verify that an existing frontend port serves HTTP.'
   grep -q 'wait_http_ready' "$repo_root/scripts/start-all.sh" || fail 'scripts/start-all.sh must wait for frontend HTTP readiness.'
   grep -Eq "assert_service_port_available 'Vue frontend'.*localhost" "$repo_root/scripts/start-all.sh" || fail 'scripts/start-all.sh must detect unhealthy frontend listeners bound through localhost/IPv6.'
+  grep -Eq "npm run dev -- --host 0\.0\.0\.0" "$repo_root/scripts/start-all.sh" || fail 'Linux frontend must listen on all interfaces for remote access.'
+  grep -q 'Remote frontend:' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must print a remote frontend URL.'
+  grep -Eq "host: ['\"]0\.0\.0\.0['\"]" "$repo_root/frontend/vite.config.ts" || fail 'Vite must listen on all interfaces even when started manually.'
 fi
 
 if [[ -f "$repo_root/scripts/stop-all.sh" ]]; then

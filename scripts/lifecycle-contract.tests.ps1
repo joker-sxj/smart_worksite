@@ -77,6 +77,9 @@ if (Test-Path -LiteralPath $startPowerShell) {
     if ($startPowerShellContent -notmatch "Assert-ServicePortAvailable[^\r\n]+-HostName\s+'localhost'") {
         $failures.Add('scripts/start-all.ps1 must detect unhealthy frontend listeners bound through localhost/IPv6.')
     }
+    if ($startPowerShellContent -notmatch 'npm run dev -- --host 0\.0\.0\.0') {
+        $failures.Add('scripts/start-all.ps1 must expose the frontend on all interfaces for remote access.')
+    }
     if ($startPowerShellContent -match 'Select-Object\s+-First\s+1' -or $startPowerShellContent -notmatch 'javaVersionOutput') {
         $failures.Add('scripts/start-all.ps1 must parse the Java version from complete JVM output, after possible warnings.')
     }

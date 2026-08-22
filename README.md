@@ -288,7 +288,8 @@ cd smart_worksite
 
 | 服务 | 默认地址 |
 | --- | --- |
-| 前端 | `http://localhost:5173` |
+| 前端（服务器本机） | `http://localhost:5173` |
+| 前端（局域网访问） | `http://<服务器IP>:5173` |
 | Java 后端 | `http://127.0.0.1:8080` |
 | Java 健康检查 | `http://127.0.0.1:8080/actuator/health` |
 | Python AI 健康检查 | `http://127.0.0.1:8015/v1/health` |
@@ -361,6 +362,15 @@ Get-Content .\logs\frontend.err.log -Tail 100
 ./scripts/status.sh
 tail -n 100 logs/backend.err.log
 tail -n 100 logs/frontend.err.log
+
+# Linux 服务器远程访问检查
+ss -lntp | grep -E ':5173|:8080'
+curl -I http://127.0.0.1:5173
+
+# 如果服务器启用了 UFW，只开放 Web 前端端口
+sudo ufw allow 5173/tcp
+sudo ufw status
+
 ```
 
 常见问题：

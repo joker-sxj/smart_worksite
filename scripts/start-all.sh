@@ -85,14 +85,20 @@ if ! http_ready "$frontend_uri"; then
     printf 'Installing frontend dependencies...\n'
     (cd "$frontend_dir" && npm install)
   fi
-  start_managed 'Vue frontend' "$frontend_dir" 'npm run dev' 'npm run dev' "$run_dir/frontend.pid" "$log_dir/frontend.out.log" "$log_dir/frontend.err.log"
+  start_managed 'Vue frontend' "$frontend_dir" 'npm run dev -- --host 0.0.0.0' 'npm run dev' "$run_dir/frontend.pid" "$log_dir/frontend.out.log" "$log_dir/frontend.err.log"
 else
   printf 'Vue frontend is already serving HTTP on port 5173.\n'
 fi
 wait_http_ready 'Vue frontend' "$frontend_uri" 90 || { printf 'See logs/frontend.out.log and logs/frontend.err.log.\n' >&2; exit 1; }
 
 printf '\nSmart Worksite is ready.\n'
-printf 'Frontend: http://localhost:5173\n'
+printf 'Frontend (local): http://localhost:5173\n'
+remote_host="$(hostname -I 2>/dev/null | awk '{print $1}')"
+if [[ -n "$remote_host" ]]; then
+  printf 'Remote frontend: http://%s:5173\n' "$remote_host"
+else
+  printf 'Remote frontend: http://<server-ip>:5173\n'
+fi
 printf 'Backend health: http://127.0.0.1:%s/actuator/health\n' "$server_port"
 printf 'Python AI health: http://127.0.0.1:%s/v1/health\n' "$ai_port"
 if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then printf 'Local model profile: %s\n' "${MODEL_PROFILE_NAME:-$model_profile}"; fi
