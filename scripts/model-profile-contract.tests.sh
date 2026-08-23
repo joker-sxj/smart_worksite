@@ -93,6 +93,22 @@ if ! grep -q 'preflight_host_model_endpoint' "$repo_root/scripts/start-all.sh"; 
   fail 'Linux startup must preflight the normalized host-side vision endpoint before Java starts.'
 fi
 
+preflight_test_dir="$(mktemp -d)"
+cat > "$preflight_test_dir/curl" <<'CURL_TEST'
+#!/usr/bin/env bash
+printf '%s\n' "${@: -1}" > "$PREFLIGHT_CAPTURE"
+printf '%s\n' '{"data":[{"id":"smart-worksite-chat"}]}'
+CURL_TEST
+chmod +x "$preflight_test_dir/curl"
+if ! PREFLIGHT_CAPTURE="$preflight_test_dir/url" PATH="$preflight_test_dir:$PATH" bash -c 'set -euo pipefail; source "$1"; preflight_host_model_endpoint http://127.0.0.1:19003/v1/chat/completions smart-worksite-chat' bash "$repo_root/scripts/lib/lifecycle.sh"; then
+  fail 'Host model preflight must accept an endpoint that advertises the configured model.'
+elif [[ "$(cat "$preflight_test_dir/url")" != http://127.0.0.1:19003/v1/models ]]; then
+  fail 'Host model preflight must derive /v1/models from the chat-completions endpoint.'
+fi
+if PREFLIGHT_CAPTURE="$preflight_test_dir/url" PATH="$preflight_test_dir:$PATH" bash -c 'set -euo pipefail; source "$1"; preflight_host_model_endpoint http://127.0.0.1:19003/v1/chat/completions wrong-model' bash "$repo_root/scripts/lib/lifecycle.sh" >/dev/null 2>&1; then
+  fail 'Host model preflight must reject an endpoint that does not advertise the configured model.'
+fi
+rm -rf "$preflight_test_dir"
 h100="$repo_root/deploy/model-profiles/h100-fp8.env.example"
 a6000="$repo_root/deploy/model-profiles/a6000x2-bf16.env.example"
 [[ -f "$h100" ]] && {

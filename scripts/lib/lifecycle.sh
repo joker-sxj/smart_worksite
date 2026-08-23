@@ -45,13 +45,11 @@ normalize_host_model_endpoints() {
   fi
   [[ -z "$endpoint" ]] && { export QWEN_VL_ENDPOINT=''; return 0; }
   if [[ "$endpoint" == *']('* || "$endpoint" == [* ]]; then
-    printf 'QWEN_VL_ENDPOINT must be a plain URL, not Markdown: %s
-' "$endpoint" >&2
+    printf 'QWEN_VL_ENDPOINT must be a plain URL, not Markdown: %s\n' "$endpoint" >&2
     return 1
   fi
   [[ "$endpoint" =~ ^https?://[^[:space:]]+$ ]] || {
-    printf 'QWEN_VL_ENDPOINT is not a valid HTTP(S) URL: %s
-' "$endpoint" >&2
+    printf 'QWEN_VL_ENDPOINT is not a valid HTTP(S) URL: %s\n' "$endpoint" >&2
     return 1
   }
   case "$endpoint" in
@@ -64,18 +62,15 @@ normalize_host_model_endpoints() {
 
 preflight_host_model_endpoint() {
   local endpoint="${1:-${QWEN_VL_ENDPOINT:-}}" expected_model="${2:-${QWEN_VL_MODEL:-}}" models_url body
-  [[ -n "$endpoint" ]] || { printf 'QWEN_VL_ENDPOINT is required for local document parsing.
-' >&2; return 1; }
+  [[ -n "$endpoint" ]] || { printf 'QWEN_VL_ENDPOINT is required for local document parsing.\n' >&2; return 1; }
   [[ "$endpoint" == */v1/chat/completions ]] || {
-    printf 'QWEN_VL_ENDPOINT must end with /v1/chat/completions: %s
-' "$endpoint" >&2
+    printf 'QWEN_VL_ENDPOINT must end with /v1/chat/completions: %s\n' "$endpoint" >&2
     return 1
   }
   models_url="${endpoint%/chat/completions}/models"
   if command -v curl >/dev/null 2>&1; then
     body="$(curl -fsS --connect-timeout 5 --max-time 15 "$models_url" 2>/dev/null)" || {
-      printf 'Host-side model endpoint is unreachable at %s. Java runs on the host, so use the published port (for example http://127.0.0.1:%s/v1/chat/completions), not Docker service DNS.
-' "$models_url" "${CHAT_HOST_PORT:-18000}" >&2
+      printf 'Host-side model endpoint is unreachable at %s. Java runs on the host, so use the published port (for example http://127.0.0.1:%s/v1/chat/completions), not Docker service DNS.\n' "$models_url" "${CHAT_HOST_PORT:-18000}" >&2
       return 1
     }
   elif command -v python3 >/dev/null 2>&1; then
@@ -86,13 +81,11 @@ with urllib.request.urlopen(sys.argv[1], timeout=15) as response:
 PY
 )" || return 1
   else
-    printf 'curl or python3 is required for the host model preflight.
-' >&2
+    printf 'curl or python3 is required for the host model preflight.\n' >&2
     return 1
   fi
   if [[ -n "$expected_model" && "$body" != *"$expected_model"* ]]; then
-    printf 'Host-side model endpoint %s does not advertise expected model %s.
-' "$models_url" "$expected_model" >&2
+    printf 'Host-side model endpoint %s does not advertise expected model %s.\n' "$models_url" "$expected_model" >&2
     return 1
   fi
 }
