@@ -31,12 +31,70 @@ require_command() {
 }
 
 normalize_host_model_endpoints() {
-  local chat_host_port="${CHAT_HOST_PORT:-18000}"
-  case "${QWEN_VL_ENDPOINT:-}" in
-    http://local-vlm:8000/v1/chat/completions|http://local-llm:8000/v1/chat/completions|http://127.0.0.1:*/v1/chat/completions)
-      export QWEN_VL_ENDPOINT="http://127.0.0.1:${chat_host_port}/v1/chat/completions"
+  local chat_host_port="${CHAT_HOST_PORT:-18000}" endpoint first last
+  endpoint="${QWEN_VL_ENDPOINT:-}"
+  endpoint="${endpoint#${endpoint%%[![:space:]]*}}"
+  endpoint="${endpoint%${endpoint##*[![:space:]]}}"
+  if (( ${#endpoint} >= 2 )); then
+    first="${endpoint:0:1}"; last="${endpoint: -1}"
+    if [[ ( "$first" == '"' && "$last" == '"' ) || ( "$first" == "'" && "$last" == "'" ) ]]; then
+      endpoint="${endpoint:1:${#endpoint}-2}"
+      endpoint="${endpoint#${endpoint%%[![:space:]]*}}"
+      endpoint="${endpoint%${endpoint##*[![:space:]]}}"
+    fi
+  fi
+  [[ -z "$endpoint" ]] && { export QWEN_VL_ENDPOINT=''; return 0; }
+  if [[ "$endpoint" == *']('* || "$endpoint" == [* ]]; then
+    printf 'QWEN_VL_ENDPOINT must be a plain URL, not Markdown: %s
+' "$endpoint" >&2
+    return 1
+  fi
+  [[ "$endpoint" =~ ^https?://[^[:space:]]+$ ]] || {
+    printf 'QWEN_VL_ENDPOINT is not a valid HTTP(S) URL: %s
+' "$endpoint" >&2
+    return 1
+  }
+  case "$endpoint" in
+    http://local-vlm:8000/v1/chat/completions|http://local-llm:8000/v1/chat/completions|http://smart-worksite-local-llm:8000/v1/chat/completions|http://127.0.0.1:*/v1/chat/completions|http://localhost:*/v1/chat/completions)
+      endpoint="http://127.0.0.1:${chat_host_port}/v1/chat/completions"
       ;;
   esac
+  export QWEN_VL_ENDPOINT="$endpoint"
+}
+
+preflight_host_model_endpoint() {
+  local endpoint="${1:-${QWEN_VL_ENDPOINT:-}}" expected_model="${2:-${QWEN_VL_MODEL:-}}" models_url body
+  [[ -n "$endpoint" ]] || { printf 'QWEN_VL_ENDPOINT is required for local document parsing.
+' >&2; return 1; }
+  [[ "$endpoint" == */v1/chat/completions ]] || {
+    printf 'QWEN_VL_ENDPOINT must end with /v1/chat/completions: %s
+' "$endpoint" >&2
+    return 1
+  }
+  models_url="${endpoint%/chat/completions}/models"
+  if command -v curl >/dev/null 2>&1; then
+    body="$(curl -fsS --connect-timeout 5 --max-time 15 "$models_url" 2>/dev/null)" || {
+      printf 'Host-side model endpoint is unreachable at %s. Java runs on the host, so use the published port (for example http://127.0.0.1:%s/v1/chat/completions), not Docker service DNS.
+' "$models_url" "${CHAT_HOST_PORT:-18000}" >&2
+      return 1
+    }
+  elif command -v python3 >/dev/null 2>&1; then
+    body="$(python3 - "$models_url" <<'PY'
+import sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=15) as response:
+    print(response.read().decode("utf-8"))
+PY
+)" || return 1
+  else
+    printf 'curl or python3 is required for the host model preflight.
+' >&2
+    return 1
+  fi
+  if [[ -n "$expected_model" && "$body" != *"$expected_model"* ]]; then
+    printf 'Host-side model endpoint %s does not advertise expected model %s.
+' "$models_url" "$expected_model" >&2
+    return 1
+  fi
 }
 
 resolve_model_profile() {

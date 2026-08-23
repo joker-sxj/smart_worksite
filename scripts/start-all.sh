@@ -54,6 +54,7 @@ if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
   printf 'Starting local model services with profile %s...\n' "${MODEL_PROFILE_NAME:-$model_profile}"
   docker_compose "$root" up -d local-llm local-embedding local-reranker
   "$script_dir/check-local-models.sh" --model-profile "$MODEL_PROFILE_FILE" --wait "${MODEL_STARTUP_TIMEOUT_SECONDS:-3600}"
+  preflight_host_model_endpoint "$QWEN_VL_ENDPOINT" "${QWEN_VL_MODEL:-}"
 else
   rm -f "$run_dir/model-profile"
 fi

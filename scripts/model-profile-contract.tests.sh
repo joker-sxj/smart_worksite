@@ -70,6 +70,29 @@ if ! bash -c 'set -euo pipefail; source "$1"; CHAT_HOST_PORT=19000; QWEN_VL_ENDP
   fail 'Lifecycle must migrate the legacy Docker-only vision endpoint for the host-side Java parser.'
 fi
 
+
+for docker_host in local-llm local-vlm smart-worksite-local-llm; do
+  if ! bash -c 'set -euo pipefail; source "$1"; CHAT_HOST_PORT=19001; QWEN_VL_ENDPOINT="http://$2:8000/v1/chat/completions"; normalize_host_model_endpoints; [[ "$QWEN_VL_ENDPOINT" == http://127.0.0.1:19001/v1/chat/completions ]]' bash "$repo_root/scripts/lib/lifecycle.sh" "$docker_host"; then
+    fail "Lifecycle must map Docker-only host $docker_host to the configured host-published port."
+  fi
+done
+
+if ! bash -c 'set -euo pipefail; source "$1"; CHAT_HOST_PORT=19002; QWEN_VL_ENDPOINT="  \"http://127.0.0.1:18000/v1/chat/completions\"  "; normalize_host_model_endpoints; [[ "$QWEN_VL_ENDPOINT" == http://127.0.0.1:19002/v1/chat/completions ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
+  fail 'Lifecycle must trim whitespace/quotes and synchronize a loopback endpoint with CHAT_HOST_PORT.'
+fi
+
+if bash -c 'set -euo pipefail; source "$1"; QWEN_VL_ENDPOINT="[http://local-llm:8000/v1/chat/completions](http://local-llm:8000/v1/chat/completions)"; normalize_host_model_endpoints' bash "$repo_root/scripts/lib/lifecycle.sh" >/dev/null 2>&1; then
+  fail 'Lifecycle must reject Markdown-formatted endpoint values copied from rendered documentation.'
+fi
+
+if ! bash -c 'set -euo pipefail; source "$1"; QWEN_VL_ENDPOINT=https://example.invalid/v1/chat/completions; normalize_host_model_endpoints; [[ "$QWEN_VL_ENDPOINT" == https://example.invalid/v1/chat/completions ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
+  fail 'Lifecycle must preserve a valid cloud endpoint.'
+fi
+
+if ! grep -q 'preflight_host_model_endpoint' "$repo_root/scripts/start-all.sh"; then
+  fail 'Linux startup must preflight the normalized host-side vision endpoint before Java starts.'
+fi
+
 h100="$repo_root/deploy/model-profiles/h100-fp8.env.example"
 a6000="$repo_root/deploy/model-profiles/a6000x2-bf16.env.example"
 [[ -f "$h100" ]] && {

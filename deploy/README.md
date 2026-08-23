@@ -166,4 +166,6 @@ QWEN_EMBEDDING_BASE_URL=http://local-embedding:8000/v1
 QWEN_RERANK_BASE_URL=http://local-reranker:8000/v1/rerank
 ```
 
+启动脚本会把遗留的 Docker 服务地址（如 `local-llm`、`local-vlm`、`smart-worksite-local-llm`）自动转换为宿主机发布端口，并在启动 Java 后端前请求 `/v1/models` 验证模型及名称。环境变量必须填写纯 URL；不要粘贴 `[http://...](http://...)` 形式的 Markdown 链接。
+
 Java 后端通过 Python AI 服务使用这些模型，前端不直接访问模型、数据库、MinIO 或向量数据库。
