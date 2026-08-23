@@ -38,48 +38,87 @@ public class QwenVlDocumentParseAdapter implements DocumentParseModelAdapter {
         }
 
         try {
-            String requestBody = objectMapper.writeValueAsString(buildRequestBody(request, qwenVl.getModel()));
-            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(qwenVl.getEndpoint()))
-                    .timeout(Duration.ofMillis(qwenVl.getReadTimeoutMs()))
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(requestBody));
-            if (qwenVl.getApiKey() != null && !qwenVl.getApiKey().isBlank()) {
-                requestBuilder.header("Authorization", "Bearer " + qwenVl.getApiKey());
-            }
-            HttpRequest httpRequest = requestBuilder.build();
-
-            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IllegalStateException("qwen vl request failed with status " + response.statusCode());
-            }
-
-            JsonNode root = objectMapper.readTree(response.body());
-            String content = root.path("choices").path(0).path("message").path("content").asText();
-            if (content == null || content.isBlank()) {
-                throw new IllegalStateException("qwen vl response content is empty");
-            }
-
-            Map<String, Object> metadata = new LinkedHashMap<>();
-            metadata.put("provider", "QWEN_VL");
-            metadata.put("model", qwenVl.getModel());
-            metadata.put("responseId", root.path("id").asText(null));
-            if (root.has("usage")) {
-                metadata.put("usage", objectMapper.convertValue(root.path("usage"), Map.class));
-            }
-
-            return new ParsedDocument(
-                    content.trim(),
-                    request.getTargetFormat(),
-                    qwenVl.getModel(),
-                    objectMapper.writeValueAsString(metadata)
-            );
+            return parseWithQwen(request, qwenVl);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("qwen vl request interrupted", ex);
         } catch (Exception ex) {
+            if (canFallbackToPreparedText(request)) {
+                return parsePreparedTextFallback(request, qwenVl, ex);
+            }
             throw new IllegalStateException("qwen vl parse failed", ex);
         }
+    }
+
+    private ParsedDocument parseWithQwen(DocumentParseRequest request, FileProperties.QwenVl qwenVl) throws Exception {
+        String requestBody = objectMapper.writeValueAsString(buildRequestBody(request, qwenVl.getModel()));
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+                .uri(URI.create(qwenVl.getEndpoint()))
+                .timeout(Duration.ofMillis(qwenVl.getReadTimeoutMs()))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody));
+        if (qwenVl.getApiKey() != null && !qwenVl.getApiKey().isBlank()) {
+            requestBuilder.header("Authorization", "Bearer " + qwenVl.getApiKey());
+        }
+
+        HttpResponse<String> response = httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IllegalStateException("qwen vl request failed with status " + response.statusCode());
+        }
+
+        JsonNode root = objectMapper.readTree(response.body());
+        String content = root.path("choices").path(0).path("message").path("content").asText();
+        if (content == null || content.isBlank()) {
+            throw new IllegalStateException("qwen vl response content is empty");
+        }
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("provider", "QWEN_VL");
+        metadata.put("model", qwenVl.getModel());
+        metadata.put("responseId", root.path("id").asText(null));
+        if (root.has("usage")) {
+            metadata.put("usage", objectMapper.convertValue(root.path("usage"), Map.class));
+        }
+
+        return new ParsedDocument(
+                content.trim(),
+                request.getTargetFormat(),
+                qwenVl.getModel(),
+                objectMapper.writeValueAsString(metadata)
+        );
+    }
+
+    private boolean canFallbackToPreparedText(DocumentParseRequest request) {
+        return (request.getImageDataUrl() == null || request.getImageDataUrl().isBlank())
+                && request.getTextContent() != null
+                && !request.getTextContent().isBlank();
+    }
+
+    private ParsedDocument parsePreparedTextFallback(
+            DocumentParseRequest request, FileProperties.QwenVl qwenVl, Exception failure) {
+        String content = normalizeLocalMarkdown(request.getTextContent());
+        try {
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("provider", "LOCAL_TEXT_FALLBACK");
+            metadata.put("failedProvider", "QWEN_VL");
+            metadata.put("failedModel", qwenVl.getModel());
+            metadata.put("reason", boundedFailureReason(failure));
+            return new ParsedDocument(
+                    content,
+                    request.getTargetFormat(),
+                    "LOCAL_TEXT_FALLBACK",
+                    objectMapper.writeValueAsString(metadata));
+        } catch (Exception ex) {
+            throw new IllegalStateException("local text fallback failed", ex);
+        }
+    }
+
+    private String boundedFailureReason(Exception failure) {
+        String message = failure.getMessage();
+        String reason = failure.getClass().getSimpleName()
+                + (message == null || message.isBlank() ? "" : ": " + message);
+        reason = reason.replace('\r', ' ').replace('\n', ' ').trim();
+        return reason.length() <= 240 ? reason : reason.substring(0, 240);
     }
 
     private boolean isQwenConfigured(FileProperties.QwenVl qwenVl) {
