@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { Loading } from '@element-plus/icons-vue';
 import { ElMessage, type UploadFile, type UploadFiles, type UploadProps, type UploadUserFile } from 'element-plus';
+import { DEFAULT_UPLOAD_MAX_SIZE_MB, validateUploadFile } from './uploadValidation';
 
 const props = withDefaults(defineProps<{
   modelValue?: File[];
@@ -12,7 +13,7 @@ const props = withDefaults(defineProps<{
   uploading?: boolean;
   error?: string;
   multiple?: boolean;
-}>(), { maxSizeMb: 20, tip: '', multiple: true });
+}>(), { maxSizeMb: DEFAULT_UPLOAD_MAX_SIZE_MB, tip: '', multiple: true });
 
 const emit = defineEmits<{ 'update:modelValue': [files: File[]]; change: [files: File[]] }>();
 const fileList = ref<UploadUserFile[]>([]);
@@ -43,22 +44,8 @@ const displayTip = computed(() => {
   return labels.length ? `支持 ${labels.join('、')} 文件` : '仅允许上传当前业务配置的文件类型';
 });
 
-function isAllowedType(file: File) {
-  const rules = parseAccept();
-  if (!rules.length) return true;
-  const name = file.name.toLowerCase();
-  const mime = file.type.toLowerCase();
-  return rules.some((rule) => {
-    if (rule.startsWith('.')) return name.endsWith(rule);
-    if (rule.endsWith('/*')) return mime.startsWith(rule.slice(0, -1));
-    return mime === rule;
-  });
-}
-
 function validateFile(file: File) {
-  if (file.size / 1024 / 1024 > props.maxSizeMb) return `文件 ${file.name} 超过 ${props.maxSizeMb}MB`;
-  if (!isAllowedType(file)) return `文件 ${file.name} 类型不符合要求`;
-  return '';
+  return validateUploadFile(file, props.maxSizeMb, props.accept || '');
 }
 
 const beforeUpload: UploadProps['beforeUpload'] = (rawFile) => {

@@ -178,7 +178,7 @@ onMounted(loadTemplates);
           </el-form-item>
         </el-form>
         <div class="upload-title required-label">2. 上传待审文件</div>
-        <AppUpload v-if="canManageReview" :model-value="file ? [file] : []" accept=".doc,.docx,.pdf" :multiple="false" :uploading="submitting" @update:model-value="file = $event[0] || null" />
+        <AppUpload v-if="canManageReview" :model-value="file ? [file] : []" accept=".doc,.docx,.pdf" :max-size-mb="100" :multiple="false" :uploading="submitting" @update:model-value="file = $event[0] || null" />
         <p class="upload-tip">支持 Word、PDF。选择模板和文件后，点击“发起审查”。</p>
       </template>
     </el-card>

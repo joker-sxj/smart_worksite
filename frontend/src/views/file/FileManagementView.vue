@@ -248,7 +248,7 @@ onBeforeUnmount(() => parsePolling.stop());
         <el-radio-button v-for="item in bizTypeOptions" :key="item.value" :label="item.value">{{ item.label }}</el-radio-button>
       </el-radio-group>
       <div class="upload-title required-label">上传文件</div>
-      <AppUpload v-model="uploadFiles" accept=".doc,.docx,.pdf,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.txt,.md" :uploading="uploading" />
+      <AppUpload v-model="uploadFiles" accept=".doc,.docx,.pdf,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.txt,.md" :max-size-mb="100" :uploading="uploading" />
       <el-button type="primary" :loading="uploading" style="margin-top:12px" @click="submitUpload">开始上传</el-button>
     </el-card>
     <el-card class="work-card">
