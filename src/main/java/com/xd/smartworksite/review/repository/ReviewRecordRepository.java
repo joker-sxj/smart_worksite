@@ -12,7 +12,11 @@ public interface ReviewRecordRepository {
 
     List<ReviewRecord> findPage(Long projectId, List<Long> accessibleProjectIds, Long templateId, String status);
 
+    default int assignTask(Long recordId, Long taskId, Long updatedBy) { return 0; }
+
     int markProcessing(Long recordId, Long updatedBy);
+
+    default int markProcessing(Long recordId, Long taskId, Long updatedBy) { return markProcessing(recordId, updatedBy); }
 
     int markCompleted(Long recordId, String issuesJson, String resultJson, Long updatedBy);
 

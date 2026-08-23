@@ -142,8 +142,17 @@ public class FileObjectApplicationService {
     }
 
     public FileObjectContent openFileContent(Long fileId, Long expectedProjectId, Long expectedBizId) {
+        return openFileContent(fileId, expectedProjectId, expectedBizId, false);
+    }
+
+    public FileObjectContent openFileContentForSystem(Long fileId, Long expectedProjectId, Long expectedBizId) {
+        return openFileContent(fileId, expectedProjectId, expectedBizId, true);
+    }
+
+    private FileObjectContent openFileContent(Long fileId, Long expectedProjectId, Long expectedBizId, boolean system) {
         FileObject fileObject = findActiveFile(fileId);
-        projectAccessApplicationService.requireProjectAccess(fileObject.getProjectId());
+        if (system) projectAccessApplicationService.requireProject(fileObject.getProjectId());
+        else projectAccessApplicationService.requireProjectAccess(fileObject.getProjectId());
         if (!FileStatus.ACTIVE.name().equals(fileObject.getStatus())) {
             throw new BusinessException(ErrorCode.CONFLICT, "file is not active");
         }

@@ -12,6 +12,17 @@ from app.core.settings import Settings
 from app.models.schemas import Message
 
 
+def extract_final_answer(message: dict[str, Any]) -> str:
+    """Return user-visible content without exposing model reasoning traces."""
+    content = str(message.get("content") or "")
+    content = re.sub(r"(?is)<think>.*?</think>", "", content).strip()
+    if "</think>" in content:
+        content = re.sub(r"(?is)^.*?</think>", "", content, count=1).strip()
+    if re.match(r"(?is)^<think>", content):
+        return ""
+    return content
+
+
 class OpenAICompatibleProvider:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -30,7 +41,7 @@ class OpenAICompatibleProvider:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             body = response.json()
-        answer = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+        answer = extract_final_answer(body.get("choices", [{}])[0].get("message", {}))
         if not answer:
             raise RuntimeError("Qwen response content is empty")
         usage = body.get("usage") or {}

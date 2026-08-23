@@ -62,13 +62,27 @@
         order by created_at desc, id desc
     </select>
 
+    <update id="assignTask">
+        update review_record
+        set task_id = #{taskId},
+            status = 'PENDING',
+            error_message = null,
+            updated_by = #{updatedBy}
+        where id = #{recordId}
+          and status in ('PENDING', 'FAILED')
+          and deleted = 0
+    </update>
+
     <update id="markProcessing">
         update review_record
         set status = 'PROCESSING',
             error_message = null,
             updated_by = #{updatedBy}
         where id = #{recordId}
-          and status in ('PENDING', 'FAILED')
+          and status in ('PENDING', 'PROCESSING', 'FAILED')
+          <if test="taskId != null">
+            and task_id = #{taskId}
+          </if>
           and deleted = 0
     </update>
 

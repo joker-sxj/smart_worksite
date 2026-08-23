@@ -21,6 +21,15 @@ public interface QaRepository {
 
     int updateMessage(QaMessage message);
 
+    default int assignTask(Long messageId, Long taskId, Long updatedBy) { return 0; }
+
+    default int markMessageProcessing(Long messageId, Long taskId, Long updatedBy) { return 0; }
+
+    default int markMessageCompleted(Long messageId, Long taskId, String answer, String routeMode,
+                                     String referencesJson, Long updatedBy) { return 0; }
+
+    default int markMessageFailed(Long messageId, Long taskId, String errorMessage, Long updatedBy) { return 0; }
+
     Optional<QaMessage> findMessageById(Long messageId);
 
     List<QaMessage> findMessagesBySessionId(Long sessionId);

@@ -16,6 +16,8 @@ public class QaMessageResponse {
     private List<Map<String, Object>> references = new ArrayList<>();
     private Map<String, Object> feedback = new LinkedHashMap<>();
     private String status;
+    private Long taskId;
+    private String errorMessage;
     private Boolean needClarification = false;
     private List<String> clarificationQuestions = new ArrayList<>();
     private String providerTraceId;
@@ -40,6 +42,10 @@ public class QaMessageResponse {
     public void setFeedback(Map<String, Object> feedback) { this.feedback = feedback; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public Long getTaskId() { return taskId; }
+    public void setTaskId(Long taskId) { this.taskId = taskId; }
+    public String getErrorMessage() { return errorMessage; }
+    public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
     public Boolean getNeedClarification() { return needClarification; }
     public void setNeedClarification(Boolean needClarification) { this.needClarification = needClarification; }
     public List<String> getClarificationQuestions() { return clarificationQuestions; }

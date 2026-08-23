@@ -186,6 +186,8 @@ export interface QaMessage {
   references?: QaReference[];
   feedback?: Record<string, unknown>;
   status: Status;
+  taskId?: ID;
+  errorMessage?: string;
   needClarification?: boolean;
   clarificationQuestions?: string[];
   providerTraceId?: string;

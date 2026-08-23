@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import EmptyState from '../../components/common/EmptyState.vue';
 import { fetchDataSources } from '../../api/datasource';
@@ -10,6 +10,7 @@ import { useUserStore } from '../../stores/user';
 import type { DataSourceItem, ID, KnowledgeBase, QaMessage, QaSession } from '../../api/types';
 import { hasSuspiciousText } from '../../utils/textQuality';
 import { renderQaMarkdown } from '../../utils/qaMarkdown';
+import { hasActiveQaGeneration } from './qaMessagePolling';
 
 type QaMessageExtra = QaMessage & Record<string, unknown>;
 
@@ -42,6 +43,8 @@ const selectedDataSourceId = ref<ID | ''>('');
 const resourceLoading = ref(false);
 const resourceError = ref('');
 const activeSend = ref<{ token: string; userMessageId: ID; pendingMessageId: ID; content: string } | null>(null);
+let messagePollTimer: ReturnType<typeof setTimeout> | null = null;
+const MESSAGE_POLL_INTERVAL_MS = 2000;
 
 const activeSession = computed(() => sessions.value.find((item) => String(item.sessionId) === String(activeSessionId.value)) || null);
 const enabledKnowledgeBases = computed(() => knowledgeBases.value.filter((item) => ['ENABLED', 'ACTIVE'].includes(String(item.status).toUpperCase())));
@@ -66,7 +69,31 @@ function messageRole(msg: QaMessageExtra) {
 }
 
 function messageText(msg: QaMessageExtra) {
+  const status = String(msg.status || '').toUpperCase();
+  if (['PENDING', 'PROCESSING', 'QUEUED', 'RUNNING'].includes(status)) return '正在生成回答，请稍候...';
+  if (status === 'FAILED') return String(msg.errorMessage || msg.answer || msg.content || '回答生成失败，请稍后重试。');
   return String(msg.content || msg.answer || msg.question || '');
+}
+
+function stopMessagePolling() {
+  if (messagePollTimer) clearTimeout(messagePollTimer);
+  messagePollTimer = null;
+}
+
+function scheduleMessagePolling(sessionId: ID) {
+  stopMessagePolling();
+  if (!hasActiveQaGeneration(messages.value)) return;
+  messagePollTimer = setTimeout(async () => {
+    if (String(activeSessionId.value) !== String(sessionId)) return;
+    try {
+      messages.value = normalizeMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+      messageError.value = '';
+    } catch (err) {
+      messageError.value = err instanceof Error ? err.message : t('回答状态刷新失败，请稍后重试。');
+    } finally {
+      if (String(activeSessionId.value) === String(sessionId)) scheduleMessagePolling(sessionId);
+    }
+  }, MESSAGE_POLL_INTERVAL_MS);
 }
 
 function renderMessageHtml(msg: QaMessageExtra) {
@@ -171,6 +198,7 @@ async function loadSessions(selectId?: ID) {
 }
 
 async function switchSession(sessionId: ID) {
+  stopMessagePolling();
   activeSessionId.value = sessionId;
   messageLoading.value = true;
   messageError.value = '';
@@ -178,6 +206,7 @@ async function switchSession(sessionId: ID) {
   try {
     await fetchQaSessionDetail(sessionId);
     messages.value = normalizeMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+    scheduleMessagePolling(sessionId);
   } catch (err) {
     messageError.value = err instanceof Error ? err.message : t('会话消息加载失败，请检查后端问答接口。');
   } finally {
@@ -299,12 +328,10 @@ async function ask() {
       knowledgeBaseIds: ['AUTO', 'KNOWLEDGE', 'MIXED'].includes(routeMode.value) ? selectedKnowledgeBaseIds.value : [],
       dataSourceIds: ['AUTO', 'DATABASE', 'MIXED'].includes(routeMode.value) && selectedDataSourceId.value ? [selectedDataSourceId.value] : []
     };
-    const answer = await sendQuestion(sessionId, payload, projectId) as QaMessageExtra;
+    await sendQuestion(sessionId, payload, projectId) as QaMessageExtra;
     if (activeSend.value?.token !== sendToken) return;
-    const pendingIndex = messages.value.findIndex((msg) => String(msg.messageId) === String(pendingMessage.messageId));
-    const nextAnswer = { ...answer, role: 'assistant', content: answer.answer || answer.content || '' };
-    if (pendingIndex >= 0) messages.value.splice(pendingIndex, 1, nextAnswer);
-    else messages.value.push(nextAnswer);
+    messages.value = normalizeMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+    scheduleMessagePolling(sessionId);
   } catch (err) {
     if (activeSend.value?.token !== sendToken) return;
     const detail = err instanceof Error && err.message ? ` ${err.message}` : '';
@@ -343,6 +370,7 @@ async function feedback(message: QaMessageExtra, useful: boolean) {
 }
 
 onMounted(() => loadSessions());
+onUnmounted(stopMessagePolling);
 </script>
 
 <template>

@@ -25,6 +25,8 @@
         <result property="feedbackJson" column="feedback_json"/>
         <result property="status" column="status"/>
         <result property="taskId" column="task_id"/>
+        <result property="requestJson" column="request_json"/>
+        <result property="errorMessage" column="error_message"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
         <result property="createdBy" column="created_by"/>
@@ -37,7 +39,7 @@
 
     <sql id="MessageColumns">
         id, project_id, session_id, role, question, answer, route_mode, references_json,
-        feedback_json, status, task_id, created_at, updated_at, created_by, updated_by
+        feedback_json, status, task_id, request_json, error_message, created_at, updated_at, created_by, updated_by
     </sql>
 
     <insert id="insertSession" useGeneratedKeys="true" keyProperty="id">
@@ -94,10 +96,10 @@
     <insert id="insertMessage" useGeneratedKeys="true" keyProperty="id">
         insert into qa_message (
             project_id, session_id, role, question, answer, route_mode, references_json,
-            feedback_json, status, task_id, created_by, updated_by
+            feedback_json, status, task_id, request_json, error_message, created_by, updated_by
         ) values (
             #{projectId}, #{sessionId}, #{role}, #{question}, #{answer}, #{routeMode}, #{referencesJson},
-            #{feedbackJson}, #{status}, #{taskId}, #{createdBy}, #{updatedBy}
+            #{feedbackJson}, #{status}, #{taskId}, #{requestJson}, #{errorMessage}, #{createdBy}, #{updatedBy}
         )
     </insert>
 
@@ -107,8 +109,55 @@
             route_mode = #{routeMode},
             references_json = #{referencesJson},
             status = #{status},
+            error_message = #{errorMessage},
             updated_by = #{updatedBy}
         where id = #{id}
+          and deleted = 0
+    </update>
+
+
+    <update id="assignTask">
+        update qa_message
+        set task_id = #{taskId},
+            updated_by = #{updatedBy}
+        where id = #{messageId}
+          and status = 'PENDING'
+          and deleted = 0
+    </update>
+
+    <update id="markMessageProcessing">
+        update qa_message
+        set status = 'PROCESSING',
+            error_message = null,
+            updated_by = #{updatedBy}
+        where id = #{messageId}
+          and task_id = #{taskId}
+          and status in ('PENDING', 'PROCESSING', 'FAILED')
+          and deleted = 0
+    </update>
+
+    <update id="markMessageCompleted">
+        update qa_message
+        set answer = #{answer},
+            route_mode = #{routeMode},
+            references_json = #{referencesJson},
+            status = 'SUCCESS',
+            error_message = null,
+            updated_by = #{updatedBy}
+        where id = #{messageId}
+          and task_id = #{taskId}
+          and status = 'PROCESSING'
+          and deleted = 0
+    </update>
+
+    <update id="markMessageFailed">
+        update qa_message
+        set status = 'FAILED',
+            error_message = #{errorMessage},
+            updated_by = #{updatedBy}
+        where id = #{messageId}
+          and task_id = #{taskId}
+          and status in ('PENDING', 'PROCESSING')
           and deleted = 0
     </update>
 

@@ -24,6 +24,11 @@ import com.xd.smartworksite.review.dto.ReviewSubmitRequest;
 import com.xd.smartworksite.review.repository.ReviewRecordRepository;
 import com.xd.smartworksite.template.application.TemplateApplicationService;
 import com.xd.smartworksite.template.dto.TemplateResponse;
+import com.xd.smartworksite.task.application.TaskOutboxApplicationService;
+import com.xd.smartworksite.task.domain.GenerateTask;
+import com.xd.smartworksite.task.domain.TaskStatus;
+import com.xd.smartworksite.task.repository.TaskRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +41,8 @@ import java.util.Map;
 @Service
 public class ReviewApplicationService {
     private static final int MAX_ERROR_LENGTH = 2000;
+    private static final String TASK_TYPE_COMPLIANCE_REVIEW = "COMPLIANCE_REVIEW";
+    private static final String BIZ_TYPE_REVIEW_RECORD = "REVIEW_RECORD";
 
     private final ReviewRecordRepository reviewRecordRepository;
     private final ProjectAccessApplicationService projectAccessApplicationService;
@@ -44,6 +51,8 @@ public class ReviewApplicationService {
     private final ReviewAiGateway reviewAiGateway;
     private final ReviewDocumentTextExtractor documentTextExtractor;
     private final ObjectMapper objectMapper;
+    private final TaskRepository taskRepository;
+    private final TaskOutboxApplicationService taskOutboxApplicationService;
 
     public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
                                     ProjectAccessApplicationService projectAccessApplicationService,
@@ -52,6 +61,20 @@ public class ReviewApplicationService {
                                     ReviewAiGateway reviewAiGateway,
                                     ReviewDocumentTextExtractor documentTextExtractor,
                                     ObjectMapper objectMapper) {
+        this(reviewRecordRepository, projectAccessApplicationService, fileObjectApplicationService, templateApplicationService,
+                reviewAiGateway, documentTextExtractor, objectMapper, null, null);
+    }
+
+    @Autowired
+    public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
+                                    ProjectAccessApplicationService projectAccessApplicationService,
+                                    FileObjectApplicationService fileObjectApplicationService,
+                                    TemplateApplicationService templateApplicationService,
+                                    ReviewAiGateway reviewAiGateway,
+                                    ReviewDocumentTextExtractor documentTextExtractor,
+                                    ObjectMapper objectMapper,
+                                    TaskRepository taskRepository,
+                                    TaskOutboxApplicationService taskOutboxApplicationService) {
         this.reviewRecordRepository = reviewRecordRepository;
         this.projectAccessApplicationService = projectAccessApplicationService;
         this.fileObjectApplicationService = fileObjectApplicationService;
@@ -59,6 +82,8 @@ public class ReviewApplicationService {
         this.reviewAiGateway = reviewAiGateway;
         this.documentTextExtractor = documentTextExtractor;
         this.objectMapper = objectMapper;
+        this.taskRepository = taskRepository;
+        this.taskOutboxApplicationService = taskOutboxApplicationService;
     }
 
     @Transactional
@@ -86,7 +111,11 @@ public class ReviewApplicationService {
         }
         reviewRecordRepository.findById(record.getId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.SYSTEM_ERROR, "review record is not readable"));
-        executeReview(record.getId());
+        if (taskRepository == null || taskOutboxApplicationService == null) {
+            executeReview(record.getId());
+            return getRecord(record.getId());
+        }
+        enqueueReviewTask(record, SecurityUtils.getCurrentUserId());
         return getRecord(record.getId());
     }
 
@@ -125,7 +154,11 @@ public class ReviewApplicationService {
         if (!ReviewStatus.FAILED.name().equals(record.getStatus())) {
             throw new BusinessException(ErrorCode.CONFLICT, "only failed review records can be retried");
         }
-        executeReview(recordId);
+        if (taskRepository == null || taskOutboxApplicationService == null) {
+            executeReview(recordId);
+            return getRecord(recordId);
+        }
+        enqueueReviewTask(record, SecurityUtils.getCurrentUserId());
         return getRecord(recordId);
     }
 
@@ -177,6 +210,62 @@ public class ReviewApplicationService {
         return getRecord(recordId);
     }
 
+    private void enqueueReviewTask(ReviewRecord record, Long updatedBy) {
+        GenerateTask task = new GenerateTask();
+        task.setProjectId(record.getProjectId());
+        task.setTaskType(TASK_TYPE_COMPLIANCE_REVIEW);
+        task.setBizType(BIZ_TYPE_REVIEW_RECORD);
+        task.setBizId(record.getId());
+        task.setStatus(TaskStatus.QUEUED.name());
+        task.setCurrentStage("REVIEW_QUEUED");
+        task.setRetryCount(0);
+        task.setMaxRetryCount(3);
+        task.setCancelRequested(false);
+        taskRepository.insertTask(task);
+        if (task.getId() == null || reviewRecordRepository.assignTask(record.getId(), task.getId(), updatedBy) == 0) {
+            throw new BusinessException(ErrorCode.CONFLICT, "review task binding failed");
+        }
+        taskOutboxApplicationService.enqueueTask(task, "compliance review requested");
+    }
+
+    public void executeReviewTask(Long recordId, Long taskId) {
+        ReviewRecord record = reviewRecordRepository.findById(recordId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "review record not found"));
+        if (!taskId.equals(record.getTaskId())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "review record task mismatch");
+        }
+        int processing = reviewRecordRepository.markProcessing(recordId, taskId, 1L);
+        if (processing == 0) {
+            if (ReviewStatus.COMPLETED.name().equals(record.getStatus())) return;
+            throw new BusinessException(ErrorCode.CONFLICT, "review record state is not executable");
+        }
+        try {
+            TemplateResponse template = templateApplicationService.getTemplateForSystem(record.getTemplateId());
+            FileObjectResponse file = fileObjectApplicationService.getFileForSystem(record.getFileId());
+            ReviewDocumentTextExtractor.ExtractedText reviewText = extractReviewFileTextForSystem(record, file);
+            ReviewDocumentTextExtractor.ExtractedText templateText = extractTemplateTextForSystem(template);
+            AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgent(buildAgentRequest(record, template, file, reviewText, templateText));
+            Map<String, Object> result = parseAgentResult(aiResponse);
+            result.put("providerTraceId", aiResponse.getProviderTraceId());
+            if (aiResponse.getSteps() != null && !aiResponse.getSteps().isEmpty()) result.put("steps", aiResponse.getSteps());
+            List<Map<String, Object>> issues = extractIssues(result);
+            if (reviewRecordRepository.markCompleted(recordId, writeJson(issues), writeJson(result), 1L) == 0) {
+                throw new BusinessException(ErrorCode.CONFLICT, "review record complete state changed");
+            }
+        } catch (RuntimeException ex) {
+            int failed = reviewRecordRepository.markFailed(recordId, limitError(ex.getMessage()), 1L);
+            if (failed == 0) {
+                BusinessException persistenceFailure = new BusinessException(
+                        ErrorCode.CONFLICT,
+                        "review record failure state cannot be persisted: " + limitError(ex.getMessage())
+                );
+                persistenceFailure.addSuppressed(ex);
+                throw persistenceFailure;
+            }
+            throw ex;
+        }
+    }
+
     @Transactional
     public ReviewRecordResponse executeReview(Long recordId) {
         ReviewRecord record = requireRecordWritableAccess(recordId);
@@ -207,6 +296,19 @@ public class ReviewApplicationService {
                 throw new BusinessException(ErrorCode.CONFLICT, "review record failure state cannot be persisted: " + limitError(ex.getMessage()));
             }
             throw ex;
+        }
+    }
+
+    private ReviewDocumentTextExtractor.ExtractedText extractReviewFileTextForSystem(ReviewRecord record, FileObjectResponse file) {
+        return documentTextExtractor.extract(fileObjectApplicationService.openFileContentForSystem(file.getFileId(), record.getProjectId(), null));
+    }
+
+    private ReviewDocumentTextExtractor.ExtractedText extractTemplateTextForSystem(TemplateResponse template) {
+        if (template.getFileId() == null) return new ReviewDocumentTextExtractor.ExtractedText("", false);
+        try {
+            return documentTextExtractor.extract(fileObjectApplicationService.openFileContentForSystem(template.getFileId(), template.getProjectId(), template.getTemplateId()));
+        } catch (BusinessException ex) {
+            return new ReviewDocumentTextExtractor.ExtractedText("", false);
         }
     }
 

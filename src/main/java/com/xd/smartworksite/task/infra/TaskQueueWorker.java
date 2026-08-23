@@ -8,6 +8,8 @@ import com.xd.smartworksite.common.redis.RedisQueueService;
 import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.knowledge.application.KnowledgeBaseApplicationService;
 import com.xd.smartworksite.policy.application.PolicyApplicationService;
+import com.xd.smartworksite.qa.application.QaApplicationService;
+import com.xd.smartworksite.review.application.ReviewApplicationService;
 import com.xd.smartworksite.report.application.ReportGenerationApplicationService;
 import com.xd.smartworksite.task.application.TaskOutboxApplicationService;
 import com.xd.smartworksite.task.application.TaskWorkerApplicationService;
@@ -19,6 +21,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -30,6 +33,8 @@ public class TaskQueueWorker {
     private static final String TASK_TYPE_REPORT_GENERATION = "REPORT_GENERATION";
     private static final String TASK_TYPE_KNOWLEDGE_INDEXING = "KNOWLEDGE_INDEXING";
     private static final String TASK_TYPE_POLICY_CRAWL = "POLICY_CRAWL";
+    private static final String TASK_TYPE_QA_GENERATION = "QA_GENERATION";
+    private static final String TASK_TYPE_COMPLIANCE_REVIEW = "COMPLIANCE_REVIEW";
     private static final String STAGE_FINISH = "FINISH";
     private static final Logger log = LoggerFactory.getLogger(TaskQueueWorker.class);
 
@@ -38,6 +43,8 @@ public class TaskQueueWorker {
     private final ReportGenerationApplicationService reportGenerationApplicationService;
     private final KnowledgeBaseApplicationService knowledgeBaseApplicationService;
     private final PolicyApplicationService policyApplicationService;
+    private final QaApplicationService qaApplicationService;
+    private final ReviewApplicationService reviewApplicationService;
     private final TaskWorkerProperties properties;
     private final ObjectMapper objectMapper;
 
@@ -48,7 +55,18 @@ public class TaskQueueWorker {
                            TaskWorkerProperties properties,
                            ObjectMapper objectMapper) {
         this(redisQueueService, taskWorkerApplicationService, reportGenerationApplicationService,
-                knowledgeBaseApplicationService, null, properties, objectMapper);
+                knowledgeBaseApplicationService, null, null, null, properties, objectMapper);
+    }
+
+    public TaskQueueWorker(RedisQueueService redisQueueService,
+                           TaskWorkerApplicationService taskWorkerApplicationService,
+                           ReportGenerationApplicationService reportGenerationApplicationService,
+                           KnowledgeBaseApplicationService knowledgeBaseApplicationService,
+                           PolicyApplicationService policyApplicationService,
+                           TaskWorkerProperties properties,
+                           ObjectMapper objectMapper) {
+        this(redisQueueService, taskWorkerApplicationService, reportGenerationApplicationService,
+                knowledgeBaseApplicationService, policyApplicationService, null, null, properties, objectMapper);
     }
 
     @Autowired
@@ -57,6 +75,8 @@ public class TaskQueueWorker {
                            ReportGenerationApplicationService reportGenerationApplicationService,
                            KnowledgeBaseApplicationService knowledgeBaseApplicationService,
                            PolicyApplicationService policyApplicationService,
+                           @Nullable QaApplicationService qaApplicationService,
+                           @Nullable ReviewApplicationService reviewApplicationService,
                            TaskWorkerProperties properties,
                            ObjectMapper objectMapper) {
         this.redisQueueService = redisQueueService;
@@ -64,6 +84,8 @@ public class TaskQueueWorker {
         this.reportGenerationApplicationService = reportGenerationApplicationService;
         this.knowledgeBaseApplicationService = knowledgeBaseApplicationService;
         this.policyApplicationService = policyApplicationService;
+        this.qaApplicationService = qaApplicationService;
+        this.reviewApplicationService = reviewApplicationService;
         this.properties = properties;
         this.objectMapper = objectMapper;
     }
@@ -116,6 +138,20 @@ public class TaskQueueWorker {
                 throw new BusinessException(ErrorCode.PARAM_ERROR, "policy crawl service is not configured");
             }
             policyApplicationService.executeCrawlTask(message.getTaskId());
+            return;
+        }
+        if (TASK_TYPE_QA_GENERATION.equals(claim.getTask().getTaskType())) {
+            if (qaApplicationService == null) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "qa generation service is not configured");
+            }
+            qaApplicationService.executeGenerationTask(claim.getTask().getBizId(), message.getTaskId());
+            return;
+        }
+        if (TASK_TYPE_COMPLIANCE_REVIEW.equals(claim.getTask().getTaskType())) {
+            if (reviewApplicationService == null) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "compliance review service is not configured");
+            }
+            reviewApplicationService.executeReviewTask(claim.getTask().getBizId(), message.getTaskId());
             return;
         }
         throw new BusinessException(ErrorCode.PARAM_ERROR, "unsupported task type: " + claim.getTask().getTaskType());

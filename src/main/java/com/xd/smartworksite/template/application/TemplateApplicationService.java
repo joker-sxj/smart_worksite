@@ -219,6 +219,12 @@ public class TemplateApplicationService {
         return toResponse(template);
     }
 
+    public TemplateResponse getTemplateForSystem(Long templateId) {
+        Template template = requireTemplate(templateId);
+        projectAccessApplicationService.requireProject(template.getProjectId());
+        return toResponse(template);
+    }
+
     @Transactional
     public TemplateResponse updateTemplate(Long templateId, TemplateUpdateRequest request) {
         Template template = requireTemplate(templateId);

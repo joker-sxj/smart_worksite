@@ -15,7 +15,12 @@ public interface ReviewRecordMapper {
                                   @Param("templateId") Long templateId,
                                   @Param("status") String status);
 
+    int assignTask(@Param("recordId") Long recordId,
+                   @Param("taskId") Long taskId,
+                   @Param("updatedBy") Long updatedBy);
+
     int markProcessing(@Param("recordId") Long recordId,
+                       @Param("taskId") Long taskId,
                        @Param("updatedBy") Long updatedBy);
 
     int markCompleted(@Param("recordId") Long recordId,

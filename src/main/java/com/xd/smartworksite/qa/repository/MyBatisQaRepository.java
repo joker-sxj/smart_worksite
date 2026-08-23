@@ -54,6 +54,27 @@ public class MyBatisQaRepository implements QaRepository {
     }
 
     @Override
+    public int assignTask(Long messageId, Long taskId, Long updatedBy) {
+        return qaMapper.assignTask(messageId, taskId, updatedBy);
+    }
+
+    @Override
+    public int markMessageProcessing(Long messageId, Long taskId, Long updatedBy) {
+        return qaMapper.markMessageProcessing(messageId, taskId, updatedBy);
+    }
+
+    @Override
+    public int markMessageCompleted(Long messageId, Long taskId, String answer, String routeMode,
+                                    String referencesJson, Long updatedBy) {
+        return qaMapper.markMessageCompleted(messageId, taskId, answer, routeMode, referencesJson, updatedBy);
+    }
+
+    @Override
+    public int markMessageFailed(Long messageId, Long taskId, String errorMessage, Long updatedBy) {
+        return qaMapper.markMessageFailed(messageId, taskId, errorMessage, updatedBy);
+    }
+
+    @Override
     public Optional<QaMessage> findMessageById(Long messageId) {
         return Optional.ofNullable(qaMapper.selectMessageById(messageId));
     }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import AppUpload from '../../components/common/AppUpload.vue';
@@ -13,6 +13,7 @@ import { fetchTaskStages } from '../../api/task';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, ReviewRecord, ReviewTemplate, TaskStageLog } from '../../api/types';
+import { isReviewTerminal, reviewStorageKey } from './reviewPolling';
 
 const router = useRouter();
 const projectStore = useProjectStore();
@@ -30,6 +31,8 @@ const currentRecord = ref<ReviewRecord | null>(null);
 const submittedInfo = ref<{ recordId?: ID; taskId?: ID; status?: string } | null>(null);
 const logs = ref<TaskStageLog[]>([]);
 const updatingIssueId = ref('');
+let recordPollTimer: ReturnType<typeof setTimeout> | null = null;
+const RECORD_POLL_INTERVAL_MS = 2000;
 const canManageReview = computed(() => userStore.hasPermission('review:manage'));
 const reviewManageTip = '当前账号没有合规审查管理权限';
 const canSubmit = computed(() => Boolean(canManageReview.value && templates.value.length && selectedTemplateId.value && file.value && !submitting.value));
@@ -51,6 +54,32 @@ function goTemplates() {
 }
 function progressOf(record: ReviewRecord) { return ['SUCCESS', 'COMPLETED', 'FAILED', 'ARCHIVED'].includes(String(record.status)) ? 100 : 60; }
 function canUpdateIssue(record: ReviewRecord | null) { return canManageReview.value && record?.status === 'COMPLETED'; }
+
+function stopRecordPolling() {
+  if (recordPollTimer) clearTimeout(recordPollTimer);
+  recordPollTimer = null;
+}
+
+function persistRecordId(projectId: ID, recordId: ID) {
+  localStorage.setItem(reviewStorageKey(projectId), String(recordId));
+}
+
+function scheduleRecordPolling(recordId: ID) {
+  stopRecordPolling();
+  if (currentRecord.value && isReviewTerminal(currentRecord.value)) return;
+  recordPollTimer = setTimeout(async () => {
+    await loadRecord(recordId);
+    if (!currentRecord.value || !isReviewTerminal(currentRecord.value)) scheduleRecordPolling(recordId);
+  }, RECORD_POLL_INTERVAL_MS);
+}
+
+async function restoreLastRecord(projectId: ID) {
+  const recordId = localStorage.getItem(reviewStorageKey(projectId));
+  if (!recordId) return;
+  await loadRecord(recordId);
+  if (!currentRecord.value || !isReviewTerminal(currentRecord.value)) scheduleRecordPolling(recordId);
+}
+
 
 async function loadTemplates() {
   loading.value = true;
@@ -82,6 +111,8 @@ async function loadRecord(recordId: ID, taskId?: ID, status?: string) {
     currentRecord.value = await fetchReviewRecord(recordId);
     submittedInfo.value = { recordId: currentRecord.value.recordId, taskId: currentRecord.value.taskId, status: currentRecord.value.status };
     await loadStages(currentRecord.value.taskId || taskId);
+    const projectId = currentRecord.value.projectId || projectStore.currentProject?.projectId;
+    if (projectId) persistRecordId(projectId, currentRecord.value.recordId);
   } catch (err) {
     currentRecord.value = null;
     await loadStages(taskId);
@@ -105,7 +136,9 @@ async function submit() {
     const result = await submitReviewRecord({ projectId, templateId: selectedTemplateId.value, file: file.value });
     submittedInfo.value = result;
     ElMessage.success(t('审查任务已提交'));
+    persistRecordId(projectId, result.recordId);
     await loadRecord(result.recordId, result.taskId, result.status);
+    if (!currentRecord.value || !isReviewTerminal(currentRecord.value)) scheduleRecordPolling(result.recordId);
   } catch (err) {
     submitError.value = err instanceof Error ? err.message : t('审查提交失败，请检查后端审查接口。');
   } finally { submitting.value = false; }
@@ -126,7 +159,21 @@ async function changeIssueStatus(issueId: string, status: string, comment?: stri
   }
 }
 
-onMounted(loadTemplates);
+onMounted(async () => {
+  await loadTemplates();
+  const projectId = projectStore.currentProject?.projectId;
+  if (projectId) await restoreLastRecord(projectId);
+});
+watch(() => projectStore.currentProject?.projectId, async (projectId, previousProjectId) => {
+  if (!projectId || String(projectId) === String(previousProjectId || '')) return;
+  stopRecordPolling();
+  selectedTemplateId.value = '';
+  currentRecord.value = null;
+  submittedInfo.value = null;
+  await loadTemplates();
+  await restoreLastRecord(projectId);
+});
+onUnmounted(stopRecordPolling);
 </script>
 
 <template>

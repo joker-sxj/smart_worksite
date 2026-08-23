@@ -35,8 +35,18 @@ public class MyBatisReviewRecordRepository implements ReviewRecordRepository {
     }
 
     @Override
+    public int assignTask(Long recordId, Long taskId, Long updatedBy) {
+        return mapper.assignTask(recordId, taskId, updatedBy);
+    }
+
+    @Override
     public int markProcessing(Long recordId, Long updatedBy) {
-        return mapper.markProcessing(recordId, updatedBy);
+        return mapper.markProcessing(recordId, null, updatedBy);
+    }
+
+    @Override
+    public int markProcessing(Long recordId, Long taskId, Long updatedBy) {
+        return mapper.markProcessing(recordId, taskId, updatedBy);
     }
 
     @Override

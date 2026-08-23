@@ -14,6 +14,8 @@ public class QaMessage {
     private String feedbackJson;
     private String status;
     private Long taskId;
+    private String requestJson;
+    private String errorMessage;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private Long createdBy;
@@ -41,6 +43,10 @@ public class QaMessage {
     public void setStatus(String status) { this.status = status; }
     public Long getTaskId() { return taskId; }
     public void setTaskId(Long taskId) { this.taskId = taskId; }
+    public String getRequestJson() { return requestJson; }
+    public void setRequestJson(String requestJson) { this.requestJson = requestJson; }
+    public String getErrorMessage() { return errorMessage; }
+    public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
