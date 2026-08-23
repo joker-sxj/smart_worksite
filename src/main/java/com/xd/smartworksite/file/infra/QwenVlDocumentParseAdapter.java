@@ -1,14 +1,18 @@
 package com.xd.smartworksite.file.infra;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xd.smartworksite.file.application.FileProperties;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
+import java.net.ConnectException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -63,13 +67,13 @@ public class QwenVlDocumentParseAdapter implements DocumentParseModelAdapter {
 
         HttpResponse<String> response = httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new IllegalStateException("qwen vl request failed with status " + response.statusCode());
+            throw new ModelHttpException();
         }
 
         JsonNode root = objectMapper.readTree(response.body());
         String content = root.path("choices").path(0).path("message").path("content").asText();
         if (content == null || content.isBlank()) {
-            throw new IllegalStateException("qwen vl response content is empty");
+            throw new ModelEmptyResponseException();
         }
 
         Map<String, Object> metadata = new LinkedHashMap<>();
@@ -102,7 +106,7 @@ public class QwenVlDocumentParseAdapter implements DocumentParseModelAdapter {
             metadata.put("provider", "LOCAL_TEXT_FALLBACK");
             metadata.put("failedProvider", "QWEN_VL");
             metadata.put("failedModel", qwenVl.getModel());
-            metadata.put("reason", boundedFailureReason(failure));
+            metadata.put("failureCode", failureCode(failure));
             return new ParsedDocument(
                     content,
                     request.getTargetFormat(),
@@ -113,12 +117,29 @@ public class QwenVlDocumentParseAdapter implements DocumentParseModelAdapter {
         }
     }
 
-    private String boundedFailureReason(Exception failure) {
-        String message = failure.getMessage();
-        String reason = failure.getClass().getSimpleName()
-                + (message == null || message.isBlank() ? "" : ": " + message);
-        reason = reason.replace('\r', ' ').replace('\n', ' ').trim();
-        return reason.length() <= 240 ? reason : reason.substring(0, 240);
+    private String failureCode(Exception failure) {
+        if (failure instanceof ModelHttpException) {
+            return "MODEL_HTTP_ERROR";
+        }
+        if (failure instanceof ModelEmptyResponseException) {
+            return "MODEL_RESPONSE_EMPTY";
+        }
+        if (failure instanceof JsonProcessingException) {
+            return "MODEL_RESPONSE_INVALID";
+        }
+        if (failure instanceof ConnectException || failure instanceof HttpTimeoutException || failure instanceof IOException) {
+            return "MODEL_UNREACHABLE";
+        }
+        if (failure instanceof IllegalArgumentException) {
+            return "MODEL_REQUEST_INVALID";
+        }
+        return "MODEL_FAILURE";
+    }
+
+    private static final class ModelHttpException extends Exception {
+    }
+
+    private static final class ModelEmptyResponseException extends Exception {
     }
 
     private boolean isQwenConfigured(FileProperties.QwenVl qwenVl) {

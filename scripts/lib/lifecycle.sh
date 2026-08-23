@@ -53,20 +53,33 @@ normalize_host_model_endpoints() {
     return 1
   }
   case "$endpoint" in
-    http://local-vlm:8000/v1/chat/completions|http://local-llm:8000/v1/chat/completions|http://smart-worksite-local-llm:8000/v1/chat/completions|http://127.0.0.1:*/v1/chat/completions|http://localhost:*/v1/chat/completions)
+    http://local-vlm:8000/v1/chat/completions|http://local-llm:8000/v1/chat/completions|http://smart-worksite-local-llm:8000/v1/chat/completions|http://127.0.0.1:18000/v1/chat/completions|http://localhost:18000/v1/chat/completions)
       endpoint="http://127.0.0.1:${chat_host_port}/v1/chat/completions"
       ;;
   esac
   export QWEN_VL_ENDPOINT="$endpoint"
 }
 
-preflight_host_model_endpoint() {
-  local endpoint="${1:-${QWEN_VL_ENDPOINT:-}}" expected_model="${2:-${QWEN_VL_MODEL:-}}" models_url body
+effective_qwen_vl_model() {
+  printf '%s\n' "${1:-qwen-vl-plus}"
+}
+
+validate_host_model_configuration() {
+  local endpoint="${1:-${QWEN_VL_ENDPOINT:-}}" expected_model
+  expected_model="$(effective_qwen_vl_model "${2:-${QWEN_VL_MODEL:-}}")"
   [[ -n "$endpoint" ]] || { printf 'QWEN_VL_ENDPOINT is required for local document parsing.\n' >&2; return 1; }
   [[ "$endpoint" == */v1/chat/completions ]] || {
     printf 'QWEN_VL_ENDPOINT must end with /v1/chat/completions: %s\n' "$endpoint" >&2
     return 1
   }
+  [[ -n "$expected_model" ]] || { printf 'QWEN_VL_MODEL is required for local document parsing.\n' >&2; return 1; }
+}
+
+preflight_host_model_endpoint() {
+  local endpoint="${1:-${QWEN_VL_ENDPOINT:-}}" expected_model models_url body
+  expected_model="$(effective_qwen_vl_model "${2:-${QWEN_VL_MODEL:-}}")"
+  validate_host_model_configuration "$endpoint" "$expected_model" || return 1
+  require_command python3 || return 1
   models_url="${endpoint%/chat/completions}/models"
   if command -v curl >/dev/null 2>&1; then
     body="$(curl -fsS --connect-timeout 5 --max-time 15 "$models_url" 2>/dev/null)" || {
@@ -84,10 +97,27 @@ PY
     printf 'curl or python3 is required for the host model preflight.\n' >&2
     return 1
   fi
-  if [[ -n "$expected_model" && "$body" != *"$expected_model"* ]]; then
-    printf 'Host-side model endpoint %s does not advertise expected model %s.\n' "$models_url" "$expected_model" >&2
+  if ! MODEL_PREFLIGHT_BODY="$body" MODEL_PREFLIGHT_EXPECTED="$expected_model" python3 -c '
+import json, os, sys
+try:
+    payload = json.loads(os.environ.get("MODEL_PREFLIGHT_BODY", ""))
+except (TypeError, ValueError):
+    sys.exit(2)
+data = payload.get("data") if isinstance(payload, dict) else None
+if not isinstance(data, list):
+    sys.exit(3)
+expected = os.environ.get("MODEL_PREFLIGHT_EXPECTED", "")
+if expected and not any(isinstance(item, dict) and item.get("id") == expected for item in data):
+    sys.exit(4)
+'; then
+    printf 'Host-side model endpoint %s returned invalid model metadata or did not advertise exact model %s.\n' "$models_url" "${expected_model:-<any>}" >&2
     return 1
   fi
+}
+
+requires_host_model_preflight() {
+  local deployment_mode="${1:-${AI_DEPLOYMENT_MODE:-CLOUD_ALLOWED}}" model_profile_file="${2:-${MODEL_PROFILE_FILE:-}}"
+  [[ "${deployment_mode^^}" == 'LOCAL_ONLY' || -n "$model_profile_file" ]]
 }
 
 resolve_model_profile() {
@@ -224,7 +254,12 @@ managed_pid() {
   [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
   cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
   args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
-  [[ "$cwd" == "$(readlink -f "$expected_cwd")" && "$args" == *"$marker"* ]] || return 1
+  local expected_resolved
+  expected_resolved="$(readlink -f "$expected_cwd")"
+  [[ "$args" == *"$marker"* ]] || return 1
+  if [[ "$cwd" != "$expected_resolved" ]]; then
+    [[ "$args" == *'run-with-log-limit.mjs'* && "$args" == *"--cwd $expected_resolved"* ]] || return 1
+  fi
   printf '%s\n' "$pid"
 }
 
@@ -283,10 +318,13 @@ start_managed() {
   max_size_mb="$(positive_integer_or_default "${HOST_LOG_MAX_SIZE_MB:-}" 10)"
   max_files="$(positive_integer_or_default "${HOST_LOG_MAX_FILES:-}" 3)"
   retention_days="$(positive_integer_or_default "${HOST_LOG_RETENTION_DAYS:-}" 30)"
-  nohup node "$runner" \
-    --cwd "$cwd" --stdout "$out_file" --stderr "$err_file" \
-    --max-size-mb "$max_size_mb" --max-files "$max_files" --retention-days "$retention_days" \
-    -- bash -c "$command_text" </dev/null >/dev/null 2>&1 &
+  (
+    cd "$cwd"
+    exec nohup node "$runner" \
+      --cwd "$cwd" --stdout "$out_file" --stderr "$err_file" \
+      --max-size-mb "$max_size_mb" --max-files "$max_files" --retention-days "$retention_days" \
+      -- bash -c "$command_text"
+  ) </dev/null >/dev/null 2>&1 &
   pid=$!
   printf '%s\n' "$pid" > "$pid_file"
   printf 'Started %s (PID %s); logs rotate daily at %sMB with up to %s archives per natural day.\n' "$name" "$pid" "$max_size_mb" "$max_files"
@@ -298,6 +336,14 @@ kill_tree() {
     [[ -n "$child" ]] && kill_tree "$child"
   done < <(pgrep -P "$pid" 2>/dev/null || true)
   kill -TERM "$pid" 2>/dev/null || true
+}
+
+restart_managed_if_running() {
+  local name="$1" cwd="$2" marker="$3" pid_file="$4"
+  if managed_pid "$pid_file" "$cwd" "$marker" >/dev/null; then
+    printf 'Restarting managed %s so code and configuration changes take effect.\n' "$name"
+    stop_managed "$name" "$cwd" "$marker" "$pid_file"
+  fi
 }
 
 stop_managed() {

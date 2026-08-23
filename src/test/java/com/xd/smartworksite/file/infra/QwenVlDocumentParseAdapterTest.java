@@ -53,7 +53,7 @@ class QwenVlDocumentParseAdapterTest {
 
             ParsedDocument parsed = adapter.parse(textRequest());
 
-            assertFallback(parsed, "status 503");
+            assertFallback(parsed, "MODEL_HTTP_ERROR");
         } finally {
             server.stop(0);
         }
@@ -67,7 +67,7 @@ class QwenVlDocumentParseAdapterTest {
 
             ParsedDocument parsed = adapter.parse(textRequest());
 
-            assertFallback(parsed, "JsonParseException");
+            assertFallback(parsed, "MODEL_RESPONSE_INVALID");
         } finally {
             server.stop(0);
         }
@@ -81,7 +81,7 @@ class QwenVlDocumentParseAdapterTest {
 
             ParsedDocument parsed = adapter.parse(textRequest());
 
-            assertFallback(parsed, "response content is empty");
+            assertFallback(parsed, "MODEL_RESPONSE_EMPTY");
         } finally {
             server.stop(0);
         }
@@ -98,7 +98,7 @@ class QwenVlDocumentParseAdapterTest {
 
         ParsedDocument parsed = adapter.parse(textRequest());
 
-        assertFallback(parsed, "ConnectException");
+        assertFallback(parsed, "MODEL_UNREACHABLE");
     }
 
     @Test
@@ -134,13 +134,14 @@ class QwenVlDocumentParseAdapterTest {
                 .hasMessage("qwen vl parse failed");
     }
 
-    private void assertFallback(ParsedDocument parsed, String expectedReasonFragment) throws Exception {
+    private void assertFallback(ParsedDocument parsed, String expectedFailureCode) throws Exception {
         assertThat(parsed.getContent()).contains("智慧工地安全检查制度", "临边洞口设置防护");
         assertThat(parsed.getModelName()).isEqualTo("LOCAL_TEXT_FALLBACK");
         JsonNode metadata = objectMapper.readTree(parsed.getMetadata());
         assertThat(metadata.path("provider").asText()).isEqualTo("LOCAL_TEXT_FALLBACK");
         assertThat(metadata.path("failedModel").asText()).isEqualTo("smart-worksite-chat");
-        assertThat(metadata.path("reason").asText()).contains(expectedReasonFragment).hasSizeLessThanOrEqualTo(240);
+        assertThat(metadata.path("failureCode").asText()).isEqualTo(expectedFailureCode);
+        assertThat(metadata.has("reason")).isFalse();
     }
 
     private FileProperties configuredProperties(HttpServer server) {

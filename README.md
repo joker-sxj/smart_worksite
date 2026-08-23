@@ -185,6 +185,7 @@ com.xd.smartworksite
 - Java 17 或更高版本
 - Maven
 - Node.js 和 npm
+- Linux 使用 `LOCAL_ONLY` 或 `--model-profile` 启动本地模型时还需要 Python 3（`python3`），用于严格校验 `/v1/models` 响应
 
 完整项目必须在 `deploy/.env` 中配置有效的 `QWEN_API_KEY`。脚本不会输出密钥，也不会覆盖已经存在的 `deploy/.env`。
 

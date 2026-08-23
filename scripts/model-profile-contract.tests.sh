@@ -78,7 +78,11 @@ for docker_host in local-llm local-vlm smart-worksite-local-llm; do
 done
 
 if ! bash -c 'set -euo pipefail; source "$1"; CHAT_HOST_PORT=19002; QWEN_VL_ENDPOINT="  \"http://127.0.0.1:18000/v1/chat/completions\"  "; normalize_host_model_endpoints; [[ "$QWEN_VL_ENDPOINT" == http://127.0.0.1:19002/v1/chat/completions ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
-  fail 'Lifecycle must trim whitespace/quotes and synchronize a loopback endpoint with CHAT_HOST_PORT.'
+  fail 'Lifecycle must trim whitespace/quotes and synchronize the default loopback endpoint with CHAT_HOST_PORT.'
+fi
+
+if ! bash -c 'set -euo pipefail; source "$1"; CHAT_HOST_PORT=19002; QWEN_VL_ENDPOINT=http://127.0.0.1:18001/v1/chat/completions; normalize_host_model_endpoints; [[ "$QWEN_VL_ENDPOINT" == http://127.0.0.1:18001/v1/chat/completions ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
+  fail 'Lifecycle must preserve an explicitly configured non-default loopback vision port.'
 fi
 
 if bash -c 'set -euo pipefail; source "$1"; QWEN_VL_ENDPOINT="[http://local-llm:8000/v1/chat/completions](http://local-llm:8000/v1/chat/completions)"; normalize_host_model_endpoints' bash "$repo_root/scripts/lib/lifecycle.sh" >/dev/null 2>&1; then
@@ -108,7 +112,44 @@ fi
 if PREFLIGHT_CAPTURE="$preflight_test_dir/url" PATH="$preflight_test_dir:$PATH" bash -c 'set -euo pipefail; source "$1"; preflight_host_model_endpoint http://127.0.0.1:19003/v1/chat/completions wrong-model' bash "$repo_root/scripts/lib/lifecycle.sh" >/dev/null 2>&1; then
   fail 'Host model preflight must reject an endpoint that does not advertise the configured model.'
 fi
+cat > "$preflight_test_dir/curl" <<'CURL_TEST'
+#!/usr/bin/env bash
+printf '%s\n' '{"data":[{"id":"smart-worksite-chat-old"}]}'
+CURL_TEST
+chmod +x "$preflight_test_dir/curl"
+if PATH="$preflight_test_dir:$PATH" bash -c 'set -euo pipefail; source "$1"; preflight_host_model_endpoint http://127.0.0.1:19003/v1/chat/completions smart-worksite-chat' bash "$repo_root/scripts/lib/lifecycle.sh" >/dev/null 2>&1; then
+  fail 'Host model preflight must require an exact model id match.'
+fi
+cat > "$preflight_test_dir/curl" <<'CURL_TEST'
+#!/usr/bin/env bash
+printf '%s\n' '<html>smart-worksite-chat</html>'
+CURL_TEST
+chmod +x "$preflight_test_dir/curl"
+if PATH="$preflight_test_dir:$PATH" bash -c 'set -euo pipefail; source "$1"; preflight_host_model_endpoint http://127.0.0.1:19003/v1/chat/completions smart-worksite-chat' bash "$repo_root/scripts/lib/lifecycle.sh" >/dev/null 2>&1; then
+  fail 'Host model preflight must reject non-JSON responses.'
+fi
 rm -rf "$preflight_test_dir"
+
+if ! bash -c 'set -euo pipefail; source "$1"; requires_host_model_preflight LOCAL_ONLY ""; requires_host_model_preflight CLOUD_ALLOWED /tmp/profile; ! requires_host_model_preflight CLOUD_ALLOWED ""' bash "$repo_root/scripts/lib/lifecycle.sh"; then
+  fail 'Host model preflight must run for LOCAL_ONLY deployments and selected local model profiles.'
+fi
+
+if ! bash -c 'set -euo pipefail; source "$1"; validate_host_model_configuration http://127.0.0.1:18000/v1/chat/completions smart-worksite-chat; ! validate_host_model_configuration http://127.0.0.1:18000/v1/bad smart-worksite-chat >/dev/null 2>&1' bash "$repo_root/scripts/lib/lifecycle.sh"; then
+  fail 'Static host model validation must reject an invalid chat-completions path without making a network call.'
+fi
+
+if ! bash -c 'set -euo pipefail; source "$1"; [[ "$(effective_qwen_vl_model "")" == qwen-vl-plus ]]; [[ "$(effective_qwen_vl_model smart-worksite-chat)" == smart-worksite-chat ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
+  fail 'Host model validation must use the same default Qwen VL model as the Java application.'
+fi
+
+if grep -q '^for command_name in .*python3' "$repo_root/scripts/start-all.sh"; then
+  fail 'Cloud-only startup must not require host Python 3 when no local model preflight is needed.'
+fi
+
+grep -q 'validate_host_model_configuration' "$repo_root/scripts/start-all.sh" \
+  || fail 'Check-only startup must statically validate the host model configuration.'
+grep -q 'connectivity preflight was skipped' "$repo_root/scripts/start-all.sh" \
+  || fail 'Check-only startup must explicitly report that live model connectivity was not tested.'
 h100="$repo_root/deploy/model-profiles/h100-fp8.env.example"
 a6000="$repo_root/deploy/model-profiles/a6000x2-bf16.env.example"
 [[ -f "$h100" ]] && {
@@ -168,10 +209,24 @@ grep -q -- '--model-profile' "$repo_root/scripts/start-all.sh" || fail 'Linux st
 grep -q 'docker-compose-models.yml' "$repo_root/scripts/lib/lifecycle.sh" || fail 'Linux lifecycle must compose model services when a profile is selected.'
 grep -q 'check-gpu-runtime.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must run GPU preflight before starting local models.'
 grep -q 'check-local-models.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must verify each local model dependency.'
+grep -q 'restart_managed_if_running.*Java backend' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must restart its managed Java backend so pulled code and environment changes take effect.'
+grep -q 'restart_managed_if_running.*Vue frontend' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must restart its managed Vue frontend so pulled UI changes take effect.'
 grep -q 'check-local-models.sh' "$repo_root/scripts/status.sh" || fail 'Linux status must report local model dependencies.'
 
 
 if [[ -f "$repo_root/scripts/lib/lifecycle.sh" ]]; then
+  managed_test_dir="$(mktemp -d)"
+  mkdir -p "$managed_test_dir/expected"
+  bash -c 'while :; do sleep 5; done' run-with-log-limit.mjs --cwd "$managed_test_dir/expected" 'npm run dev' &
+  managed_test_pid=$!
+  printf '%s\n' "$managed_test_pid" > "$managed_test_dir/frontend.pid"
+  if ! bash -c 'set -euo pipefail; source "$1"; managed_pid "$2/frontend.pid" "$2/expected" "npm run dev" >/dev/null' bash "$repo_root/scripts/lib/lifecycle.sh" "$managed_test_dir"; then
+    fail 'Managed PID detection must recognize legacy log-runner processes whose --cwd target differs from the wrapper process cwd.'
+  fi
+  kill "$managed_test_pid" 2>/dev/null || true
+  wait "$managed_test_pid" 2>/dev/null || true
+  rm -rf "$managed_test_dir"
+
   if ! bash -c 'set -euo pipefail; source "$1"; root="$2"; resolved="$(resolve_model_profile "$root" h100-fp8)"; [[ "$resolved" == "$root/deploy/model-profiles/h100-fp8.env.example" ]]; ! resolve_model_profile "$root" missing-profile >/dev/null 2>&1' bash "$repo_root/scripts/lib/lifecycle.sh" "$repo_root"; then
     fail 'Lifecycle must resolve named profiles and reject missing profiles.'
   fi

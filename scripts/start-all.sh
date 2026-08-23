@@ -37,6 +37,11 @@ fi
 normalize_host_model_endpoints
 assert_minimum_free_disk "$root"
 deployment_mode="${AI_DEPLOYMENT_MODE:-CLOUD_ALLOWED}"
+if requires_host_model_preflight "$deployment_mode" "${MODEL_PROFILE_FILE:-}"; then
+  QWEN_VL_MODEL="$(effective_qwen_vl_model "${QWEN_VL_MODEL:-}")"
+  export QWEN_VL_MODEL
+  validate_host_model_configuration "$QWEN_VL_ENDPOINT" "$QWEN_VL_MODEL"
+fi
 if [[ "${deployment_mode^^}" == 'CLOUD_ALLOWED' && -z "${QWEN_API_KEY:-}" ]]; then
   printf 'QWEN_API_KEY is required when AI_DEPLOYMENT_MODE=CLOUD_ALLOWED.\n' >&2
   exit 1
@@ -44,7 +49,14 @@ fi
 java_major="$(java_major_version || true)"
 [[ "$java_major" =~ ^[0-9]+$ ]] && (( java_major >= 17 )) || { printf 'Java 17 or newer is required.\n' >&2; exit 1; }
 printf 'Prerequisite and configuration checks passed.\n'
-$check_only && { printf 'Check mode completed; no services were started.\n'; exit 0; }
+if $check_only; then
+  if requires_host_model_preflight "$deployment_mode" "${MODEL_PROFILE_FILE:-}"; then
+    printf 'Check mode completed; live model connectivity preflight was skipped because no services were started.\n'
+  else
+    printf 'Check mode completed; no services were started.\n'
+  fi
+  exit 0
+fi
 
 mkdir -p "$run_dir"
 cleanup_stale_project_logs "$log_dir"
@@ -54,9 +66,11 @@ if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
   printf 'Starting local model services with profile %s...\n' "${MODEL_PROFILE_NAME:-$model_profile}"
   docker_compose "$root" up -d local-llm local-embedding local-reranker
   "$script_dir/check-local-models.sh" --model-profile "$MODEL_PROFILE_FILE" --wait "${MODEL_STARTUP_TIMEOUT_SECONDS:-3600}"
-  preflight_host_model_endpoint "$QWEN_VL_ENDPOINT" "${QWEN_VL_MODEL:-}"
 else
   rm -f "$run_dir/model-profile"
+fi
+if requires_host_model_preflight "$deployment_mode" "${MODEL_PROFILE_FILE:-}"; then
+  preflight_host_model_endpoint "$QWEN_VL_ENDPOINT" "${QWEN_VL_MODEL:-}"
 fi
 printf 'Starting Docker Compose services...\n'
 docker_compose "$root" up -d --build
@@ -71,6 +85,7 @@ wait_tcp MinIO "$minio_port"
 wait_http 'Python AI service' "http://127.0.0.1:$ai_port/v1/health"
 
 backend_health_uri="http://127.0.0.1:$server_port/actuator/health"
+restart_managed_if_running 'Java backend' "$root" 'spring-boot:run' "$run_dir/backend.pid"
 assert_service_port_available 'Java backend' "$server_port" "$backend_health_uri" http_health
 if ! http_health "$backend_health_uri"; then
   start_managed 'Java backend' "$root" 'mvn spring-boot:run' 'spring-boot:run' "$run_dir/backend.pid" "$log_dir/backend.out.log" "$log_dir/backend.err.log"
@@ -81,6 +96,7 @@ wait_http 'Java backend' "$backend_health_uri" 120 || { printf 'See logs/backend
 
 frontend_dir="$root/frontend"
 frontend_uri='http://localhost:5173/'
+restart_managed_if_running 'Vue frontend' "$frontend_dir" 'npm run dev' "$run_dir/frontend.pid"
 assert_service_port_available 'Vue frontend' 5173 "$frontend_uri" http_ready localhost
 if ! http_ready "$frontend_uri"; then
   if [[ ! -d "$frontend_dir/node_modules" ]]; then
