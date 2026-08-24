@@ -10,7 +10,7 @@ import { useUserStore } from '../../stores/user';
 import type { DataSourceItem, ID, KnowledgeBase, QaMessage, QaSession } from '../../api/types';
 import { hasSuspiciousText } from '../../utils/textQuality';
 import { renderQaMarkdown } from '../../utils/qaMarkdown';
-import { hasActiveQaGeneration, qaMessageText } from './qaMessagePolling';
+import { hasActiveQaGeneration, normalizeQaMessages, qaMessageText } from './qaMessagePolling';
 
 type QaMessageExtra = QaMessage & Record<string, unknown>;
 
@@ -83,7 +83,7 @@ function scheduleMessagePolling(sessionId: ID) {
   messagePollTimer = setTimeout(async () => {
     if (String(activeSessionId.value) !== String(sessionId)) return;
     try {
-      messages.value = normalizeMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+      messages.value = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
       messageError.value = '';
     } catch (err) {
       messageError.value = err instanceof Error ? err.message : t('回答状态刷新失败，请稍后重试。');
@@ -95,35 +95,6 @@ function scheduleMessagePolling(sessionId: ID) {
 
 function renderMessageHtml(msg: QaMessageExtra) {
   return renderQaMarkdown(messageText(msg));
-}
-
-function createQuestionMessage(source: QaMessageExtra): QaMessageExtra {
-  return {
-    ...source,
-    messageId: `${source.messageId}-question`,
-    role: 'user',
-    content: source.question,
-    answer: undefined,
-    references: [],
-    needClarification: false,
-    clarificationQuestions: []
-  };
-}
-
-function normalizeMessages(records: QaMessageExtra[]) {
-  const normalized: QaMessageExtra[] = [];
-  records.forEach((record) => {
-    const role = messageRole(record);
-    if (role === 'user') {
-      normalized.push({ ...record, role: 'user', content: messageText(record) });
-      return;
-    }
-    if (record.question && normalized[normalized.length - 1]?.role !== 'user') {
-      normalized.push(createQuestionMessage(record));
-    }
-    normalized.push({ ...record, role: 'assistant', content: record.answer || record.content || '' });
-  });
-  return normalized;
 }
 
 function createLocalUserMessage(sessionId: ID, projectId: ID, content: string): QaMessageExtra {
@@ -202,7 +173,7 @@ async function switchSession(sessionId: ID) {
   messages.value = [];
   try {
     await fetchQaSessionDetail(sessionId);
-    messages.value = normalizeMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+    messages.value = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
     scheduleMessagePolling(sessionId);
   } catch (err) {
     messageError.value = err instanceof Error ? err.message : t('会话消息加载失败，请检查后端问答接口。');
@@ -327,7 +298,7 @@ async function ask() {
     };
     await sendQuestion(sessionId, payload, projectId) as QaMessageExtra;
     if (activeSend.value?.token !== sendToken) return;
-    messages.value = normalizeMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+    messages.value = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
     scheduleMessagePolling(sessionId);
   } catch (err) {
     if (activeSend.value?.token !== sendToken) return;
@@ -426,7 +397,7 @@ onUnmounted(stopMessagePolling);
           <EmptyState v-if="!messages.length" :description="t('暂无消息，请输入问题开始问答。')" />
           <div v-for="msg in messages" :key="msg.messageId" class="chat" :class="[messageRole(msg), { pending: msg.pending }]">
             <el-tag v-if="hasSuspiciousText(msg.content || msg.answer)" type="warning" size="small" style="margin-left: 6px">疑似历史乱码数据</el-tag>
-            <div v-if="msg.pending" class="typing-indicator" aria-live="polite"><span></span><span></span><span></span>{{ t('AI 正在生成回答') }}</div>
+            <div v-if="msg.pending && messageRole(msg) === 'assistant'" class="typing-indicator" aria-live="polite"><span></span><span></span><span></span>{{ t('AI 正在生成回答') }}</div>
             <div v-else class="message-body" v-html="renderMessageHtml(msg)"></div>
             <template v-if="messageRole(msg) === 'assistant'">
               <div v-if="msg.needClarification || msg.clarificationQuestions?.length" class="clarify-block"><strong>{{ t('需要补充的信息') }}</strong><ul><li v-for="item in msg.clarificationQuestions" :key="item">{{ item }}</li></ul></div>

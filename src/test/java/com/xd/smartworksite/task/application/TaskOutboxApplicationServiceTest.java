@@ -201,6 +201,9 @@ class TaskOutboxApplicationServiceTest {
         public int heartbeat(Long taskId, String workerId, long leaseSeconds) { return 0; }
 
         @Override
+        public int updateProgress(Long taskId, String workerId, long leaseSeconds, String currentStage) { return 0; }
+
+        @Override
         public int completeSuccess(Long taskId, String workerId, String currentStage) { return 0; }
 
         @Override

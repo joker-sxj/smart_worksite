@@ -38,7 +38,7 @@ class TaskQueueWorkerAiDispatchTest {
 
         fixture.worker.pollOnce();
 
-        verify(fixture.reviewService).executeReviewTask(202L, 42L);
+        verify(fixture.reviewService).executeReviewTask(202L, 42L, "worker-test", 60);
         verify(fixture.workerService).completeSuccess(42L, "worker-test", "FINISH");
     }
 

@@ -46,6 +46,11 @@ public interface TaskMapper {
                   @Param("workerId") String workerId,
                   @Param("leaseSeconds") long leaseSeconds);
 
+    int updateProgress(@Param("taskId") Long taskId,
+                       @Param("workerId") String workerId,
+                       @Param("leaseSeconds") long leaseSeconds,
+                       @Param("currentStage") String currentStage);
+
     int completeSuccess(@Param("taskId") Long taskId,
                         @Param("workerId") String workerId,
                         @Param("currentStage") String currentStage);

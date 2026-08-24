@@ -36,6 +36,7 @@ public class TaskQueueWorker {
     private static final String TASK_TYPE_QA_GENERATION = "QA_GENERATION";
     private static final String TASK_TYPE_COMPLIANCE_REVIEW = "COMPLIANCE_REVIEW";
     private static final String STAGE_FINISH = "FINISH";
+    private static final String STAGE_WORKER_FAILED = "WORKER_FAILED";
     private static final Logger log = LoggerFactory.getLogger(TaskQueueWorker.class);
 
     private final RedisQueueService redisQueueService;
@@ -118,7 +119,7 @@ public class TaskQueueWorker {
             taskWorkerApplicationService.completeSuccess(message.getTaskId(), properties.getWorkerId(), STAGE_FINISH);
         } catch (RuntimeException ex) {
             taskWorkerApplicationService.completeFailure(message.getTaskId(), properties.getWorkerId(),
-                    claim.getTask().getCurrentStage(), ex.getMessage());
+                    STAGE_WORKER_FAILED, ex.getMessage());
             log.error("task worker execution failed, eventId={}, taskId={}, taskType={}",
                     message.getEventId(), message.getTaskId(), claim.getTask().getTaskType(), ex);
         }
@@ -151,7 +152,7 @@ public class TaskQueueWorker {
             if (reviewApplicationService == null) {
                 throw new BusinessException(ErrorCode.PARAM_ERROR, "compliance review service is not configured");
             }
-            reviewApplicationService.executeReviewTask(claim.getTask().getBizId(), message.getTaskId());
+            reviewApplicationService.executeReviewTask(claim.getTask().getBizId(), message.getTaskId(), properties.getWorkerId(), properties.getLeaseSeconds());
             return;
         }
         throw new BusinessException(ErrorCode.PARAM_ERROR, "unsupported task type: " + claim.getTask().getTaskType());

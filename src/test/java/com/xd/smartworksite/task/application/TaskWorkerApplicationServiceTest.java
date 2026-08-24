@@ -72,6 +72,22 @@ class TaskWorkerApplicationServiceTest {
     }
 
     @Test
+    void recordProgressUpdatesCurrentStageAndRenewsLease() {
+        GenerateTask task = task(1L, TaskStatus.RUNNING.name());
+        task.setWorkerId("worker-a");
+        taskRepository.tasks.add(task);
+
+        service.recordProgress(1L, "worker-a", 60, "REVIEW_AI", "正在调用审查模型");
+
+        assertThat(task.getCurrentStage()).isEqualTo("REVIEW_AI");
+        assertThat(task.getLeaseUntil()).isAfter(LocalDateTime.now().plusSeconds(30));
+        assertThat(taskRepository.stages).singleElement().satisfies(stage -> {
+            assertThat(stage.getStageCode()).isEqualTo("REVIEW_AI");
+            assertThat(stage.getOutputSummary()).isEqualTo("正在调用审查模型");
+        });
+    }
+
+    @Test
     void completeSuccessRequiresRunningOwner() {
         GenerateTask task = task(1L, TaskStatus.RUNNING.name());
         task.setWorkerId("worker-a");
@@ -215,6 +231,19 @@ class TaskWorkerApplicationServiceTest {
                     || Boolean.TRUE.equals(task.getCancelRequested())) {
                 return 0;
             }
+            task.setLeaseUntil(LocalDateTime.now().plusSeconds(leaseSeconds));
+            task.setLastHeartbeatAt(LocalDateTime.now());
+            return 1;
+        }
+
+        @Override
+        public int updateProgress(Long taskId, String workerId, long leaseSeconds, String currentStage) {
+            GenerateTask task = findById(taskId).orElseThrow();
+            if (!TaskStatus.RUNNING.name().equals(task.getStatus()) || !workerId.equals(task.getWorkerId())
+                    || Boolean.TRUE.equals(task.getCancelRequested())) {
+                return 0;
+            }
+            task.setCurrentStage(currentStage);
             task.setLeaseUntil(LocalDateTime.now().plusSeconds(leaseSeconds));
             task.setLastHeartbeatAt(LocalDateTime.now());
             return 1;

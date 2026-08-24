@@ -25,6 +25,7 @@ import com.xd.smartworksite.review.repository.ReviewRecordRepository;
 import com.xd.smartworksite.template.application.TemplateApplicationService;
 import com.xd.smartworksite.template.dto.TemplateResponse;
 import com.xd.smartworksite.task.application.TaskOutboxApplicationService;
+import com.xd.smartworksite.task.application.TaskWorkerApplicationService;
 import com.xd.smartworksite.task.domain.GenerateTask;
 import com.xd.smartworksite.task.domain.TaskStatus;
 import com.xd.smartworksite.task.repository.TaskRepository;
@@ -53,6 +54,7 @@ public class ReviewApplicationService {
     private final ObjectMapper objectMapper;
     private final TaskRepository taskRepository;
     private final TaskOutboxApplicationService taskOutboxApplicationService;
+    private final TaskWorkerApplicationService taskWorkerApplicationService;
 
     public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
                                     ProjectAccessApplicationService projectAccessApplicationService,
@@ -62,7 +64,7 @@ public class ReviewApplicationService {
                                     ReviewDocumentTextExtractor documentTextExtractor,
                                     ObjectMapper objectMapper) {
         this(reviewRecordRepository, projectAccessApplicationService, fileObjectApplicationService, templateApplicationService,
-                reviewAiGateway, documentTextExtractor, objectMapper, null, null);
+                reviewAiGateway, documentTextExtractor, objectMapper, null, null, null);
     }
 
     @Autowired
@@ -74,7 +76,8 @@ public class ReviewApplicationService {
                                     ReviewDocumentTextExtractor documentTextExtractor,
                                     ObjectMapper objectMapper,
                                     TaskRepository taskRepository,
-                                    TaskOutboxApplicationService taskOutboxApplicationService) {
+                                    TaskOutboxApplicationService taskOutboxApplicationService,
+                                    TaskWorkerApplicationService taskWorkerApplicationService) {
         this.reviewRecordRepository = reviewRecordRepository;
         this.projectAccessApplicationService = projectAccessApplicationService;
         this.fileObjectApplicationService = fileObjectApplicationService;
@@ -84,6 +87,7 @@ public class ReviewApplicationService {
         this.objectMapper = objectMapper;
         this.taskRepository = taskRepository;
         this.taskOutboxApplicationService = taskOutboxApplicationService;
+        this.taskWorkerApplicationService = taskWorkerApplicationService;
     }
 
     @Transactional
@@ -229,6 +233,10 @@ public class ReviewApplicationService {
     }
 
     public void executeReviewTask(Long recordId, Long taskId) {
+        executeReviewTask(recordId, taskId, null, 0);
+    }
+
+    public void executeReviewTask(Long recordId, Long taskId, String workerId, long leaseSeconds) {
         ReviewRecord record = reviewRecordRepository.findById(recordId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "review record not found"));
         if (!taskId.equals(record.getTaskId())) {
@@ -240,15 +248,18 @@ public class ReviewApplicationService {
             throw new BusinessException(ErrorCode.CONFLICT, "review record state is not executable");
         }
         try {
+            recordProgress(taskId, workerId, leaseSeconds, "REVIEW_EXTRACTING", "正在读取审查模板和待审文件");
             TemplateResponse template = templateApplicationService.getTemplateForSystem(record.getTemplateId());
             FileObjectResponse file = fileObjectApplicationService.getFileForSystem(record.getFileId());
             ReviewDocumentTextExtractor.ExtractedText reviewText = extractReviewFileTextForSystem(record, file);
             ReviewDocumentTextExtractor.ExtractedText templateText = extractTemplateTextForSystem(template);
+            recordProgress(taskId, workerId, leaseSeconds, "REVIEW_AI", "正在调用审查模型");
             AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgentForSystem(buildAgentRequest(record, template, file, reviewText, templateText));
             Map<String, Object> result = parseAgentResult(aiResponse);
             result.put("providerTraceId", aiResponse.getProviderTraceId());
             if (aiResponse.getSteps() != null && !aiResponse.getSteps().isEmpty()) result.put("steps", aiResponse.getSteps());
             List<Map<String, Object>> issues = extractIssues(result);
+            recordProgress(taskId, workerId, leaseSeconds, "REVIEW_PERSISTING", "正在保存审查结果");
             if (reviewRecordRepository.markCompleted(recordId, writeJson(issues), writeJson(result), 1L) == 0) {
                 throw new BusinessException(ErrorCode.CONFLICT, "review record complete state changed");
             }
@@ -264,6 +275,11 @@ public class ReviewApplicationService {
             }
             throw ex;
         }
+    }
+
+    private void recordProgress(Long taskId, String workerId, long leaseSeconds, String stage, String summary) {
+        if (taskWorkerApplicationService == null || workerId == null || leaseSeconds <= 0) return;
+        taskWorkerApplicationService.recordProgress(taskId, workerId, leaseSeconds, stage, summary);
     }
 
     @Transactional

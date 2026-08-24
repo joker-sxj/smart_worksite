@@ -41,7 +41,7 @@ function isPipeRow(line: string) {
 }
 
 function splitSlashHeader(line: string) {
-  const parts = line.split(/\s*\/\s*/).map((part) => part.trim()).filter(Boolean);
+  const parts = line.split(/\s+\/\s+/).map((part) => part.trim()).filter(Boolean);
   if (parts.length < 3 || parts.length > 6) return [];
   if (parts.some((part) => part.length > 24)) return [];
   return parts;
@@ -61,6 +61,19 @@ function renderTable(headers: string[], rows: string[][]) {
   return `<table><thead><tr>${headers.map((cell) => `<th>${renderInline(cell)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
+function renderMalformedSlashTable(lines: string[], start: number, headers: string[]) {
+  const separatorOffset = lines.slice(start + 1, start + 10).findIndex((line) => isTableSeparator(line.trim()));
+  if (separatorOffset < 0) return { html: '', next: start };
+
+  const rows: string[][] = [];
+  let index = start + separatorOffset + 2;
+  while (index < lines.length && isPipeRow(lines[index].trim())) {
+    const row = splitPipeRow(lines[index].trim());
+    if (row.length === headers.length) rows.push(row);
+    index += 1;
+  }
+  return { html: renderTable(headers, rows), next: index };
+}
 function renderPipeTable(lines: string[], start: number, fallbackHeaders?: string[]) {
   const rows: string[][] = [];
   let index = start;
@@ -130,11 +143,19 @@ export function renderQaMarkdown(value: string) {
     }
 
     const slashHeader = splitSlashHeader(line);
-    if (slashHeader.length && lines[i + 1] && isPipeRow(lines[i + 1].trim())) {
-      const block = renderPipeTable(lines, i + 1, slashHeader);
-      html.push(block.html || `<p>${renderInline(line)}</p>`);
-      i = block.next;
-      continue;
+    if (slashHeader.length) {
+      const malformedBlock = renderMalformedSlashTable(lines, i, slashHeader);
+      if (malformedBlock.html) {
+        html.push(malformedBlock.html);
+        i = malformedBlock.next;
+        continue;
+      }
+      if (lines[i + 1] && isPipeRow(lines[i + 1].trim())) {
+        const block = renderPipeTable(lines, i + 1, slashHeader);
+        html.push(block.html || `<p>${renderInline(line)}</p>`);
+        i = block.next;
+        continue;
+      }
     }
 
     if (isPipeRow(line)) {

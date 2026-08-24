@@ -126,7 +126,7 @@ class TaskQueueWorkerTest {
         verify(reportGenerationApplicationService, never()).executeReportTask(any(), any());
         verify(knowledgeBaseApplicationService, never()).executeIndexTask(any(), any());
         verify(workerApplicationService).completeFailure(
-                eq(1L), eq("worker-test"), eq("WORKER_CLAIMED"), eq("unsupported task type: UNSUPPORTED"));
+                eq(1L), eq("worker-test"), eq("WORKER_FAILED"), eq("unsupported task type: UNSUPPORTED"));
     }
 
     @Test

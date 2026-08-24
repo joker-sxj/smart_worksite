@@ -13,7 +13,7 @@ import { fetchTaskStages } from '../../api/task';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, ReviewRecord, ReviewTemplate, TaskStageLog } from '../../api/types';
-import { isReviewTerminal, reviewStorageKey } from './reviewPolling';
+import { isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
 
 const router = useRouter();
 const projectStore = useProjectStore();
@@ -52,7 +52,7 @@ function t(text: string) { return text; }
 function goTemplates() {
   router.push({ path: '/templates', query: { category: 'REVIEW', action: 'upload' } });
 }
-function progressOf(record: ReviewRecord) { return ['SUCCESS', 'COMPLETED', 'FAILED', 'ARCHIVED'].includes(String(record.status)) ? 100 : 60; }
+function progressOf(record: ReviewRecord) { return progressFromReviewState(record, logs.value); }
 function canUpdateIssue(record: ReviewRecord | null) { return canManageReview.value && record?.status === 'COMPLETED'; }
 
 function stopRecordPolling() {
@@ -231,7 +231,24 @@ onUnmounted(stopRecordPolling);
     </el-card>
     <el-card v-if="submittedInfo && !currentRecord" class="work-card"><h3 class="panel-title">{{ t('已提交任务') }}</h3><p>recordId: {{ submittedInfo.recordId || '-' }}</p><p>taskId: {{ submittedInfo.taskId || '-' }}</p><p>status: {{ submittedInfo.status || '-' }}</p></el-card>
     <EmptyState v-if="!loading && !resultNotice && !currentRecord && !submittedInfo" :description="t('暂无审查记录，请上传文件后发起审查。')" />
-    <template v-else-if="currentRecord"><el-card class="work-card"><h3 class="panel-title">{{ t('审查进度') }}</h3><TaskProgress :percentage="progressOf(currentRecord)" :status="currentRecord.status" :logs="logs" /></el-card><div class="two-col"><el-card class="work-card"><h3 class="panel-title">{{ t('问题列表') }}</h3><AppTable :data="currentRecord.issues || []" :columns="[{ prop: 'severity', label: t('严重程度'), width: 90 }, { prop: 'location', label: t('问题定位') }, { prop: 'ruleName', label: t('规则名称') }, { prop: 'description', label: t('问题描述') }, { prop: 'suggestion', label: t('修改建议') }]"><template #empty><EmptyState :description="t('暂无审查问题。')" /></template><el-table-column :label="t('问题状态')" width="140"><template #default="{ row }"><StatusTag :status="row.status || 'OPEN'" /></template></el-table-column><el-table-column :label="t('处理')" width="180"><template #default="{ row }"><el-select :model-value="row.status || 'OPEN'" size="small" :disabled="!canUpdateIssue(currentRecord)" :loading="updatingIssueId === row.issueId" @change="(value: string) => changeIssueStatus(row.issueId, value, row.comment)"><el-option v-for="item in issueStatusOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column></AppTable></el-card><JsonViewer :value="currentRecord" :title="t('审查 JSON 结果')" /></div></template>
+    <template v-else-if="currentRecord">
+      <el-card class="work-card">
+        <h3 class="panel-title">{{ t('审查进度') }}</h3>
+        <el-alert v-if="currentRecord.status === 'FAILED'" :title="currentRecord.errorMessage || t('审查失败，未生成结果。')" type="error" show-icon :closable="false" style="margin-bottom: 12px" />
+        <TaskProgress :percentage="progressOf(currentRecord)" :status="currentRecord.status" :logs="logs" />
+      </el-card>
+      <div class="two-col">
+        <el-card class="work-card">
+          <h3 class="panel-title">{{ t('问题列表') }}</h3>
+          <AppTable :data="currentRecord.issues || []" :columns="[{ prop: 'severity', label: t('严重程度'), width: 90 }, { prop: 'location', label: t('问题定位') }, { prop: 'ruleName', label: t('规则名称') }, { prop: 'description', label: t('问题描述') }, { prop: 'suggestion', label: t('修改建议') }]">
+            <template #empty><EmptyState :description="currentRecord.status === 'FAILED' ? t('审查失败，未生成问题列表。') : t('暂无审查问题。')" /></template>
+            <el-table-column :label="t('问题状态')" width="140"><template #default="{ row }"><StatusTag :status="row.status || 'OPEN'" /></template></el-table-column>
+            <el-table-column :label="t('处理')" width="180"><template #default="{ row }"><el-select :model-value="row.status || 'OPEN'" size="small" :disabled="!canUpdateIssue(currentRecord)" :loading="updatingIssueId === row.issueId" @change="(value: string) => changeIssueStatus(row.issueId, value, row.comment)"><el-option v-for="item in issueStatusOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
+          </AppTable>
+        </el-card>
+        <JsonViewer :value="currentRecord" :title="t('审查 JSON 结果')" />
+      </div>
+    </template>
   </div>
 </template>
 

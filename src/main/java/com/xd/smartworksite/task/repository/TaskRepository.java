@@ -31,6 +31,8 @@ public interface TaskRepository {
 
     int heartbeat(Long taskId, String workerId, long leaseSeconds);
 
+    int updateProgress(Long taskId, String workerId, long leaseSeconds, String currentStage);
+
     int completeSuccess(Long taskId, String workerId, String currentStage);
 
     int completeFailure(Long taskId, String workerId, String currentStage, String errorMessage);

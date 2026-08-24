@@ -271,6 +271,9 @@ class TaskApplicationServiceTest {
         }
 
         @Override
+        public int updateProgress(Long taskId, String workerId, long leaseSeconds, String currentStage) { return 0; }
+
+        @Override
         public int completeSuccess(Long taskId, String workerId, String currentStage) {
             return 0;
         }

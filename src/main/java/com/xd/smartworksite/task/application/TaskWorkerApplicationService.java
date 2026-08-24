@@ -63,6 +63,21 @@ public class TaskWorkerApplicationService {
     }
 
     @Transactional
+    public GenerateTask recordProgress(Long taskId, String workerId, long leaseSeconds, String currentStage, String summary) {
+        requireTaskId(taskId);
+        String normalizedWorkerId = requireWorkerId(workerId);
+        long safeLeaseSeconds = requirePositiveLease(leaseSeconds);
+        String stage = normalizeStage(currentStage, STAGE_WORKER_HEARTBEAT);
+        int updated = taskRepository.updateProgress(taskId, normalizedWorkerId, safeLeaseSeconds, stage);
+        if (updated == 0) {
+            throw new BusinessException(ErrorCode.CONFLICT, "task progress update rejected");
+        }
+        GenerateTask task = requireTask(taskId);
+        insertStage(task, stage, TaskStatus.RUNNING.name(), summary, null);
+        return task;
+    }
+
+    @Transactional
     public GenerateTask completeSuccess(Long taskId, String workerId, String currentStage) {
         requireTaskId(taskId);
         String normalizedWorkerId = requireWorkerId(workerId);

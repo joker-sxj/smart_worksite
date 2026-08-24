@@ -72,6 +72,11 @@ public class MyBatisTaskRepository implements TaskRepository {
     }
 
     @Override
+    public int updateProgress(Long taskId, String workerId, long leaseSeconds, String currentStage) {
+        return taskMapper.updateProgress(taskId, workerId, leaseSeconds, currentStage);
+    }
+
+    @Override
     public int completeSuccess(Long taskId, String workerId, String currentStage) {
         return taskMapper.completeSuccess(taskId, workerId, currentStage);
     }

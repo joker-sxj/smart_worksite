@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isReviewTerminal, reviewStorageKey } from './reviewPolling';
+import { isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
 
 describe('review polling', () => {
   it('recognizes terminal states', () => {
@@ -10,5 +10,13 @@ describe('review polling', () => {
 
   it('isolates persisted records by project', () => {
     expect(reviewStorageKey(1)).not.toBe(reviewStorageKey(2));
+  });
+
+  it('maps persisted worker stages to truthful progress', () => {
+    expect(progressFromReviewState({ status: 'PROCESSING' } as never, [])).toBe(10);
+    expect(progressFromReviewState({ status: 'PROCESSING' } as never, [{ stageCode: 'REVIEW_EXTRACTING' }] as never)).toBe(40);
+    expect(progressFromReviewState({ status: 'PROCESSING' } as never, [{ stageCode: 'REVIEW_AI' }] as never)).toBe(70);
+    expect(progressFromReviewState({ status: 'COMPLETED' } as never, [])).toBe(100);
+    expect(progressFromReviewState({ status: 'FAILED' } as never, [{ stageCode: 'REVIEW_EXTRACTING' }] as never)).toBe(40);
   });
 });
