@@ -17,7 +17,7 @@ function normalizeText(value: string) {
   return value
     .replace(/\r\n?/g, '\n')
     .replace(/^\s*(\|\s*)+\s*$/gm, '')
-    .replace(/\s*---+\s*/g, '\n\n')
+    .replace(/^\s*---+\s*$/gm, '\n\n')
     .replace(/\s+(#{1,6}\s+)/g, '\n$1')
     .replace(/\s+([一二三四五六七八九十\d]+[、.．]\s*\*\*[^*]+?\*\*)/g, '\n\n$1')
     .replace(/\s+(\*\*[一二三四五六七八九十\d]+[、.．][^*]+?\*\*)/g, '\n\n$1\n')

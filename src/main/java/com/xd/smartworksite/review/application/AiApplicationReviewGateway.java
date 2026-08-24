@@ -17,4 +17,9 @@ public class AiApplicationReviewGateway implements ReviewAiGateway {
     public AgentInvokeResponse invokeAgent(AgentInvokeRequest request) {
         return aiApplicationService.invokeAgent(request);
     }
+
+    @Override
+    public AgentInvokeResponse invokeAgentForSystem(AgentInvokeRequest request) {
+        return aiApplicationService.invokeAgentForSystem(request);
+    }
 }

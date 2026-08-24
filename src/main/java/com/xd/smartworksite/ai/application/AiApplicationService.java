@@ -66,6 +66,15 @@ public class AiApplicationService {
 
     public AgentInvokeResponse invokeAgent(AgentInvokeRequest request) {
         projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
+        return doInvokeAgent(request);
+    }
+
+    public AgentInvokeResponse invokeAgentForSystem(AgentInvokeRequest request) {
+        projectAccessApplicationService.requireProjectWritableForSystem(request.getProjectId());
+        return doInvokeAgent(request);
+    }
+
+    private AgentInvokeResponse doInvokeAgent(AgentInvokeRequest request) {
         AiProviderResponse response = pythonClient.post(properties.getPaths().getAgentInvoke(), "AGENT_INVOKE", request.getProjectId(), request);
         AgentInvokeResponse result = pythonClient.convertData(response, AgentInvokeResponse.class);
         result.setProviderTraceId(response.getTraceId());

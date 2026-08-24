@@ -10,7 +10,7 @@ import { useUserStore } from '../../stores/user';
 import type { DataSourceItem, ID, KnowledgeBase, QaMessage, QaSession } from '../../api/types';
 import { hasSuspiciousText } from '../../utils/textQuality';
 import { renderQaMarkdown } from '../../utils/qaMarkdown';
-import { hasActiveQaGeneration } from './qaMessagePolling';
+import { hasActiveQaGeneration, qaMessageText } from './qaMessagePolling';
 
 type QaMessageExtra = QaMessage & Record<string, unknown>;
 
@@ -69,10 +69,7 @@ function messageRole(msg: QaMessageExtra) {
 }
 
 function messageText(msg: QaMessageExtra) {
-  const status = String(msg.status || '').toUpperCase();
-  if (['PENDING', 'PROCESSING', 'QUEUED', 'RUNNING'].includes(status)) return '正在生成回答，请稍候...';
-  if (status === 'FAILED') return String(msg.errorMessage || msg.answer || msg.content || '回答生成失败，请稍后重试。');
-  return String(msg.content || msg.answer || msg.question || '');
+  return qaMessageText(msg);
 }
 
 function stopMessagePolling() {

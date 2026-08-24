@@ -244,7 +244,7 @@ public class ReviewApplicationService {
             FileObjectResponse file = fileObjectApplicationService.getFileForSystem(record.getFileId());
             ReviewDocumentTextExtractor.ExtractedText reviewText = extractReviewFileTextForSystem(record, file);
             ReviewDocumentTextExtractor.ExtractedText templateText = extractTemplateTextForSystem(template);
-            AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgent(buildAgentRequest(record, template, file, reviewText, templateText));
+            AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgentForSystem(buildAgentRequest(record, template, file, reviewText, templateText));
             Map<String, Object> result = parseAgentResult(aiResponse);
             result.put("providerTraceId", aiResponse.getProviderTraceId());
             if (aiResponse.getSteps() != null && !aiResponse.getSteps().isEmpty()) result.put("steps", aiResponse.getSteps());

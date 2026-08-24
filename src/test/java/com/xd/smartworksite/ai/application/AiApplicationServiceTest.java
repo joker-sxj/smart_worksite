@@ -3,6 +3,8 @@ package com.xd.smartworksite.ai.application;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xd.smartworksite.ai.domain.DataSourceRecord;
 import com.xd.smartworksite.ai.domain.ExternalCallLog;
+import com.xd.smartworksite.ai.dto.AgentInvokeRequest;
+import com.xd.smartworksite.ai.dto.AgentInvokeResponse;
 import com.xd.smartworksite.ai.dto.DatabaseQueryRequest;
 import com.xd.smartworksite.ai.dto.DatabaseQueryResponse;
 import com.xd.smartworksite.ai.dto.ExternalCallLogQueryRequest;
@@ -70,7 +72,7 @@ class AiApplicationServiceTest {
     }
 
     @Test
-    void systemModelAndRagCallsDoNotRequireSecurityContext() {
+    void systemAiCallsDoNotRequireSecurityContext() {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
