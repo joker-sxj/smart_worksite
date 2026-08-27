@@ -26,7 +26,8 @@ done
 if http_health "http://127.0.0.1:${ports[0]}/actuator/health"; then printf 'Backend health: UP\n'; else printf 'Backend health: DOWN\n'; healthy=false; fi
 if http_health "http://127.0.0.1:${ports[1]}/v1/health"; then printf 'Python AI health: UP\n'; else printf 'Python AI health: DOWN\n'; healthy=false; fi
 if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
-  printf 'Local model profile: %s\n' "${MODEL_PROFILE_NAME:-$MODEL_PROFILE_FILE}"
+  printf 'Local model configuration: profile=%s maxContextTokens=%s deploymentMode=%s\n' "${MODEL_PROFILE_NAME:-$MODEL_PROFILE_FILE}" "${CHAT_MAX_MODEL_LEN:-unknown}" "${AI_DEPLOYMENT_MODE:-unknown}"
+  printf 'Local model readiness:\n'
   "$script_dir/check-local-models.sh" --model-profile "$MODEL_PROFILE_FILE" || healthy=false
 else
   printf 'Local model profile: not managed by lifecycle scripts\n'

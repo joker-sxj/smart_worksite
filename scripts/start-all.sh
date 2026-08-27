@@ -65,7 +65,7 @@ if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
   "$script_dir/check-gpu-runtime.sh" "$MODEL_PROFILE_FILE"
   printf 'Starting local model services with profile %s...\n' "${MODEL_PROFILE_NAME:-$model_profile}"
   docker_compose "$root" up -d local-llm local-embedding local-reranker
-  "$script_dir/check-local-models.sh" --model-profile "$MODEL_PROFILE_FILE" --wait "${MODEL_STARTUP_TIMEOUT_SECONDS:-3600}"
+  "$script_dir/check-local-models.sh" --model-profile "$MODEL_PROFILE_FILE" --wait "${MODEL_STARTUP_TIMEOUT_SECONDS:-3600}" --smoke
 else
   rm -f "$run_dir/model-profile"
 fi
