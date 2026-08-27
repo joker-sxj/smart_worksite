@@ -253,6 +253,10 @@ fi
 
 [[ -f "$repo_root/scripts/check-gpu-runtime.sh" ]] && {
   grep -q 'nvidia-smi' "$repo_root/scripts/check-gpu-runtime.sh" || fail 'GPU preflight must inspect the host GPU.'
+  grep -q -- '--query-gpu=index,name,memory.total,driver_version' "$repo_root/scripts/check-gpu-runtime.sh" || fail 'GPU preflight must query GPU model, memory, and driver in one stable nvidia-smi call.'
+  grep -q 'GPU_COUNT' "$repo_root/scripts/check-gpu-runtime.sh" || fail 'GPU preflight must enforce the profile GPU_COUNT field.'
+  grep -q 'GPU_MIN_MEMORY_GB' "$repo_root/scripts/check-gpu-runtime.sh" || fail 'GPU preflight must enforce the profile GPU_MIN_MEMORY_GB field.'
+  grep -q 'GPU_EXPECTED_MODEL_REGEX' "$repo_root/scripts/check-gpu-runtime.sh" || fail 'GPU preflight must enforce the profile GPU_EXPECTED_MODEL_REGEX field.'
   grep -q 'NVIDIA_RUNTIME_TEST_IMAGE' "$repo_root/scripts/check-gpu-runtime.sh" || fail 'GPU runtime test image must be configurable.'
   grep -Eq 'docker run .*--gpus' "$repo_root/scripts/check-gpu-runtime.sh" || fail 'GPU preflight must non-destructively test Docker GPU access.'
 }
@@ -304,9 +308,10 @@ fi
 
 if [[ -f "$repo_root/scripts/check-gpu-runtime.sh" && -f "$repo_root/deploy/model-profiles/h100-fp8.env.example" ]]; then
   gpu_test_dir="$(mktemp -d)"
-  cat > "$gpu_test_dir/nvidia-smi" <<'NVIDIA_TEST'
+cat > "$gpu_test_dir/nvidia-smi" <<'NVIDIA_TEST'
 #!/usr/bin/env bash
 case "$*" in
+  *--query-gpu=index,name,memory.total,driver_version*) printf '0, NVIDIA H100 PCIe, 81559, 535.309.01\n' ;;
   *--query-gpu=index*) printf '0\n' ;;
   *--query-gpu=driver_version*) printf '535.309.01\n' ;;
   *) printf 'NVIDIA H100 PCIe, 81559 MiB, 535.309.01\n' ;;
