@@ -26,6 +26,8 @@ load_profile_value() {
 required_files=(
   deploy/model-profiles/h100-fp8.env.example
   deploy/model-profiles/a6000x2-bf16.env.example
+  deploy/model-profiles/a6000x2-production-32k.env.example
+  deploy/model-profiles/a6000x2-stable-16k.env.example
   deploy/docker-compose-models.yml
   scripts/check-gpu-runtime.sh
   scripts/check-local-models.sh
@@ -36,7 +38,7 @@ for file in scripts/check-gpu-runtime.sh scripts/check-local-models.sh scripts/s
   [[ -f "$repo_root/$file" ]] && bash -n "$repo_root/$file" || fail "Bash syntax error or missing script: $file"
 done
 
-for profile in h100-fp8 a6000x2-bf16; do
+for profile in h100-fp8 a6000x2-bf16 a6000x2-production-32k a6000x2-stable-16k; do
   file="deploy/model-profiles/${profile}.env.example"
   [[ -f "$repo_root/$file" ]] || continue
   for key in MODEL_PROFILE_NAME VLLM_IMAGE CHAT_MODEL_ID CHAT_MODEL_REVISION CHAT_TENSOR_PARALLEL_SIZE CHAT_MAX_MODEL_LEN CHAT_MAX_NUM_SEQS CHAT_GPU_COUNT CHAT_CUDA_VISIBLE_DEVICES EMBEDDING_MODEL_ID EMBEDDING_MODEL_REVISION EMBEDDING_GPU_COUNT EMBEDDING_CUDA_VISIBLE_DEVICES RERANK_MODEL_ID RERANK_MODEL_REVISION RERANK_GPU_COUNT RERANK_CUDA_VISIBLE_DEVICES; do
@@ -65,6 +67,10 @@ grep -Eq '^QWEN_VL_CONTAINER_ENDPOINT=http://local-llm:8000/v1/chat/completions$
 grep -Fq 'QWEN_VL_ENDPOINT: ${QWEN_VL_CONTAINER_ENDPOINT:-http://local-llm:8000/v1/chat/completions}' \
   "$repo_root/deploy/docker-compose-env.yml" \
   || fail 'The Python container must receive the container-side vision endpoint.'
+
+grep -Fq 'QWEN_RERANK_BASE_URL: ${QWEN_RERANK_BASE_URL:-http://local-reranker:8000/v1/rerank}' \
+  "$repo_root/deploy/docker-compose-env.yml" \
+  || fail 'The Python container reranker default must use the local-reranker service port 8000.'
 
 if ! bash -c 'set -euo pipefail; source "$1"; CHAT_HOST_PORT=19000; QWEN_VL_ENDPOINT=http://local-vlm:8000/v1/chat/completions; normalize_host_model_endpoints; [[ "$QWEN_VL_ENDPOINT" == http://127.0.0.1:19000/v1/chat/completions ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
   fail 'Lifecycle must migrate the legacy Docker-only vision endpoint for the host-side Java parser.'
@@ -152,6 +158,8 @@ grep -q 'connectivity preflight was skipped' "$repo_root/scripts/start-all.sh" \
   || fail 'Check-only startup must explicitly report that live model connectivity was not tested.'
 h100="$repo_root/deploy/model-profiles/h100-fp8.env.example"
 a6000="$repo_root/deploy/model-profiles/a6000x2-bf16.env.example"
+a6000_32k="$repo_root/deploy/model-profiles/a6000x2-production-32k.env.example"
+a6000_16k="$repo_root/deploy/model-profiles/a6000x2-stable-16k.env.example"
 [[ -f "$h100" ]] && {
   [[ "$(load_profile_value deploy/model-profiles/h100-fp8.env.example CHAT_TENSOR_PARALLEL_SIZE)" == 1 ]] || fail 'H100 tensor parallel size must be 1.'
   [[ "$(load_profile_value deploy/model-profiles/h100-fp8.env.example CHAT_GPU_COUNT)" == 1 ]] || fail 'H100 profile must reserve one GPU for the chat model.'
@@ -163,13 +171,35 @@ a6000="$repo_root/deploy/model-profiles/a6000x2-bf16.env.example"
   grep -Eq '^CHAT_MODEL_ID=Qwen/Qwen3\.8-27B$' "$a6000" || fail 'A6000x2 profile must use the approved Qwen3.8 27B BF16 model.'
 }
 
+for profile in a6000x2-production-32k a6000x2-stable-16k; do
+  file="deploy/model-profiles/${profile}.env.example"
+  [[ -f "$repo_root/$file" ]] || continue
+  [[ "$(load_profile_value "$file" GPU_COUNT)" == 2 ]] || fail "$profile must declare exactly two GPUs."
+  [[ "$(load_profile_value "$file" GPU_MIN_MEMORY_GB)" == 48 ]] || fail "$profile must declare a 48GB minimum GPU memory size."
+  [[ "$(load_profile_value "$file" GPU_EXPECTED_MODEL_REGEX)" == "RTX A6000" ]] || fail "$profile must declare the A6000 target GPU regex."
+  [[ "$(load_profile_value "$file" CHAT_TENSOR_PARALLEL_SIZE)" == 2 ]] || fail "$profile must use tensor parallelism across both A6000 GPUs."
+  [[ "$(load_profile_value "$file" CHAT_GPU_COUNT)" == 2 ]] || fail "$profile must reserve two GPUs for chat."
+  [[ "$(load_profile_value "$file" CHAT_CUDA_VISIBLE_DEVICES)" == "0,1" ]] || fail "$profile must make both A6000 GPUs visible to chat."
+  [[ "$(load_profile_value "$file" CHAT_MODEL_ID)" == "Qwen/Qwen3.8-27B" ]] || fail "$profile must use the approved BF16 Qwen3.8 27B model."
+  [[ "$(load_profile_value "$file" CHAT_MODEL_REVISION)" =~ ^[0-9a-f]{40}$ ]] || fail "$profile must pin the chat model revision."
+  [[ "$(load_profile_value "$file" VLLM_IMAGE)" =~ ^vllm/vllm-openai:v0\.27\.1-cu129@sha256:[0-9a-f]{64}$ ]] || fail "$profile must pin the vLLM image by digest."
+  case "$profile" in
+    a6000x2-production-32k) [[ "$(load_profile_value "$file" CHAT_MAX_NUM_SEQS)" == 2 ]] || fail "$profile must set chat max sequences to 2." ;;
+    a6000x2-stable-16k) [[ "$(load_profile_value "$file" CHAT_MAX_NUM_SEQS)" == 1 ]] || fail "$profile must set chat max sequences to 1." ;;
+  esac
+  [[ "$(load_profile_value "$file" EMBEDDING_MAX_NUM_SEQS)" -le 4 ]] || fail "$profile must keep embedding concurrency conservative."
+  [[ "$(load_profile_value "$file" RERANK_MAX_NUM_SEQS)" -le 8 ]] || fail "$profile must keep rerank concurrency conservative."
+done
+[[ -f "$a6000_32k" ]] && [[ "$(load_profile_value deploy/model-profiles/a6000x2-production-32k.env.example CHAT_MAX_MODEL_LEN)" == 32768 ]] || fail 'A6000 production profile must provide 32K chat context.'
+[[ -f "$a6000_16k" ]] && [[ "$(load_profile_value deploy/model-profiles/a6000x2-stable-16k.env.example CHAT_MAX_MODEL_LEN)" == 16384 ]] || fail 'A6000 stable profile must provide 16K chat context.'
+
 compose=deploy/docker-compose-models.yml
 if [[ -f "$repo_root/$compose" ]]; then
   for service in local-llm local-embedding local-reranker; do
     assert_contains "$compose" "^  ${service}:" "Compose must define $service."
   done
   assert_contains "$compose" 'VLLM_IMAGE' 'Model images must be configurable.'
-  for profile in h100-fp8 a6000x2-bf16; do
+  for profile in h100-fp8 a6000x2-bf16 a6000x2-production-32k a6000x2-stable-16k; do
     grep -Eq '^VLLM_IMAGE=vllm/vllm-openai:v0\.27\.1-cu129@sha256:[0-9a-f]{64}$' "$repo_root/deploy/model-profiles/${profile}.env.example" || fail "$profile must pin a vLLM CUDA 12.9 image tag."
   done
   assert_contains "$compose" 'CHAT_MODEL_REVISION' 'Chat model revision must be pinned and configurable.'
@@ -192,6 +222,8 @@ if [[ -f "$repo_root/$compose" ]]; then
   assert_contains "$compose" 'model-cache:' 'Model weights must use a persistent cache volume.'
   assert_contains "$compose" 'CHAT_MAX_MODEL_LEN' 'Chat context length must be configurable.'
   assert_contains "$compose" 'CHAT_MAX_NUM_SEQS' 'Chat concurrency must be configurable.'
+  grep -A45 '^  local-reranker:' "$repo_root/$compose" | grep -q -- '--port' || fail 'Reranker service must explicitly configure its vLLM port.'
+  grep -A45 '^  local-reranker:' "$repo_root/$compose" | grep -q -- '"8000"' || fail 'Reranker container must continue listening on port 8000.'
 fi
 
 [[ -f "$repo_root/scripts/check-gpu-runtime.sh" ]] && {
