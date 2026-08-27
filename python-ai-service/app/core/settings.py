@@ -4,7 +4,11 @@ from typing import Any
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.deployment import AiDeploymentMode, is_local_model_endpoint
+from app.core.deployment import (
+    AiDeploymentMode,
+    is_local_model_endpoint,
+    local_only_policy_violations,
+)
 
 
 class Settings(BaseSettings):
@@ -12,6 +16,9 @@ class Settings(BaseSettings):
     ai_service_host: str = "0.0.0.0"
     ai_service_port: int = 8015
     ai_service_api_key: str = ""
+    ai_allow_remote_inference: bool = False
+    ai_allow_cloud_fallback: bool = False
+    policy_crawler_network_enabled: bool = False
 
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_api_key: str = ""
@@ -53,6 +60,16 @@ class Settings(BaseSettings):
     def validate_local_only_endpoints(self) -> "Settings":
         if self.ai_deployment_mode != AiDeploymentMode.LOCAL_ONLY:
             return self
+
+        policy_violations = local_only_policy_violations(
+            self.ai_allow_remote_inference,
+            self.ai_allow_cloud_fallback,
+        )
+        if policy_violations:
+            raise ValueError(
+                "AI_DEPLOYMENT_MODE=LOCAL_ONLY requires remote inference and cloud fallback "
+                f"to be disabled; invalid settings: {', '.join(policy_violations)}"
+            )
 
         endpoints = {
             "QWEN_BASE_URL": self.qwen_base_url,

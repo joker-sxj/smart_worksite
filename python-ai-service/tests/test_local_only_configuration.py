@@ -243,3 +243,47 @@ def test_app_startup_validates_ai_configuration(monkeypatch):
     with pytest.raises(RuntimeError, match="invalid local AI configuration"):
         with TestClient(main_module.app):
             pass
+
+
+@pytest.mark.parametrize("field", ["ai_allow_remote_inference", "ai_allow_cloud_fallback"])
+def test_local_only_rejects_remote_inference_policy_flags(field):
+    with pytest.raises(ValidationError, match="LOCAL_ONLY"):
+        local_settings(**{field: True})
+
+
+def test_cloud_allowed_accepts_remote_inference_policy_flags():
+    settings = Settings(
+        _env_file=None,
+        ai_allow_remote_inference=True,
+        ai_allow_cloud_fallback=True,
+    )
+
+    assert settings.ai_allow_remote_inference is True
+    assert settings.ai_allow_cloud_fallback is True
+
+
+def test_policy_crawler_network_is_disabled_by_default():
+    settings = local_settings()
+
+    assert settings.policy_crawler_network_enabled is False
+
+
+def test_local_only_allows_policy_crawler_network_independently():
+    settings = local_settings(policy_crawler_network_enabled=True)
+
+    assert settings.policy_crawler_network_enabled is True
+
+
+def test_deploy_examples_disable_remote_inference_and_crawler_network_by_default():
+    repository = Path(__file__).resolve().parents[2]
+    expected = (
+        "AI_ALLOW_REMOTE_INFERENCE",
+        "AI_ALLOW_CLOUD_FALLBACK",
+        "POLICY_CRAWLER_NETWORK_ENABLED",
+    )
+
+    env_content = (repository / "deploy" / ".env.example").read_text(encoding="utf-8")
+    compose_content = (repository / "deploy" / "docker-compose-env.yml").read_text(encoding="utf-8")
+    for name in expected:
+        assert f"{name}=false" in env_content
+        assert f"{name}: ${{{name}:-false}}" in compose_content

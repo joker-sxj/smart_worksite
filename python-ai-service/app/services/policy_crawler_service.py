@@ -5,6 +5,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from app.core.settings import Settings
 from app.models.schemas import PolicyCrawlArticle, PolicyCrawlData, PolicyCrawlRequest
 
 
@@ -128,8 +129,21 @@ CRAWLER_HEADERS = {
 }
 
 
+class PolicyCrawlerNetworkDisabledError(RuntimeError):
+    pass
+
+
 class PolicyCrawlerService:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+
     async def crawl(self, request: PolicyCrawlRequest) -> tuple[PolicyCrawlData, dict[str, Any]]:
+        if not self.settings.policy_crawler_network_enabled:
+            raise PolicyCrawlerNetworkDisabledError(
+                "Policy crawler network access is disabled; set "
+                "POLICY_CRAWLER_NETWORK_ENABLED=true to enable HTTP fetching"
+            )
+
         async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
             response = await client.get(request.url, headers=CRAWLER_HEADERS)
             self._ensure_usable_response(response)

@@ -85,7 +85,7 @@ def services():
         "context": ContextService(qwen),
         "database": db,
         "ocr": OcrService(qwen),
-        "policy": PolicyCrawlerService(),
+        "policy": PolicyCrawlerService(settings),
         "documentUnderstanding": DocumentUnderstandingService(qwen),
     }
 

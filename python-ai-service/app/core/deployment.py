@@ -9,6 +9,16 @@ class AiDeploymentMode(StrEnum):
     CLOUD_ALLOWED = "CLOUD_ALLOWED"
 
 
+def local_only_policy_violations(allow_remote_inference: bool, allow_cloud_fallback: bool) -> list[str]:
+    """Return inference policy flags that conflict with strict local-only mode."""
+    violations = []
+    if allow_remote_inference:
+        violations.append("AI_ALLOW_REMOTE_INFERENCE")
+    if allow_cloud_fallback:
+        violations.append("AI_ALLOW_CLOUD_FALLBACK")
+    return violations
+
+
 _DOCKER_HOST_PATTERN = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
 _LOCAL_NETWORKS = tuple(
     ip_network(cidr)

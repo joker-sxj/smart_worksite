@@ -1,8 +1,15 @@
+from app.core.settings import Settings
 from app.services.policy_crawler_service import PolicyCrawlerService
 
 
+def crawler_settings(**overrides):
+    values = {"policy_crawler_network_enabled": True}
+    values.update(overrides)
+    return Settings(_env_file=None, **values)
+
+
 def test_policy_crawler_extracts_list_links_and_article_metadata():
-    service = PolicyCrawlerService()
+    service = PolicyCrawlerService(crawler_settings())
     list_html = """
         <html><body>
           <ul>
@@ -36,7 +43,7 @@ def test_policy_crawler_extracts_list_links_and_article_metadata():
 
 
 def test_policy_crawler_single_page_date_formats():
-    service = PolicyCrawlerService()
+    service = PolicyCrawlerService(crawler_settings())
     article = service._build_article(
         "<html><body><h1>\u5355\u7bc7\u653f\u7b56</h1><p>2026.07.12</p><p>\u6b63\u6587\u5185\u5bb9\u3002</p></body></html>",
         "https://example.gov.cn/policy/single.html",
@@ -48,7 +55,7 @@ def test_policy_crawler_single_page_date_formats():
 
 
 def test_policy_crawler_zhihu_article_urls_are_supported():
-    service = PolicyCrawlerService()
+    service = PolicyCrawlerService(crawler_settings())
 
     assert service._extract_article_links(
         '<a href="/p/16328033204">智慧工地政策资讯</a>',
@@ -57,7 +64,7 @@ def test_policy_crawler_zhihu_article_urls_are_supported():
 
 
 def test_policy_crawler_detects_target_site_block_page():
-    service = PolicyCrawlerService()
+    service = PolicyCrawlerService(crawler_settings())
     import httpx
     response = httpx.Response(
         403,
@@ -71,3 +78,74 @@ def test_policy_crawler_detects_target_site_block_page():
         assert 'anti-bot' in str(exc)
     else:
         raise AssertionError('expected anti-bot HTTPStatusError')
+
+
+def test_policy_crawler_disabled_fails_before_http_client_creation(monkeypatch):
+    import asyncio
+    import httpx
+    import pytest
+    from app.core.settings import Settings
+    from app.services.policy_crawler_service import PolicyCrawlerNetworkDisabledError
+    from app.models.schemas import PolicyCrawlRequest
+
+    client_created = False
+
+    def fail_if_client_created(*args, **kwargs):
+        nonlocal client_created
+        client_created = True
+        raise AssertionError("HTTP client must not be created when crawler network is disabled")
+
+    monkeypatch.setattr(httpx, "AsyncClient", fail_if_client_created)
+
+    service = PolicyCrawlerService(Settings(_env_file=None, policy_crawler_network_enabled=False))
+    with pytest.raises(PolicyCrawlerNetworkDisabledError, match="POLICY_CRAWLER_NETWORK_ENABLED"):
+        asyncio.run(service.crawl(PolicyCrawlRequest(projectId=1, sourceId=1, url="https://example.gov.cn/policy")))
+
+    assert client_created is False
+
+
+def test_policy_crawler_enabled_retains_http_fetch(monkeypatch):
+    import asyncio
+    import httpx
+    from app.core.settings import Settings
+    from app.models.schemas import PolicyCrawlRequest
+
+    class FakeResponse:
+        status_code = 200
+        encoding = "utf-8"
+        url = "https://example.gov.cn/policy/single.html"
+        text = "<html><body><h1>政策</h1><p>2026.07.12</p><p>正文</p></body></html>"
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, headers=None):
+            assert url == "https://example.gov.cn/policy/single.html"
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    service = PolicyCrawlerService(Settings(_env_file=None, policy_crawler_network_enabled=True))
+
+    data, usage = asyncio.run(
+        service.crawl(PolicyCrawlRequest(projectId=1, sourceId=1, url="https://example.gov.cn/policy/single.html"))
+    )
+
+    assert data.fetchedCount == 1
+    assert usage["provider"] == "HTTPX"
+
+
+def test_routes_policy_service_shares_settings(monkeypatch):
+    from app.core.settings import Settings
+    from app.api import routes
+
+    settings = Settings(_env_file=None, policy_crawler_network_enabled=True)
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+
+    assert routes.services()["policy"].settings is settings
