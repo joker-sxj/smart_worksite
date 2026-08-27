@@ -35,70 +35,64 @@ Docker 会启动 MySQL、Redis 和 MinIO。业务表由 Java 后端启动时通�
 | 密码 | `admin123` |
 | 默认项目 ID | `1` |
 
-### 1.2 配置 Python OCR 模型参数
+### 1.2 配置本地模型 Profile
 
-Qwen VL 凭据必须保存在 `python-ai-service/.env` 或运行环境变量中。不要把真实 Qwen 密钥写入 Java 配置、文档、SQL 或日志。
-
-创建 Python 服务环境文件：
+生产环境不在 Java 或 Python 服务中配置公网模型 Token。Java 只调用 Python AI 服务，Python 再调用本机通过 vLLM 暴露的 OpenAI-compatible 接口。双 RTX A6000 48GB 优先使用 32K 目标 Profile；如果客户机实测边界请求失败，切换到 16K 稳定 Profile。
 
 ```bash
-cd python-ai-service
-cp .env.example .env
+cd /home/xidian/sjw/smart_worksite
+cp deploy/.env.example deploy/.env  # 仅首次执行
+./scripts/start-all.sh --check --model-profile a6000x2-stable-16k
 ```
 
-至少配置：
+可选 Profile：
+
+| Profile | 用途 | 上下文目标 |
+| --- | --- | --- |
+| `a6000x2-production-32k` | 客户双 A6000 生产目标，必须以实际冒烟和 benchmark 结果验收 | 32K |
+| `a6000x2-stable-16k` | 显存、延迟或并发不足时的稳定回退 | 16K |
+
+爬虫联网开关与模型推理开关独立：
 
 ```env
-AI_SERVICE_API_KEY=dev-ai-service-key
-QWEN_VL_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
-QWEN_VL_API_KEY=
-QWEN_VL_MODEL=qwen-vl-plus
-QWEN_VL_TIMEOUT_SECONDS=120
-QWEN_VL_MAX_IMAGE_BYTES=10485760
-QWEN_VL_MAX_TOKENS=8192
+AI_DEPLOYMENT_MODE=LOCAL_ONLY
+AI_ALLOW_REMOTE_INFERENCE=false
+AI_ALLOW_CLOUD_FALLBACK=false
+POLICY_CRAWLER_NETWORK_ENABLED=false
 ```
 
-如果 `QWEN_VL_API_KEY` 为空，OCR 任务仍会创建，但识别会因为 Python 服务调用模型失败而进入 `FAILED`。
+需要爬取已批准的政策源时，只启用 `POLICY_CRAWLER_NETWORK_ENABLED=true`，不要因此开启公网模型推理。
 
-### 1.3 启动 Python AI 服务
+### 1.3 启动和检查服务
 
-Linux / WSL 推荐使用 `python3`。如果执行 `python -m venv .venv` 提示 `Command 'python' not found`，请使用下面这组命令：
+推荐统一启动，不需要另开 Python 模型脚本：
 
 ```bash
-cd python-ai-service
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8015
+cd /home/xidian/sjw/smart_worksite
+./scripts/start-all.sh --model-profile a6000x2-production-32k
+./scripts/status.sh
 ```
 
-健康检查：
+启动流程会依次执行 GPU/Profile 检查、Docker 模型服务就绪检查、32K/16K 上下文边界生成、Embedding 和 Rerank 冒烟。失败时先查看：
 
 ```bash
-curl --noproxy '*' -H "X-AI-Service-Key: dev-ai-service-key" http://127.0.0.1:8015/v1/health
+docker compose -f deploy/docker-compose-env.yml -f deploy/docker-compose-models.yml --env-file deploy/.env logs --tail=200 local-llm local-embedding local-reranker
 ```
 
-### 1.4 启动 Java 后端
+Java 依赖健康接口会显示 `localAi` 的 `UP`、`DEGRADED` 或 `DOWN`、当前 Profile、上下文上限和模型可达性，但不会返回 endpoint、API Key 或 Authorization。
 
-在仓库根目录执行：
-
-```bash
-mvn spring-boot:run
-```
-
-Java 后端默认地址：
+### 1.4 OCR 调用链
 
 ```text
-http://127.0.0.1:8080
+Java /api/ocr/records
+  -> Java 保存 OCR_INPUT 文件和任务
+  -> Java 调用 python-ai-service /v1/ocr/recognize
+  -> Python 从本地 MinIO 下载图片并转为 data URL
+  -> Python 调用本地模型服务
+  -> Java 保存 fields_json，并记录实际 provider/model
 ```
 
-Java 需要能使用相同服务密钥调用 Python：
-
-```env
-AI_PYTHON_BASE_URL=http://127.0.0.1:8015
-AI_PYTHON_API_KEY=dev-ai-service-key
-```
+本地模型未就绪时，OCR 任务不会偷偷切换公网模型：有可用文本时可使用受控文本回退；纯图片识别会明确失败并进入 `FAILED`，应先恢复本地模型。
 
 ## 2. 登录并设置 Token
 
