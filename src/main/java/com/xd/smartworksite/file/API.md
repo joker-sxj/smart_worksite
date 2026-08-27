@@ -1,4 +1,4 @@
-﻿# 文件模块接口文档
+# 文件模块接口文档
 
 本文档描述 `file` 模块当前已实现的接口，包含文件对象管理和已上传文件解析。
 
@@ -41,15 +41,23 @@ mvn spring-boot:run
 curl --noproxy '*' http://127.0.0.1:8080/api/system/ping
 ```
 
-文件解析需要配置 QwenVL：
+文件解析统一通过 Python AI 服务调用本地模型，不在 Java 侧配置公网模型地址或 Token：
 
 ```env
-QWEN_VL_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
-QWEN_VL_API_KEY=你的DashScope API Key
-QWEN_VL_MODEL=qwen-vl-plus
+AI_DEPLOYMENT_MODE=LOCAL_ONLY
+AI_ALLOW_REMOTE_INFERENCE=false
+AI_ALLOW_CLOUD_FALLBACK=false
+AI_PYTHON_BASE_URL=http://127.0.0.1:8015
 ```
 
-修改 `.env` 后需要重启后端。
+在仓库根目录选择客户 Profile 并启动；32K 失败时回退 16K：
+
+```bash
+./scripts/start-all.sh --model-profile a6000x2-production-32k
+# 或：./scripts/start-all.sh --model-profile a6000x2-stable-16k
+```
+
+修改配置后需要重启统一启动脚本管理的服务。
 
 ## 文件对象管理
 
@@ -505,18 +513,18 @@ LIMIT 10;
 curl --noproxy '*' http://127.0.0.1:8080/api/system/ping
 ```
 
-### 解析失败，提示 QwenVL 未配置
+### 解析失败，提示本地 AI 服务不可用
 
-检查 `deploy/.env`：
+先检查本地模型与 Python AI 服务，不要配置云端 Token 绕过门禁：
 
-```env
-QWEN_VL_ENDPOINT=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
-QWEN_VL_API_KEY=你的DashScope API Key
-QWEN_VL_MODEL=qwen-vl-plus
+```bash
+./scripts/status.sh
+docker compose -f deploy/docker-compose-env.yml -f deploy/docker-compose-models.yml --env-file deploy/.env logs --tail=200 local-llm local-embedding local-reranker
+curl --noproxy '*' http://127.0.0.1:8015/v1/health
 ```
 
-修改后重启后端。
+如果 32K 边界冒烟失败，切换 `a6000x2-stable-16k` 后重启。
 
 ### PDF 解析失败，提示文本为空
 
-当前实现先提取 PDF 内嵌文本。扫描版 PDF 没有可提取文本时会失败，后续需要增加 PDF 按页渲染图片并交给 QwenVL 的能力。
+PDF、图片和文档理解均通过 Python AI 服务进入本地模型；扫描版 PDF 的识别能力以本地模型实际健康状态和任务返回为准，失败时查看任务 `errorMessage` 与 Python 服务日志。
