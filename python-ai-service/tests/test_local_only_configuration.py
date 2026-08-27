@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,7 +17,7 @@ def local_settings(**overrides) -> Settings:
         "qwen_base_url": "http://local-llm:8000/v1",
         "qwen_vl_endpoint": "http://local-vlm:8000/v1/chat/completions",
         "qwen_embedding_base_url": "http://local-embedding:8000/v1",
-        "qwen_rerank_base_url": "http://local-reranker:8081/v1/rerank",
+        "qwen_rerank_base_url": "http://local-reranker:8000/v1/rerank",
         "qwen_api_key": "",
         "qwen_vl_api_key": "",
         "qwen_rerank_api_style": "QWEN3",
@@ -42,6 +43,12 @@ def test_local_only_accepts_local_or_private_model_endpoints(url):
     settings = local_settings(qwen_base_url=url)
 
     assert settings.ai_deployment_mode == "LOCAL_ONLY"
+
+
+def test_example_env_uses_local_reranker_container_port():
+    env_file = Path(__file__).resolve().parents[1] / ".env.example"
+
+    assert "QWEN_RERANK_BASE_URL=http://local-reranker:8000/v1/rerank" in env_file.read_text()
 
 
 @pytest.mark.parametrize(
@@ -135,7 +142,7 @@ def test_all_local_model_calls_omit_authorization_without_key(monkeypatch):
 
     assert [call["url"] for call in FakeAsyncClient.calls] == [
         "http://local-embedding:8000/v1/embeddings",
-        "http://local-reranker:8081/v1/rerank",
+        "http://local-reranker:8000/v1/rerank",
         "http://local-vlm:8000/v1/chat/completions",
     ]
     assert all("Authorization" not in call["headers"] for call in FakeAsyncClient.calls)

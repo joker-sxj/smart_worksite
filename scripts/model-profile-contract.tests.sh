@@ -182,7 +182,10 @@ for profile in a6000x2-production-32k a6000x2-stable-16k; do
   [[ "$(load_profile_value "$file" CHAT_CUDA_VISIBLE_DEVICES)" == "0,1" ]] || fail "$profile must make both A6000 GPUs visible to chat."
   [[ "$(load_profile_value "$file" CHAT_MODEL_ID)" == "Qwen/Qwen3.8-27B" ]] || fail "$profile must use the approved BF16 Qwen3.8 27B model."
   [[ "$(load_profile_value "$file" CHAT_MODEL_REVISION)" =~ ^[0-9a-f]{40}$ ]] || fail "$profile must pin the chat model revision."
+  [[ "$(load_profile_value "$file" EMBEDDING_MODEL_REVISION)" =~ ^[0-9a-f]{40}$ ]] || fail "$profile must pin the embedding model revision to a 40-character hash."
+  [[ "$(load_profile_value "$file" RERANK_MODEL_REVISION)" =~ ^[0-9a-f]{40}$ ]] || fail "$profile must pin the reranker model revision to a 40-character hash."
   [[ "$(load_profile_value "$file" VLLM_IMAGE)" =~ ^vllm/vllm-openai:v0\.27\.1-cu129@sha256:[0-9a-f]{64}$ ]] || fail "$profile must pin the vLLM image by digest."
+  [[ "$(load_profile_value "$file" NVIDIA_RUNTIME_TEST_IMAGE)" =~ ^nvidia/cuda:12\.2\.2-base-ubuntu22\.04@sha256:[0-9a-f]{64}$ ]] || fail "$profile must pin the NVIDIA runtime test image by digest."
   case "$profile" in
     a6000x2-production-32k) [[ "$(load_profile_value "$file" CHAT_MAX_NUM_SEQS)" == 2 ]] || fail "$profile must set chat max sequences to 2." ;;
     a6000x2-stable-16k) [[ "$(load_profile_value "$file" CHAT_MAX_NUM_SEQS)" == 1 ]] || fail "$profile must set chat max sequences to 1." ;;
