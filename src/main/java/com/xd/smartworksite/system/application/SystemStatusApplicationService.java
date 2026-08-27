@@ -1,5 +1,8 @@
 package com.xd.smartworksite.system.application;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.xd.smartworksite.ai.infra.AiPythonServiceProperties;
 import com.xd.smartworksite.file.infra.MinioStorageProperties;
 import com.xd.smartworksite.system.dto.SystemDependencyHealthResponse;
 import com.xd.smartworksite.system.dto.SystemRuntimeResponse;
@@ -35,25 +38,32 @@ public class SystemStatusApplicationService {
     private final StringRedisTemplate redisTemplate;
     private final MinioStorageProperties minioStorageProperties;
     private final HttpClient httpClient;
+    private final AiPythonServiceProperties aiProperties;
+    private final ObjectMapper objectMapper;
 
-    @Autowired
     public SystemStatusApplicationService(Environment environment,
                                           DataSource dataSource,
                                           StringRedisTemplate redisTemplate,
                                           MinioStorageProperties minioStorageProperties) {
         this(environment, dataSource, redisTemplate, minioStorageProperties,
+                new AiPythonServiceProperties(), new ObjectMapper(),
                 HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build());
     }
 
-    SystemStatusApplicationService(Environment environment,
-                                   DataSource dataSource,
+    @Autowired
+    public SystemStatusApplicationService(Environment environment,
+                                          DataSource dataSource,
                                    StringRedisTemplate redisTemplate,
-                                   MinioStorageProperties minioStorageProperties,
-                                   HttpClient httpClient) {
+                                          MinioStorageProperties minioStorageProperties,
+                                          AiPythonServiceProperties aiProperties,
+                                          ObjectMapper objectMapper,
+                                          HttpClient httpClient) {
         this.environment = environment;
         this.dataSource = dataSource;
         this.redisTemplate = redisTemplate;
         this.minioStorageProperties = minioStorageProperties;
+        this.aiProperties = aiProperties;
+        this.objectMapper = objectMapper;
         this.httpClient = httpClient;
     }
 
@@ -90,6 +100,7 @@ public class SystemStatusApplicationService {
         dependencies.put("mysql", checkMySql());
         dependencies.put("redis", checkRedis());
         dependencies.put("minio", checkMinio());
+        dependencies.put("localAi", checkLocalAi());
 
         SystemDependencyHealthResponse response = new SystemDependencyHealthResponse();
         response.setCheckedAt(OffsetDateTime.now());
@@ -97,6 +108,48 @@ public class SystemStatusApplicationService {
         boolean allUp = dependencies.values().stream().allMatch(status -> STATUS_UP.equals(status.getStatus()));
         response.setStatus(allUp ? STATUS_UP : "DEGRADED");
         return response;
+    }
+
+    private SystemDependencyHealthResponse.DependencyStatus checkLocalAi() {
+        long started = System.currentTimeMillis();
+        SystemDependencyHealthResponse.DependencyStatus status = new SystemDependencyHealthResponse.DependencyStatus();
+        try {
+            String base = aiProperties.getBaseUrl().replaceAll("/+$", "");
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(base + "/v1/health"))
+                    .timeout(Duration.ofMillis(Math.max(1, aiProperties.getReadTimeoutMs())))
+                    .header("Accept", "application/json")
+                    .GET().build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new IllegalStateException("python ai health http status " + response.statusCode());
+            }
+            JsonNode data = objectMapper.readTree(response.body()).path("data");
+            JsonNode readiness = data.path("modelReadiness");
+            status.setStatus("READY".equals(readiness.path("status").asText()) ? STATUS_UP : "DEGRADED");
+            status.setDeploymentMode(data.path("deploymentMode").asText(null));
+            status.setReadinessStatus(readiness.path("status").asText(null));
+            status.setProfile(readiness.path("profile").asText(null));
+            status.setMaxContextTokens(readiness.path("maxContextTokens").isNumber() ? readiness.path("maxContextTokens").asLong() : null);
+            Map<String, SystemDependencyHealthResponse.ModelStatus> models = new LinkedHashMap<>();
+            readiness.path("dependencies").fields().forEachRemaining(entry -> {
+                JsonNode node = entry.getValue();
+                SystemDependencyHealthResponse.ModelStatus model = new SystemDependencyHealthResponse.ModelStatus();
+                model.setStatus(node.path("status").asText(null));
+                model.setConfigured(node.path("configured").isBoolean() ? node.path("configured").asBoolean() : null);
+                model.setReachable(node.path("reachable").isBoolean() ? node.path("reachable").asBoolean() : null);
+                model.setProvider(node.path("provider").asText(null));
+                model.setModel(node.path("model").asText(null));
+                model.setEndpointScope(node.path("endpointScope").asText(null));
+                models.put(entry.getKey(), model);
+            });
+            status.setModels(models);
+        } catch (Exception ex) {
+            status.setStatus(STATUS_DOWN);
+            status.setErrorMessage(truncate(ex.getMessage()));
+        }
+        status.setElapsedMs(System.currentTimeMillis() - started);
+        return status;
     }
 
     private SystemDependencyHealthResponse.DependencyStatus checkMySql() {
