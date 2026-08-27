@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Any
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.deployment import (
@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     ai_allow_remote_inference: bool = False
     ai_allow_cloud_fallback: bool = False
     policy_crawler_network_enabled: bool = False
+    model_profile_name: str = "unconfigured"
+    chat_max_model_len: int = 0
+    model_health_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
 
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_api_key: str = ""
@@ -84,6 +87,18 @@ class Settings(BaseSettings):
                 f"or Docker service endpoints; invalid settings: {', '.join(invalid)}"
             )
         return self
+
+    def safe_ai_dependency_descriptors(self) -> dict[str, dict[str, Any]]:
+        return {
+            name: {
+                "provider": descriptor["provider"],
+                "model": descriptor["model"],
+                "endpointScope": (
+                    "LOCAL" if is_local_model_endpoint(str(descriptor["endpoint"])) else "REMOTE"
+                ),
+            }
+            for name, descriptor in self.ai_dependency_descriptors().items()
+        }
 
     def ai_dependency_descriptors(self) -> dict[str, dict[str, Any]]:
         return {

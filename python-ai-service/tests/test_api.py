@@ -4,7 +4,7 @@ import json
 os.environ["AI_SERVICE_API_KEY"] = ""
 os.environ["EMBEDDING_PROVIDER"] = "LOCAL_HASH"
 os.environ["RAG_PROVIDER"] = "LOCAL"
-os.environ["RAG_DATA_DIR"] = "data/test-rag"
+os.environ["RAG_DATA_DIR"] = "/tmp/smart-worksite-test-rag"
 
 from fastapi.testclient import TestClient
 from app.main import app
@@ -17,7 +17,13 @@ from app.services.rag_service import RagService
 from app.services.vector_store import ChunkRecord
 
 
-def test_health_without_key_when_not_configured():
+def test_health_without_key_when_not_configured(monkeypatch):
+    from app.api import routes
+
+    async def fake_snapshot(_self):
+        return {"status": "NOT_APPLICABLE", "profile": "unconfigured", "maxContextTokens": 0, "dependencies": {}}
+
+    monkeypatch.setattr(routes.ModelReadinessService, "snapshot", fake_snapshot)
     client = TestClient(app)
     response = client.get("/v1/health")
     assert response.status_code == 200
@@ -27,6 +33,12 @@ def test_health_without_key_when_not_configured():
 
 
 def test_health_without_key_when_service_key_is_configured(monkeypatch):
+    from app.api import routes
+
+    async def fake_snapshot(_self):
+        return {"status": "NOT_APPLICABLE", "profile": "unconfigured", "maxContextTokens": 0, "dependencies": {}}
+
+    monkeypatch.setattr(routes.ModelReadinessService, "snapshot", fake_snapshot)
     monkeypatch.setenv("AI_SERVICE_API_KEY", "configured-key")
     get_settings.cache_clear()
     try:
@@ -192,7 +204,7 @@ def test_compliance_review_with_unavailable_tools_returns_json_result():
 def test_rag_uses_qwen_rerank_when_configured():
     class FakeSettings:
         rag_provider = "LOCAL"
-        rag_data_dir = "data/test-rag"
+        rag_data_dir = "/tmp/smart-worksite-test-rag"
         rag_rerank_top_k = 20
         embedding_provider = "LOCAL_HASH"
         rerank_provider = "QWEN"
@@ -1223,3 +1235,34 @@ def test_ocr_prompt_only_requests_type_specific_extras():
     assert "extras.plate" in plate_prompt
     assert "extras.watermark" not in plate_prompt
     assert "extras.items" not in plate_prompt
+
+
+def test_health_separates_liveness_configuration_and_model_readiness(monkeypatch):
+    from app.api import routes
+
+    async def fake_snapshot(_self):
+        return {
+            "status": "DEGRADED",
+            "profile": "a6000x2-production-32k",
+            "maxContextTokens": 32768,
+            "dependencies": {
+                "chat": {
+                    "configured": True,
+                    "reachable": False,
+                    "status": "CONNECT_ERROR",
+                    "provider": "OPENAI_COMPATIBLE",
+                    "model": "smart-worksite-chat",
+                    "endpointScope": "LOCAL",
+                }
+            },
+        }
+
+    monkeypatch.setattr(routes.ModelReadinessService, "snapshot", fake_snapshot)
+    response = TestClient(app).get("/v1/health")
+    body = response.json()["data"]
+
+    assert body["status"] == "UP"
+    assert body["modelReadiness"]["status"] == "DEGRADED"
+    assert body["modelReadiness"]["maxContextTokens"] == 32768
+    assert "http://" not in response.text
+    assert "api_key" not in response.text.lower()

@@ -30,6 +30,7 @@ from app.models.schemas import (
     DocumentUnderstandingData,
 )
 from app.services.qwen_client import QwenClient
+from app.services.model_readiness_service import ModelReadinessService
 from app.services.model_service import ModelService, AgentService
 from app.services.rag_service import RagService
 from app.services.route_context_service import RouteService, ContextService
@@ -93,11 +94,13 @@ def services():
 @router.get("/health")
 async def health():
     settings = get_settings()
+    readiness = await ModelReadinessService(settings).snapshot()
     return ok({
         "status": "UP",
         "service": "python-ai-service",
         "deploymentMode": settings.ai_deployment_mode.value,
-        "dependencies": settings.ai_dependency_descriptors(),
+        "dependencies": settings.safe_ai_dependency_descriptors(),
+        "modelReadiness": readiness,
     })
 
 
