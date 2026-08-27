@@ -196,6 +196,28 @@ done
 [[ -f "$a6000_32k" ]] && [[ "$(load_profile_value deploy/model-profiles/a6000x2-production-32k.env.example CHAT_MAX_MODEL_LEN)" == 32768 ]] || fail 'A6000 production profile must provide 32K chat context.'
 [[ -f "$a6000_16k" ]] && [[ "$(load_profile_value deploy/model-profiles/a6000x2-stable-16k.env.example CHAT_MAX_MODEL_LEN)" == 16384 ]] || fail 'A6000 stable profile must provide 16K chat context.'
 
+for profile in a6000x2-production-32k a6000x2-stable-16k a6000x2-bf16; do
+  file="deploy/model-profiles/${profile}.env.example"
+  [[ -f "$repo_root/$file" ]] || continue
+  grep -Eq '^QWEN_API_KEY=$' "$repo_root/$file" || fail "$profile must explicitly clear QWEN_API_KEY for LOCAL_ONLY operation."
+  grep -Eq '^QWEN_VL_API_KEY=$' "$repo_root/$file" || fail "$profile must explicitly clear QWEN_VL_API_KEY for LOCAL_ONLY operation."
+  [[ "$(load_profile_value "$file" NVIDIA_RUNTIME_TEST_IMAGE)" =~ ^nvidia/cuda:12\.2\.2-base-ubuntu22\.04@sha256:[0-9a-f]{64}$ ]] || fail "$profile must pin the NVIDIA runtime test image digest."
+done
+
+assert_local_gpu_budget() {
+  local file="$1" profile="$2" chat embedding rerank
+  chat="$(load_profile_value "$file" CHAT_GPU_MEMORY_UTILIZATION)"
+  embedding="$(load_profile_value "$file" EMBEDDING_GPU_MEMORY_UTILIZATION)"
+  rerank="$(load_profile_value "$file" RERANK_GPU_MEMORY_UTILIZATION)"
+  awk -v chat="$chat" -v embedding="$embedding" -v rerank="$rerank" \
+    'BEGIN { if (chat + embedding > 0.90 || chat + rerank > 0.90) exit 1 }' \
+    || fail "$profile per-GPU model memory budget must be <= 0.90 (chat+embedding on GPU0, chat+rerank on GPU1)."
+}
+for profile in a6000x2-production-32k a6000x2-stable-16k a6000x2-bf16; do
+  file="deploy/model-profiles/${profile}.env.example"
+  [[ -f "$repo_root/$file" ]] && assert_local_gpu_budget "$file" "$profile"
+done
+
 compose=deploy/docker-compose-models.yml
 if [[ -f "$repo_root/$compose" ]]; then
   for service in local-llm local-embedding local-reranker; do

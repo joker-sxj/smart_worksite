@@ -51,6 +51,14 @@ def test_example_env_uses_local_reranker_container_port():
     assert "QWEN_RERANK_BASE_URL=http://local-reranker:8000/v1/rerank" in env_file.read_text()
 
 
+def test_example_env_matches_local_chat_topology():
+    env_file = Path(__file__).resolve().parents[1] / ".env.example"
+    env = env_file.read_text()
+
+    assert "QWEN_VL_ENDPOINT=http://local-llm:8000/v1/chat/completions" in env
+    assert "QWEN_VL_MODEL=smart-worksite-chat" in env
+
+
 @pytest.mark.parametrize(
     "field,url",
     [
