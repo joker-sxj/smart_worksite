@@ -11,7 +11,18 @@ if [[ -n "$profile_arg" ]]; then
   configure_model_profile "$root" "$profile_arg"
 fi
 load_env "$root/deploy/.env"
-[[ -n "${MODEL_PROFILE_FILE:-}" ]] && load_env "$MODEL_PROFILE_FILE"
+
+profile_file_has_key() {
+  local env_file="$1" key="$2"
+  [[ -f "$env_file" ]] && grep -Eq "^(export[[:space:]]+)?${key}[[:space:]]*=" "$env_file"
+}
+
+if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
+  profile_file_has_key "$MODEL_PROFILE_FILE" GPU_COUNT || unset GPU_COUNT
+  profile_file_has_key "$MODEL_PROFILE_FILE" GPU_MIN_MEMORY_GB || unset GPU_MIN_MEMORY_GB
+  profile_file_has_key "$MODEL_PROFILE_FILE" GPU_EXPECTED_MODEL_REGEX || unset GPU_EXPECTED_MODEL_REGEX
+  load_env "$MODEL_PROFILE_FILE"
+fi
 
 require_command docker
 require_command nvidia-smi
@@ -82,7 +93,7 @@ runtime_image="${NVIDIA_RUNTIME_TEST_IMAGE:-nvidia/cuda:12.2.2-base-ubuntu22.04}
 printf 'Host NVIDIA GPUs: %s; validating first %s GPU(s) for profile %s; testing Docker GPU access with %s...\n' "$host_gpus" "$required_gpus" "$profile_label" "$runtime_image"
 if ! docker run --rm --gpus all --pull=missing "$runtime_image" nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits; then
   cat >&2 <<'MESSAGE'
-GPU preflight failed: Docker GPU runtime command failed. Install/configure NVIDIA Container Toolkit, ensure the nvidia runtime is available to Docker, then restart Docker.
+GPU preflight failed: Docker GPU runtime command failed: expected=docker_gpu_runtime_visible, actual=probe_failed. Install/configure NVIDIA Container Toolkit, ensure the nvidia runtime is available to Docker, then restart Docker.
 This check does not modify project containers, networks, volumes, or application data.
 MESSAGE
   exit 1

@@ -19,6 +19,33 @@ cleanup_test_env() {
 }
 trap cleanup_test_env EXIT
 
+with_base_env_constraints() {
+  local profile="$1" rows="$2"
+  local tmp output env_backup status
+  tmp="$(mktemp -d)"
+  output="$tmp/output"
+  env_backup="$tmp/env.backup"
+  make_mocks "$tmp" "$rows" ok
+  cp "$repo_root/deploy/.env" "$env_backup"
+  {
+    printf '\n# GPU runtime regression: stale base constraints must not leak into selected profiles.\n'
+    printf 'GPU_COUNT=2\n'
+    printf 'GPU_MIN_MEMORY_GB=48\n'
+    printf 'GPU_EXPECTED_MODEL_REGEX=RTX A6000\n'
+  } >> "$repo_root/deploy/.env"
+  set +e
+  run_check "$tmp" "$profile" "$output"
+  status=$?
+  set -e
+  cp "$env_backup" "$repo_root/deploy/.env"
+  if (( status != 0 )); then
+    fail "old profile constraints must not inherit stale deploy/.env GPU fields; output: $(cat "$output")"
+  elif ! grep -Fq -- '--gpus' "$tmp/docker-args"; then
+    fail 'old profile fallback must still reach Docker GPU probing.'
+  fi
+  rm -rf "$tmp"
+}
+
 fail() {
   printf 'ERROR: %s\n' "$1" >&2
   failures=$((failures + 1))
@@ -103,8 +130,9 @@ expect_success() {
 }
 
 expect_failure() {
-  local name="$1" profile="$2" rows="$3" docker_mode="$4" expected_status_field="$5" expected_text="$6"
-  local tmp output status
+  local name="$1" profile="$2" rows="$3" docker_mode="$4"
+  shift 4
+  local tmp output status expected
   tmp="$(mktemp -d)"
   output="$tmp/output"
   make_mocks "$tmp" "$rows" "$docker_mode"
@@ -114,8 +142,13 @@ expect_failure() {
   set -e
   if (( status == 0 )); then
     fail "$name expected non-zero status."
-  elif ! grep -Fq "$expected_status_field" "$output" || ! grep -Fq "$expected_text" "$output"; then
-    fail "$name must explain the failed profile field and remediation; output: $(cat "$output")"
+  else
+    for expected in "$@"; do
+      if ! grep -Fq "$expected" "$output"; then
+        fail "$name must explain '$expected' in its actionable error; output: $(cat "$output")"
+        break
+      fi
+    done
   fi
   rm -rf "$tmp"
 }
@@ -132,8 +165,9 @@ main() {
   expect_failure 'one visible GPU' "$a6000_profile" $'0, NVIDIA RTX A6000, 49140, 535.309.01\n' ok 'GPU_COUNT' 'Make the configured GPUs visible'
   expect_failure 'wrong GPU model' "$a6000_profile" $'0, NVIDIA H100 PCIe, 81559, 535.309.01\n1, NVIDIA RTX A6000, 49140, 535.309.01\n' ok 'GPU_EXPECTED_MODEL_REGEX' 'Install the expected GPU model'
   expect_failure 'low GPU memory' "$a6000_profile" $'0, NVIDIA RTX A6000, 49140, 535.309.01\n1, NVIDIA RTX A6000, 47000, 535.309.01\n' ok 'GPU_MIN_MEMORY_GB' 'Free/replace the GPU or select a smaller profile'
-  expect_failure 'Docker GPU runtime failure' "$a6000_profile" $'0, NVIDIA RTX A6000, 49140, 535.309.01\n1, NVIDIA RTX A6000, 49140, 535.309.01\n' run-fail 'Docker GPU runtime' 'Install/configure NVIDIA Container Toolkit'
+  expect_failure 'Docker GPU runtime failure' "$a6000_profile" $'0, NVIDIA RTX A6000, 49140, 535.309.01\n1, NVIDIA RTX A6000, 49140, 535.309.01\n' run-fail 'Docker GPU runtime' 'expected=docker_gpu_runtime_visible' 'actual=probe_failed' 'Install/configure NVIDIA Container Toolkit'
   expect_success 'legacy H100 profile without new hardware fields' "$h100_profile" $'0, NVIDIA H100 PCIe, 81559, 535.309.01\n'
+  with_base_env_constraints "$h100_profile" $'0, NVIDIA H100 PCIe, 81559, 535.309.01\n'
 
   rm -rf "$tmp_profile_dir"
   if (( failures > 0 )); then
