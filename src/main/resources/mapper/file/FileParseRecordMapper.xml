@@ -128,6 +128,8 @@
             result_object_name = #{resultObjectName},
             result_file_id = #{resultFileId},
             content_preview = #{contentPreview},
+            parser_provider = #{parserProvider},
+            parser_model = #{parserModel},
             error_message = null,
             metadata = #{metadata},
             finished_at = current_timestamp,

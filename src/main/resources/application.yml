@@ -68,12 +68,6 @@ app:
       max-pages: ${FILE_PARSE_MAX_PAGES:100}
       result-preview-length: ${FILE_PARSE_RESULT_PREVIEW_LENGTH:2000}
       max-input-chars: ${FILE_PARSE_MAX_INPUT_CHARS:120000}
-      qwen-vl:
-        endpoint: ${QWEN_VL_ENDPOINT:}
-        api-key: ${QWEN_VL_API_KEY:}
-        model: ${QWEN_VL_MODEL:qwen-vl-plus}
-        connect-timeout-ms: ${QWEN_VL_CONNECT_TIMEOUT_MS:5000}
-        read-timeout-ms: ${QWEN_VL_READ_TIMEOUT_MS:120000}
   task:
     outbox:
       dispatcher:

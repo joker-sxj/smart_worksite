@@ -1,5 +1,6 @@
 package com.xd.smartworksite.file.application;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.result.ErrorCode;
@@ -89,7 +90,10 @@ public class FileParseWorker {
             success.setCurrentStage(FileParseStage.FINISHED.name());
             success.setResultObjectName(resultObjectName);
             success.setContentPreview(toPreview(resultContent));
-            success.setMetadata(buildMetadata(parsedDocument, preparedDocument));
+            JsonNode modelMetadata = parseModelMetadata(parsedDocument);
+            success.setParserProvider(resolveProvider(modelMetadata));
+            success.setParserModel(resolveModel(parsedDocument, modelMetadata));
+            success.setMetadata(buildMetadata(parsedDocument, preparedDocument, modelMetadata));
             fileParseRecordRepository.updateSucceeded(success);
         } catch (Exception ex) {
             log.warn("file parse failed, recordId={}", recordId, ex);
@@ -142,20 +146,38 @@ public class FileParseWorker {
         return content.substring(0, maxLength);
     }
 
-    private String buildMetadata(ParsedDocument parsedDocument, PreparedDocument preparedDocument) throws Exception {
+    private String buildMetadata(ParsedDocument parsedDocument, PreparedDocument preparedDocument,
+                                 JsonNode modelMetadata) throws Exception {
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("projectId", preparedDocument.getProjectId());
         metadata.put("documentId", preparedDocument.getDocumentId());
         metadata.put("fileId", preparedDocument.getDocumentId());
-        metadata.put("provider", "QWEN_VL");
-        metadata.put("model", parsedDocument.getModelName());
+        metadata.put("provider", resolveProvider(modelMetadata));
+        metadata.put("model", resolveModel(parsedDocument, modelMetadata));
         metadata.put("pageCount", preparedDocument.getPageCount());
         metadata.put("inputTruncated", preparedDocument.isTruncated());
         metadata.put("blocks", preparedDocument.getBlocks());
-        if (parsedDocument.getMetadata() != null && !parsedDocument.getMetadata().isBlank()) {
-            metadata.put("modelMetadata", objectMapper.readTree(parsedDocument.getMetadata()));
+        if (!modelMetadata.isMissingNode()) {
+            metadata.put("modelMetadata", modelMetadata);
         }
         return objectMapper.writeValueAsString(metadata);
+    }
+
+    private JsonNode parseModelMetadata(ParsedDocument parsedDocument) throws Exception {
+        if (parsedDocument.getMetadata() == null || parsedDocument.getMetadata().isBlank()) {
+            return objectMapper.missingNode();
+        }
+        return objectMapper.readTree(parsedDocument.getMetadata());
+    }
+
+    private String resolveProvider(JsonNode modelMetadata) {
+        String provider = modelMetadata.path("provider").asText();
+        return provider.isBlank() ? "PYTHON_AI_SERVICE" : provider;
+    }
+
+    private String resolveModel(ParsedDocument parsedDocument, JsonNode modelMetadata) {
+        String model = modelMetadata.path("model").asText();
+        return model.isBlank() ? parsedDocument.getModelName() : model;
     }
 
     private String normalizeErrorMessage(Exception ex) {

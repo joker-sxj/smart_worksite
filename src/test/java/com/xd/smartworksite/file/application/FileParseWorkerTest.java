@@ -66,7 +66,8 @@ class FileParseWorkerTest {
         when(files.findById(22L)).thenReturn(Optional.of(file));
         when(preparation.prepare(file)).thenReturn(prepared);
         when(parser.parse(any())).thenReturn(new ParsedDocument(
-                "一级 | 张三", "MARKDOWN", "local-parser", "{}"));
+                "一级 | 张三", "MARKDOWN", "local-parser",
+                "{\"provider\":\"LOCAL_DOCUMENT\",\"model\":\"local-parser\"}"));
         FileParseWorker worker = new FileParseWorker(files, records, preparation,
                 parser, storage, new FileProperties(), objectMapper);
 
@@ -76,6 +77,8 @@ class FileParseWorkerTest {
         verify(records).updateSucceeded(success.capture());
         JsonNode metadata = objectMapper.readTree(success.getValue().getMetadata());
         assertThat(metadata.path("projectId").asLong()).isEqualTo(7L);
+        assertThat(metadata.path("provider").asText()).isEqualTo("LOCAL_DOCUMENT");
+        assertThat(metadata.path("model").asText()).isEqualTo("local-parser");
         assertThat(metadata.path("documentId").asLong()).isEqualTo(22L);
         assertThat(metadata.path("blocks").get(0).path("blockId").asText()).isEqualTo("risk-row-2");
         assertThat(metadata.path("blocks").get(0).path("type").asText()).isEqualTo("TABLE");

@@ -2,159 +2,124 @@ package com.xd.smartworksite.file.infra;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.xd.smartworksite.ai.infra.AiProviderResponse;
+import com.xd.smartworksite.ai.infra.AiPythonServiceClient;
+import com.xd.smartworksite.ai.infra.AiPythonServiceProperties;
+import com.xd.smartworksite.common.exception.BusinessException;
+import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.file.application.FileProperties;
-import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
-import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class QwenVlDocumentParseAdapterTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AiPythonServiceProperties aiProperties = new AiPythonServiceProperties();
+    private final AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
 
     @Test
-    void parsesPreparedPdfTextLocallyWhenQwenCredentialsAreNotConfigured() throws Exception {
-        QwenVlDocumentParseAdapter adapter = new QwenVlDocumentParseAdapter(new FileProperties(), objectMapper);
+    void sendsPreparedTextToPythonDocumentUnderstandingAndUsesReturnedModelMetadata() throws Exception {
+        when(pythonClient.post(eq("/v1/document/understand"), eq("DOCUMENT_UNDERSTAND"), eq(7L), any()))
+                .thenReturn(success("Python整理后的文档", "LOCAL_DOCUMENT", "smart-worksite-chat"));
+        QwenVlDocumentParseAdapter adapter = adapter();
 
         ParsedDocument parsed = adapter.parse(textRequest());
 
-        assertThat(parsed.getResultFormat()).isEqualTo("MARKDOWN");
-        assertThat(parsed.getModelName()).isEqualTo("LOCAL_TEXT");
-        assertThat(parsed.getContent()).contains("智慧工地安全检查制度", "塔吊每日巡检");
-        assertThat(objectMapper.readTree(parsed.getMetadata()).path("provider").asText()).isEqualTo("LOCAL_TEXT");
+        ArgumentCaptor<Object> payload = ArgumentCaptor.forClass(Object.class);
+        verify(pythonClient).post(eq("/v1/document/understand"), eq("DOCUMENT_UNDERSTAND"), eq(7L), payload.capture());
+        Map<?, ?> request = (Map<?, ?>) payload.getValue();
+        Map<?, ?> page = (Map<?, ?>) ((List<?>) request.get("pages")).get(0);
+        assertThat(page.get("nativeText")).isEqualTo(textRequest().getTextContent());
+        assertThat(page.get("imageDataUrl")).isNull();
+        assertThat(parsed.getContent()).isEqualTo("Python整理后的文档");
+        assertThat(parsed.getModelName()).isEqualTo("smart-worksite-chat");
+        JsonNode metadata = objectMapper.readTree(parsed.getMetadata());
+        assertThat(metadata.path("provider").asText()).isEqualTo("LOCAL_DOCUMENT");
+        assertThat(metadata.path("model").asText()).isEqualTo("smart-worksite-chat");
     }
 
     @Test
-    void callsLocalVisionEndpointWithoutApiKey() throws Exception {
-        HttpServer server = startServer(200,
-                "{\"id\":\"local-response\",\"choices\":[{\"message\":{\"content\":\"本地模型解析成功\"}}]}");
-        try {
-            FileProperties properties = configuredProperties(server);
-            QwenVlDocumentParseAdapter adapter = new QwenVlDocumentParseAdapter(properties, objectMapper);
+    void sendsImageOnlyInputToPythonDocumentUnderstanding() {
+        when(pythonClient.post(eq("/v1/document/understand"), eq("DOCUMENT_UNDERSTAND"), eq(7L), any()))
+                .thenReturn(success("现场图片文字", "LOCAL_VISION", "smart-worksite-chat"));
+        DocumentParseRequest request = imageRequest();
 
-            ParsedDocument parsed = adapter.parse(textRequest());
+        ParsedDocument parsed = adapter().parse(request);
 
-            assertThat(parsed.getModelName()).isEqualTo("smart-worksite-chat");
-            assertThat(parsed.getContent()).isEqualTo("本地模型解析成功");
-        } finally {
-            server.stop(0);
-        }
+        ArgumentCaptor<Object> payload = ArgumentCaptor.forClass(Object.class);
+        verify(pythonClient).post(eq("/v1/document/understand"), eq("DOCUMENT_UNDERSTAND"), eq(7L), payload.capture());
+        Map<?, ?> page = (Map<?, ?>) ((List<?>) ((Map<?, ?>) payload.getValue()).get("pages")).get(0);
+        assertThat(page.get("nativeText")).isEqualTo("");
+        assertThat(page.get("imageDataUrl")).isEqualTo("data:image/jpeg;base64,AA==");
+        assertThat(parsed.getContent()).isEqualTo("现场图片文字");
     }
 
     @Test
-    void fallsBackToExtractedTextWhenModelReturnsNonSuccessStatus() throws Exception {
-        HttpServer server = startServer(503, "temporarily unavailable");
-        try {
-            QwenVlDocumentParseAdapter adapter = new QwenVlDocumentParseAdapter(configuredProperties(server), objectMapper);
+    void fallsBackToPreparedTextWhenPythonServiceIsUnavailable() throws Exception {
+        when(pythonClient.post(any(), any(), any(), any()))
+                .thenThrow(new BusinessException(ErrorCode.SERVICE_UNAVAILABLE, "local ai unavailable"));
 
-            ParsedDocument parsed = adapter.parse(textRequest());
+        ParsedDocument parsed = adapter().parse(textRequest());
 
-            assertFallback(parsed, "MODEL_HTTP_ERROR");
-        } finally {
-            server.stop(0);
-        }
-    }
-
-    @Test
-    void fallsBackToExtractedTextWhenModelResponseIsMalformed() throws Exception {
-        HttpServer server = startServer(200, "not-json");
-        try {
-            QwenVlDocumentParseAdapter adapter = new QwenVlDocumentParseAdapter(configuredProperties(server), objectMapper);
-
-            ParsedDocument parsed = adapter.parse(textRequest());
-
-            assertFallback(parsed, "MODEL_RESPONSE_INVALID");
-        } finally {
-            server.stop(0);
-        }
-    }
-
-    @Test
-    void fallsBackToExtractedTextWhenModelResponseContentIsEmpty() throws Exception {
-        HttpServer server = startServer(200, "{\"choices\":[{\"message\":{\"content\":\" \"}}]}");
-        try {
-            QwenVlDocumentParseAdapter adapter = new QwenVlDocumentParseAdapter(configuredProperties(server), objectMapper);
-
-            ParsedDocument parsed = adapter.parse(textRequest());
-
-            assertFallback(parsed, "MODEL_RESPONSE_EMPTY");
-        } finally {
-            server.stop(0);
-        }
-    }
-
-    @Test
-    void fallsBackToExtractedTextWhenModelCannotBeReached() throws Exception {
-        FileProperties properties = new FileProperties();
-        properties.getParse().getQwenVl().setEndpoint("http://127.0.0.1:1/v1/chat/completions");
-        properties.getParse().getQwenVl().setModel("smart-worksite-chat");
-        properties.getParse().getQwenVl().setConnectTimeoutMs(100);
-        properties.getParse().getQwenVl().setReadTimeoutMs(200);
-        QwenVlDocumentParseAdapter adapter = new QwenVlDocumentParseAdapter(properties, objectMapper);
-
-        ParsedDocument parsed = adapter.parse(textRequest());
-
-        assertFallback(parsed, "MODEL_UNREACHABLE");
-    }
-
-    @Test
-    void imageOnlyInputStillFailsWhenModelIsUnavailable() {
-        FileProperties properties = new FileProperties();
-        properties.getParse().getQwenVl().setEndpoint("http://127.0.0.1:1/v1/chat/completions");
-        properties.getParse().getQwenVl().setConnectTimeoutMs(100);
-        properties.getParse().getQwenVl().setReadTimeoutMs(200);
-        QwenVlDocumentParseAdapter adapter = new QwenVlDocumentParseAdapter(properties, objectMapper);
-        DocumentParseRequest request = new DocumentParseRequest();
-        request.setFileName("site.jpg");
-        request.setInputFormat("jpg");
-        request.setTargetFormat("TEXT");
-        request.setImageDataUrl("data:image/jpeg;base64,AA==");
-
-        assertThatThrownBy(() -> adapter.parse(request))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("qwen vl parse failed");
-    }
-
-    @Test
-    void blankExtractedTextStillFailsWhenModelIsUnavailable() {
-        FileProperties properties = new FileProperties();
-        properties.getParse().getQwenVl().setEndpoint("http://127.0.0.1:1/v1/chat/completions");
-        properties.getParse().getQwenVl().setConnectTimeoutMs(100);
-        properties.getParse().getQwenVl().setReadTimeoutMs(200);
-        QwenVlDocumentParseAdapter adapter = new QwenVlDocumentParseAdapter(properties, objectMapper);
-        DocumentParseRequest request = textRequest();
-        request.setTextContent("  ");
-
-        assertThatThrownBy(() -> adapter.parse(request))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("qwen vl parse failed");
-    }
-
-    private void assertFallback(ParsedDocument parsed, String expectedFailureCode) throws Exception {
-        assertThat(parsed.getContent()).contains("智慧工地安全检查制度", "临边洞口设置防护");
         assertThat(parsed.getModelName()).isEqualTo("LOCAL_TEXT_FALLBACK");
         JsonNode metadata = objectMapper.readTree(parsed.getMetadata());
         assertThat(metadata.path("provider").asText()).isEqualTo("LOCAL_TEXT_FALLBACK");
-        assertThat(metadata.path("failedModel").asText()).isEqualTo("smart-worksite-chat");
-        assertThat(metadata.path("failureCode").asText()).isEqualTo(expectedFailureCode);
-        assertThat(metadata.has("reason")).isFalse();
+        assertThat(metadata.path("failedProvider").asText()).isEqualTo("PYTHON_AI_SERVICE");
+        assertThat(metadata.path("failureCode").asText()).isEqualTo("PYTHON_SERVICE_UNAVAILABLE");
+        assertThat(metadata.toString()).doesNotContain("local ai unavailable");
     }
 
-    private FileProperties configuredProperties(HttpServer server) {
-        FileProperties properties = new FileProperties();
-        properties.getParse().getQwenVl().setEndpoint(
-                "http://127.0.0.1:" + server.getAddress().getPort() + "/v1/chat/completions");
-        properties.getParse().getQwenVl().setApiKey("");
-        properties.getParse().getQwenVl().setModel("smart-worksite-chat");
-        return properties;
+    @Test
+    void imageOnlyInputFailsWhenLocalPythonVisionIsUnavailableWithoutCloudFallback() {
+        when(pythonClient.post(any(), any(), any(), any()))
+                .thenThrow(new BusinessException(ErrorCode.SERVICE_UNAVAILABLE, "local ai unavailable"));
+
+        assertThatThrownBy(() -> adapter().parse(imageRequest()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("local document understanding failed");
+    }
+
+    @Test
+    void emptyPythonDocumentResponseFallsBackOnlyWhenPreparedTextExists() {
+        when(pythonClient.post(any(), any(), any(), any())).thenReturn(success(" ", "LOCAL_DOCUMENT", "model"));
+
+        assertThat(adapter().parse(textRequest()).getModelName()).isEqualTo("LOCAL_TEXT_FALLBACK");
+        assertThatThrownBy(() -> adapter().parse(imageRequest()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("local document understanding failed");
+    }
+
+    private QwenVlDocumentParseAdapter adapter() {
+        return new QwenVlDocumentParseAdapter(
+                new FileProperties(), pythonClient, aiProperties, objectMapper);
+    }
+
+    private AiProviderResponse success(String text, String provider, String model) {
+        AiProviderResponse response = new AiProviderResponse();
+        response.setSuccess(true);
+        response.setData(Map.of(
+                "text", text,
+                "totalTextChars", text.trim().length(),
+                "truncated", false,
+                "pages", List.of(Map.of("pageNo", 1, "source", "NATIVE", "text", text, "truncated", false))));
+        response.setUsage(Map.of("provider", provider, "model", model));
+        return response;
     }
 
     private DocumentParseRequest textRequest() {
         DocumentParseRequest request = new DocumentParseRequest();
+        request.setProjectId(7L);
         request.setFileId(99L);
         request.setFileName("safety-manual.pdf");
         request.setInputFormat("pdf");
@@ -163,17 +128,14 @@ class QwenVlDocumentParseAdapterTest {
         return request;
     }
 
-    private HttpServer startServer(int status, String body) throws Exception {
-        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/v1/chat/completions", exchange -> {
-            assertThat(exchange.getRequestHeaders().getFirst("Authorization")).isNull();
-            byte[] response = body.getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().set("Content-Type", "application/json");
-            exchange.sendResponseHeaders(status, response.length);
-            exchange.getResponseBody().write(response);
-            exchange.close();
-        });
-        server.start();
-        return server;
+    private DocumentParseRequest imageRequest() {
+        DocumentParseRequest request = new DocumentParseRequest();
+        request.setProjectId(7L);
+        request.setFileId(100L);
+        request.setFileName("site.jpg");
+        request.setInputFormat("jpg");
+        request.setTargetFormat("TEXT");
+        request.setImageDataUrl("data:image/jpeg;base64,AA==");
+        return request;
     }
 }

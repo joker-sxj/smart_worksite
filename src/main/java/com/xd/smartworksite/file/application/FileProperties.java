@@ -70,7 +70,6 @@ public class FileProperties {
         private int maxSlides = 200;
         private int maxPresentationShapes = 10000;
         private int maxPresentationCells = 100000;
-        private QwenVl qwenVl = new QwenVl();
 
         public boolean isEnabled() {
             return enabled;
@@ -159,61 +158,6 @@ public class FileProperties {
             this.maxPresentationCells = maxPresentationCells;
         }
 
-        public QwenVl getQwenVl() {
-            return qwenVl;
-        }
-
-        public void setQwenVl(QwenVl qwenVl) {
-            this.qwenVl = qwenVl;
-        }
     }
 
-    public static class QwenVl {
-
-        private String endpoint = "";
-        private String apiKey = "";
-        private String model = "qwen-vl-plus";
-        private int connectTimeoutMs = 5000;
-        private int readTimeoutMs = 120000;
-
-        public String getEndpoint() {
-            return endpoint;
-        }
-
-        public void setEndpoint(String endpoint) {
-            this.endpoint = endpoint;
-        }
-
-        public String getApiKey() {
-            return apiKey;
-        }
-
-        public void setApiKey(String apiKey) {
-            this.apiKey = apiKey;
-        }
-
-        public String getModel() {
-            return model;
-        }
-
-        public void setModel(String model) {
-            this.model = model;
-        }
-
-        public int getConnectTimeoutMs() {
-            return connectTimeoutMs;
-        }
-
-        public void setConnectTimeoutMs(int connectTimeoutMs) {
-            this.connectTimeoutMs = connectTimeoutMs;
-        }
-
-        public int getReadTimeoutMs() {
-            return readTimeoutMs;
-        }
-
-        public void setReadTimeoutMs(int readTimeoutMs) {
-            this.readTimeoutMs = readTimeoutMs;
-        }
-    }
 }

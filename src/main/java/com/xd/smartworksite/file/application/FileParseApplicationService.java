@@ -104,8 +104,8 @@ public class FileParseApplicationService {
         record.setSourceContentType(fileObject.getContentType());
         record.setParseType(resolveParseType(fileObject));
         record.setResultFormat(resultFormat.name());
-        record.setParserProvider("QWEN_VL");
-        record.setParserModel(fileProperties.getParse().getQwenVl().getModel());
+        record.setParserProvider("PYTHON_AI_SERVICE");
+        record.setParserModel(null);
         record.setStatus(FileParseStatus.PENDING.name());
         record.setProgress(0);
         record.setCurrentStage(FileParseStage.CREATED.name());
