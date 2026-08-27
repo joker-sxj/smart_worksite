@@ -58,11 +58,11 @@ Run each new test while it is intentionally failing, implement the smallest chan
 - Modify: `deploy/.env.example`
 - Test: `scripts/model-profile-contract.tests.sh`
 
-- [ ] **Step 1: Write the failing contract assertions** for both profiles: exactly two GPUs, RTX A6000 target declaration, 48GB minimum per GPU, chat context `32768`/`16384`, chat max sequences `2`/`1`, pinned model revisions/images, local endpoints, and reranker port `8000`.
-- [ ] **Step 2: Run `bash scripts/model-profile-contract.tests.sh`** and verify it fails because the two profiles and/or the port contract are absent.
-- [ ] **Step 3: Add the profiles** with explicit values: `GPU_COUNT=2`, `GPU_MIN_MEMORY_GB=48`, `GPU_EXPECTED_MODEL_REGEX='RTX A6000'`, BF16 chat model, embedding/reranker models, `CHAT_MAX_MODEL_LEN=32768` or `16384`, and conservative memory utilization that leaves headroom for KV cache and other services. Keep `a6000x2-bf16.env.example` as a compatibility entry with a comment and deterministic mapping to the stable profile; do not silently break existing startup arguments.
-- [ ] **Step 4: Fix Compose/profile variable names and the default reranker endpoint** so the container port and `QWEN_RERANK_BASE_URL` both use `http://local-reranker:8000/v1/rerank`; run the focused contract test and expect PASS.
-- [ ] **Step 5: Commit** with `git add deploy/model-profiles deploy/docker-compose-models.yml deploy/.env.example scripts/model-profile-contract.tests.sh && git commit -m "feat: add dual A6000 production model profiles"`.
+- [x] **Step 1: Write the failing contract assertions** for both profiles: exactly two GPUs, RTX A6000 target declaration, 48GB minimum per GPU, chat context `32768`/`16384`, chat max sequences `2`/`1`, pinned model revisions/images, local endpoints, and reranker port `8000`.
+- [x] **Step 2: Run `bash scripts/model-profile-contract.tests.sh`** and verify it fails because the two profiles and/or the port contract are absent.
+- [x] **Step 3: Add the profiles** with explicit values: `GPU_COUNT=2`, `GPU_MIN_MEMORY_GB=48`, `GPU_EXPECTED_MODEL_REGEX='RTX A6000'`, BF16 chat model, embedding/reranker models, `CHAT_MAX_MODEL_LEN=32768` or `16384`, and conservative memory utilization that leaves headroom for KV cache and other services. Keep `a6000x2-bf16.env.example` as a compatibility entry with a comment and deterministic mapping to the stable profile; do not silently break existing startup arguments.
+- [x] **Step 4: Fix Compose/profile variable names and the default reranker endpoint** so the container port and `QWEN_RERANK_BASE_URL` both use `http://local-reranker:8000/v1/rerank`; run the focused contract test and expect PASS.
+- [x] **Step 5: Commit** with `git add deploy/model-profiles deploy/docker-compose-models.yml deploy/.env.example scripts/model-profile-contract.tests.sh && git commit -m "feat: add dual A6000 production model profiles"`.
 
 ### Task 2: Enforce GPU hardware and memory preflight
 
@@ -72,11 +72,11 @@ Run each new test while it is intentionally failing, implement the smallest chan
 - Test: `scripts/model-profile-contract.tests.sh`
 - Test: `scripts/check-gpu-runtime.tests.sh`
 
-- [ ] **Step 1: Add mocked `nvidia-smi` tests** covering success for two A6000 48GB cards, failure for one card, failure for wrong model, failure below 48GB, and failure when Docker GPU runtime cannot see the cards.
-- [ ] **Step 2: Run `bash scripts/check-gpu-runtime.tests.sh`** and confirm the new cases fail against the count-only implementation.
-- [ ] **Step 3: Implement profile parsing and checks** using `nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv,noheader`; compare every visible GPU against profile requirements, validate the profile's GPU count and minimum memory, and print a remediation message naming the failed field. Keep all path handling inside the repository and avoid destructive Docker actions.
-- [ ] **Step 4: Run both GPU tests plus `bash scripts/model-profile-contract.tests.sh`**; expect PASS and verify existing H100 mocked tests remain green.
-- [ ] **Step 5: Commit** with `git add scripts/check-gpu-runtime.sh scripts/check-gpu-runtime.tests.sh scripts/lib/lifecycle.sh scripts/model-profile-contract.tests.sh && git commit -m "feat: gate startup on model profile hardware"`.
+- [x] **Step 1: Add mocked `nvidia-smi` tests** covering success for two A6000 48GB cards, failure for one card, failure for wrong model, failure below 48GB, and failure when Docker GPU runtime cannot see the cards.
+- [x] **Step 2: Run `bash scripts/check-gpu-runtime.tests.sh`** and confirm the new cases fail against the count-only implementation.
+- [x] **Step 3: Implement profile parsing and checks** using `nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv,noheader`; compare every visible GPU against profile requirements, validate the profile's GPU count and minimum memory, and print a remediation message naming the failed field. Keep all path handling inside the repository and avoid destructive Docker actions.
+- [x] **Step 4: Run both GPU tests plus `bash scripts/model-profile-contract.tests.sh`**; expect PASS and verify existing H100 mocked tests remain green.
+- [x] **Step 5: Commit** with `git add scripts/check-gpu-runtime.sh scripts/check-gpu-runtime.tests.sh scripts/lib/lifecycle.sh scripts/model-profile-contract.tests.sh && git commit -m "feat: gate startup on model profile hardware"`.
 
 ### Task 3: Add explicit Python local-only and crawler-network policy
 
@@ -90,11 +90,11 @@ Run each new test while it is intentionally failing, implement the smallest chan
 - Test: `python-ai-service/tests/test_local_only_configuration.py`
 - Test: `python-ai-service/tests/test_policy_crawler.py`
 
-- [ ] **Step 1: Add failing tests** asserting `AI_ALLOW_REMOTE_INFERENCE=false` and `AI_ALLOW_CLOUD_FALLBACK=false` are required/effective in `LOCAL_ONLY`, remote endpoints are rejected, and a disabled crawler returns a clear configuration error without making an HTTP request. Add a separate enabled-crawler test proving the existing HTTPX behavior remains available.
-- [ ] **Step 2: Run `cd python-ai-service && pytest -q tests/test_local_only_configuration.py tests/test_policy_crawler.py`** and confirm failure for missing settings/injection.
-- [ ] **Step 3: Add typed settings** `ai_allow_remote_inference: bool = False`, `ai_allow_cloud_fallback: bool = False`, and `policy_crawler_network_enabled: bool = False`; validate that LOCAL_ONLY cannot enable either remote inference or cloud fallback, and pass `Settings` into `PolicyCrawlerService` from the dependency container. Raise a stable `PolicyCrawlerNetworkDisabledError` before constructing/using `httpx.AsyncClient` when disabled.
-- [ ] **Step 4: Run the focused Python tests and the complete Python test suite** with `pytest -q`; expect PASS, including no-secret assertions in health/dependency output.
-- [ ] **Step 5: Commit** with `git add python-ai-service deploy/.env.example deploy/docker-compose-env.yml && git commit -m "feat: enforce local inference and crawler network policy"`.
+- [x] **Step 1: Add failing tests** asserting `AI_ALLOW_REMOTE_INFERENCE=false` and `AI_ALLOW_CLOUD_FALLBACK=false` are required/effective in `LOCAL_ONLY`, remote endpoints are rejected, and a disabled crawler returns a clear configuration error without making an HTTP request. Add a separate enabled-crawler test proving the existing HTTPX behavior remains available.
+- [x] **Step 2: Run `cd python-ai-service && pytest -q tests/test_local_only_configuration.py tests/test_policy_crawler.py`** and confirm failure for missing settings/injection.
+- [x] **Step 3: Add typed settings** `ai_allow_remote_inference: bool = False`, `ai_allow_cloud_fallback: bool = False`, and `policy_crawler_network_enabled: bool = False`; validate that LOCAL_ONLY cannot enable either remote inference or cloud fallback, and pass `Settings` into `PolicyCrawlerService` from the dependency container. Raise a stable `PolicyCrawlerNetworkDisabledError` before constructing/using `httpx.AsyncClient` when disabled.
+- [x] **Step 4: Run the focused Python tests and the complete Python test suite** with `pytest -q`; expect PASS, including no-secret assertions in health/dependency output.
+- [x] **Step 5: Commit** with `git add python-ai-service deploy/.env.example deploy/docker-compose-env.yml && git commit -m "feat: enforce local inference and crawler network policy"`.
 
 ### Task 4: Add real local model readiness and safe runtime status
 
@@ -106,11 +106,11 @@ Run each new test while it is intentionally failing, implement the smallest chan
 - Test: `python-ai-service/tests/test_api.py`
 - Test: `python-ai-service/tests/test_local_only_configuration.py`
 
-- [ ] **Step 1: Write failing API tests** for `/v1/health` configuration status versus model reachability: local endpoint configuration must be reported separately from chat/vision/embedding/rerank readiness; an unreachable model must not be reported healthy; API keys and full secret-bearing URLs must never appear.
-- [ ] **Step 2: Run `cd python-ai-service && pytest -q tests/test_api.py tests/test_local_only_configuration.py`** and verify the readiness assertions fail.
-- [ ] **Step 3: Implement a bounded, timeout-controlled probe** for each configured local dependency using its OpenAI-compatible health/model endpoint (without generation), return `configured`, `reachable`, `provider`, `model`, `endpointScope`, `profile`, and `maxContextTokens`, and map connection/HTTP errors to safe status strings. Keep `/v1/health` usable for liveness; expose readiness details without leaking credentials.
-- [ ] **Step 4: Run focused and full Python tests**; expect PASS. Run `bash scripts/check-local-models.sh --model-profile deploy/model-profiles/a6000x2-stable-16k.env.example --wait 5` against the running services and verify each model is reported separately.
-- [ ] **Step 5: Commit** with `git add python-ai-service && git commit -m "feat: expose safe local model readiness"`.
+- [x] **Step 1: Write failing API tests** for `/v1/health` configuration status versus model reachability: local endpoint configuration must be reported separately from chat/vision/embedding/rerank readiness; an unreachable model must not be reported healthy; API keys and full secret-bearing URLs must never appear.
+- [x] **Step 2: Run `cd python-ai-service && pytest -q tests/test_api.py tests/test_local_only_configuration.py`** and verify the readiness assertions fail.
+- [x] **Step 3: Implement a bounded, timeout-controlled probe** for each configured local dependency using its OpenAI-compatible health/model endpoint (without generation), return `configured`, `reachable`, `provider`, `model`, `endpointScope`, `profile`, and `maxContextTokens`, and map connection/HTTP errors to safe status strings. Keep `/v1/health` usable for liveness; expose readiness details without leaking credentials.
+- [x] **Step 4: Run focused and full Python tests**; expect PASS. Run `bash scripts/check-local-models.sh --model-profile deploy/model-profiles/a6000x2-stable-16k.env.example --wait 5` against the running services and verify each model is reported separately.
+- [x] **Step 5: Commit** with `git add python-ai-service && git commit -m "feat: expose safe local model readiness"`.
 
 ### Task 5: Migrate Java document parsing away from direct model calls
 
@@ -122,11 +122,11 @@ Run each new test while it is intentionally failing, implement the smallest chan
 - Modify: `src/test/java/com/xd/smartworksite/file/infra/QwenVlDocumentParseAdapterTest.java`
 - Add/modify: the existing Java `AiPythonServiceClient` tests and DTOs discovered in the file package
 
-- [ ] **Step 1: Write failing Mockito/WireMock tests** that construct the parser with the Python client and assert text/image parsing sends requests to the Python service, never to `QWEN_VL_ENDPOINT`; add a failure test for unavailable image understanding with no cloud fallback.
-- [ ] **Step 2: Run the focused Maven test** `./mvnw -Dtest=QwenVlDocumentParseAdapterTest test` and verify the old constructor/direct HTTP expectation fails.
-- [ ] **Step 3: Replace provider HTTP in `QwenVlDocumentParseAdapter`** with the existing Python client call (`/v1/document/understand` or `/v1/model/invoke` according to the actual DTO contract), preserve local text extraction fallback, and return provider/model metadata from Python. Remove Java Qwen endpoint/API-key properties while preserving non-breaking configuration aliases only when the application still needs to parse old environments.
-- [ ] **Step 4: Change `FileParseWorker.buildMetadata()`** to use returned provider/model values; never hard-code `QWEN_VL` for local text fallback. Run the focused test and then `./mvnw -Dtest='*file*Test' test` (or the repository's exact file-test selector) and expect PASS.
-- [ ] **Step 5: Commit** with `git add src/main/java src/main/resources src/test/java && git commit -m "refactor: route document model calls through local AI service"`.
+- [x] **Step 1: Write failing Mockito/WireMock tests** that construct the parser with the Python client and assert text/image parsing sends requests to the Python service, never to `QWEN_VL_ENDPOINT`; add a failure test for unavailable image understanding with no cloud fallback.
+- [x] **Step 2: Run the focused Maven test** `./mvnw -Dtest=QwenVlDocumentParseAdapterTest test` and verify the old constructor/direct HTTP expectation fails.
+- [x] **Step 3: Replace provider HTTP in `QwenVlDocumentParseAdapter`** with the existing Python client call (`/v1/document/understand` or `/v1/model/invoke` according to the actual DTO contract), preserve local text extraction fallback, and return provider/model metadata from Python. Remove Java Qwen endpoint/API-key properties while preserving non-breaking configuration aliases only when the application still needs to parse old environments.
+- [x] **Step 4: Change `FileParseWorker.buildMetadata()`** to use returned provider/model values; never hard-code `QWEN_VL` for local text fallback. Run the focused test and then `./mvnw -Dtest='*file*Test' test` (or the repository's exact file-test selector) and expect PASS.
+- [x] **Step 5: Commit** with `git add src/main/java src/main/resources src/test/java && git commit -m "refactor: route document model calls through local AI service"`.
 
 ### Task 6: Add AI dependency health to Java system status
 
@@ -138,11 +138,11 @@ Run each new test while it is intentionally failing, implement the smallest chan
 - Test: `src/test/java/com/xd/smartworksite/system/application/SystemStatusApplicationServiceTest.java`
 - Test: controller/client tests in the existing system test package
 
-- [ ] **Step 1: Add failing tests** for AI service reachable/unreachable, `LOCAL_ONLY`, profile/model names, context limit, and secret redaction while preserving MySQL/Redis/MinIO checks.
-- [ ] **Step 2: Run `./mvnw -Dtest=SystemStatusApplicationServiceTest test`** and confirm the AI dependency assertions fail.
-- [ ] **Step 3: Add a typed safe AI health section** to the existing response or a dedicated nested DTO, call Python's health/readiness endpoint with the existing client timeout, and map timeout/5xx to `DOWN` without failing unrelated dependency checks. Include only model names, local scope, profile, and context limit; omit API keys and authorization headers.
-- [ ] **Step 4: Run focused system tests, the full Java test suite `./mvnw test`, and `./mvnw -DskipTests package`**; expect PASS.
-- [ ] **Step 5: Commit** with `git add src/main/java src/main/resources src/test/java && git commit -m "feat: include local AI in system dependency health"`.
+- [x] **Step 1: Add failing tests** for AI service reachable/unreachable, `LOCAL_ONLY`, profile/model names, context limit, and secret redaction while preserving MySQL/Redis/MinIO checks.
+- [x] **Step 2: Run `./mvnw -Dtest=SystemStatusApplicationServiceTest test`** and confirm the AI dependency assertions fail.
+- [x] **Step 3: Add a typed safe AI health section** to the existing response or a dedicated nested DTO, call Python's health/readiness endpoint with the existing client timeout, and map timeout/5xx to `DOWN` without failing unrelated dependency checks. Include only model names, local scope, profile, and context limit; omit API keys and authorization headers.
+- [x] **Step 4: Run focused system tests, the full Java test suite `./mvnw test`, and `./mvnw -DskipTests package`**; expect PASS.
+- [x] **Step 5: Commit** with `git add src/main/java src/main/resources src/test/java && git commit -m "feat: include local AI in system dependency health"`.
 
 ### Task 7: Add benchmark runner for customer A6000 evidence
 
@@ -152,11 +152,11 @@ Run each new test while it is intentionally failing, implement the smallest chan
 - Modify: `scripts/check-local-models.sh` only if it needs a shared endpoint/profile helper
 - Test: `scripts/benchmark-local-models.tests.py`
 
-- [ ] **Step 1: Write deterministic tests** for token-count request construction, streaming TTFT parsing, output tokens/sec, percentile calculation, concurrency result grouping, model error/OOM classification, and JSON report schema.
-- [ ] **Step 2: Run `python3 scripts/benchmark-local-models.tests.py`** and verify failure because the runner does not exist.
-- [ ] **Step 3: Implement a standard-library runner** with CLI options `--profile`, `--base-url`, `--lengths 2000,8000,16000,24000,32000`, `--concurrency 1,2`, `--runs`, `--timeout`, and `--output`. Use streaming chat requests to measure TTFT, record total duration and generated tokens/sec, run embedding and reranker smoke cases, and capture `nvidia-smi` samples when available. Write JSON containing hardware/profile/config, every sample, P50/P95, errors, OOM/timeout/restart indicators, and an explicit `validatedOnHost` field.
-- [ ] **Step 4: Run the unit tests, `python3 scripts/benchmark-local-models.py --help`, and a short mocked run**; expect PASS. Do not run a 32K load test on H100 and label it A6000 validation; the full command is for the customer A6000 host after deployment.
-- [ ] **Step 5: Commit** with `git add scripts/benchmark-local-models.py scripts/benchmark-local-models.tests.py && git commit -m "feat: add customer GPU inference benchmark"`.
+- [x] **Step 1: Write deterministic tests** for token-count request construction, streaming TTFT parsing, output tokens/sec, percentile calculation, concurrency result grouping, model error/OOM classification, and JSON report schema.
+- [x] **Step 2: Run `python3 scripts/benchmark-local-models.tests.py`** and verify failure because the runner does not exist.
+- [x] **Step 3: Implement a standard-library runner** with CLI options `--profile`, `--base-url`, `--lengths 2000,8000,16000,24000,32000`, `--concurrency 1,2`, `--runs`, `--timeout`, and `--output`. Use streaming chat requests to measure TTFT, record total duration and generated tokens/sec, run embedding and reranker smoke cases, and capture `nvidia-smi` samples when available. Write JSON containing hardware/profile/config, every sample, P50/P95, errors, OOM/timeout/restart indicators, and an explicit `validatedOnHost` field.
+- [x] **Step 4: Run the unit tests, `python3 scripts/benchmark-local-models.py --help`, and a short mocked run**; expect PASS. Do not run a 32K load test on H100 and label it A6000 validation; the full command is for the customer A6000 host after deployment.
+- [x] **Step 5: Commit** with `git add scripts/benchmark-local-models.py scripts/benchmark-local-models.tests.py && git commit -m "feat: add customer GPU inference benchmark"`.
 
 ### Task 8: Strengthen local-model startup and status gates
 
@@ -168,11 +168,11 @@ Run each new test while it is intentionally failing, implement the smallest chan
 - Test: `scripts/model-profile-contract.tests.sh`
 - Test: new shell tests under `scripts/`
 
-- [ ] **Step 1: Add failing shell tests** for profile resolution, missing local endpoint, failed 32K boundary request, model container stop, and a safe `status.sh` report that distinguishes configuration from readiness.
-- [ ] **Step 2: Run the focused shell tests** and confirm current readiness-only behavior does not catch generation-boundary or profile errors.
-- [ ] **Step 3: Make `start-all.sh` sequence**: resolve profile, run GPU preflight, start Compose services, wait for each local model, then run a bounded generation/embedding/rerank smoke check; exit non-zero with the failed dependency and remediation command. Keep `docker compose` file composition compatible with standalone parsing and do not add invalid `depends_on` references to services defined only in another override file.
-- [ ] **Step 4: Run all shell contract tests and a controlled `./scripts/start-all.sh --check --model-profile a6000x2-stable-16k`** on the remote host; expect clear output and no lifecycle indirect-expansion error.
-- [ ] **Step 5: Commit** with `git add scripts && git commit -m "fix: make local model startup gate actionable"`.
+- [x] **Step 1: Add failing shell tests** for profile resolution, missing local endpoint, failed 32K boundary request, model container stop, and a safe `status.sh` report that distinguishes configuration from readiness.
+- [x] **Step 2: Run the focused shell tests** and confirm current readiness-only behavior does not catch generation-boundary or profile errors.
+- [x] **Step 3: Make `start-all.sh` sequence**: resolve profile, run GPU preflight, start Compose services, wait for each local model, then run a bounded generation/embedding/rerank smoke check; exit non-zero with the failed dependency and remediation command. Keep `docker compose` file composition compatible with standalone parsing and do not add invalid `depends_on` references to services defined only in another override file.
+- [x] **Step 4: Run all shell contract tests and a controlled `./scripts/start-all.sh --check --model-profile a6000x2-stable-16k`** on the remote host; expect clear output and no lifecycle indirect-expansion error.
+- [x] **Step 5: Commit** with `git add scripts && git commit -m "fix: make local model startup gate actionable"`.
 
 ### Task 9: Update delivery documentation and local-only operational runbook
 
@@ -181,11 +181,11 @@ Run each new test while it is intentionally failing, implement the smallest chan
 - Create: `docs/superpowers/runbooks/a6000-local-inference-operations.md`
 - Modify: `deploy/.env.example` if documentation reveals missing variable descriptions
 
-- [ ] **Step 1: Add documentation checks** that fail when the tracked OCR API guide instructs users to configure DashScope/cloud API keys as the production path, or when the runbook omits the local-only gate, crawler switch, profile names, and benchmark command.
-- [ ] **Step 2: Run the documentation checks** and confirm they fail against the stale cloud text.
-- [ ] **Step 3: Rewrite the tracked guide** to state that Java calls Python, Python calls local model endpoints, cloud fallback is disabled in production, and OCR/document parsing reports the real provider. Add the runbook with exact commands for stable/32K profile startup, status, logs, failure recovery, crawler network enablement, and customer A6000 benchmark acceptance criteria.
-- [ ] **Step 4: Run documentation checks plus `git diff --check`**; expect PASS and confirm no secrets or raw tokens are present.
-- [ ] **Step 5: Commit** with `git add src/main/java/com/xd/smartworksite/ocr/API.md docs/superpowers/runbooks/a6000-local-inference-operations.md deploy/.env.example && git commit -m "docs: document A6000 local inference operations"`.
+- [x] **Step 1: Add documentation checks** that fail when the tracked OCR API guide instructs users to configure DashScope/cloud API keys as the production path, or when the runbook omits the local-only gate, crawler switch, profile names, and benchmark command.
+- [x] **Step 2: Run the documentation checks** and confirm they fail against the stale cloud text.
+- [x] **Step 3: Rewrite the tracked guide** to state that Java calls Python, Python calls local model endpoints, cloud fallback is disabled in production, and OCR/document parsing reports the real provider. Add the runbook with exact commands for stable/32K profile startup, status, logs, failure recovery, crawler network enablement, and customer A6000 benchmark acceptance criteria.
+- [x] **Step 4: Run documentation checks plus `git diff --check`**; expect PASS and confirm no secrets or raw tokens are present.
+- [x] **Step 5: Commit** with `git add src/main/java/com/xd/smartworksite/ocr/API.md docs/superpowers/runbooks/a6000-local-inference-operations.md deploy/.env.example && git commit -m "docs: document A6000 local inference operations"`.
 
 ### Task 10: Full stage verification and handoff for customer acceptance
 
@@ -193,13 +193,13 @@ Run each new test while it is intentionally failing, implement the smallest chan
 - Modify: `scripts/model-profile-contract.tests.sh` only for final integration assertions
 - Create: `docs/superpowers/reports/2026-08-27-a6000-local-inference-verification.md`
 
-- [ ] **Step 1: Run Python verification**: `cd python-ai-service && pytest -q`; expect all Python tests PASS, including local-only rejection, crawler switch, health redaction, and model failure behavior.
-- [ ] **Step 2: Run Java verification**: `./mvnw test && ./mvnw -DskipTests package`; expect both commands PASS and confirm no Java source retains an active direct Qwen HTTP client.
-- [ ] **Step 3: Run shell verification**: `bash scripts/model-profile-contract.tests.sh`, all new shell tests, `bash -n scripts/*.sh scripts/lib/*.sh`, and `git diff --check`; expect PASS.
-- [ ] **Step 4: On H100, run only functional/local-gate verification**: start stable profile, stop each model in turn, test local-only rejection of a public endpoint, verify crawler on/off independently, and record that the host is H100 and not an A6000 performance acceptance result.
+- [x] **Step 1: Run Python verification**: `cd python-ai-service && pytest -q`; expect all Python tests PASS, including local-only rejection, crawler switch, health redaction, and model failure behavior.
+- [x] **Step 2: Run Java verification**: `./mvnw test && ./mvnw -DskipTests package`; expect both commands PASS and confirm no Java source retains an active direct Qwen HTTP client.
+- [x] **Step 3: Run shell verification**: `bash scripts/model-profile-contract.tests.sh`, all new shell tests, `bash -n scripts/*.sh scripts/lib/*.sh`, and `git diff --check`; expect PASS.
+- [x] **Step 4: On H100, run only functional/local-gate verification**: start stable profile, stop each model in turn, test local-only rejection of a public endpoint, verify crawler on/off independently, and record that the host is H100 and not an A6000 performance acceptance result.
 - [ ] **Step 5: On the customer dual-A6000 host, execute `./scripts/start-all.sh --model-profile a6000x2-production-32k`, then `python3 scripts/benchmark-local-models.py --profile deploy/model-profiles/a6000x2-production-32k.env.example --lengths 2000,8000,16000,24000,32000 --concurrency 1,2 --runs 3 --output reports/a6000-production-benchmark.json`; record TTFT, output tokens/sec, total duration, P50/P95, VRAM peak, OOM, timeout, restart, queueing, and embedding/reranker contention results.
-- [ ] **Step 6: Review the report against the explicit acceptance rules**: no public inference request succeeds in LOCAL_ONLY; every model is local and reachable; 32K is either accepted with evidence or the stable 16K profile is selected with the reason; no fixed throughput promise is made without customer measurements.
-- [ ] **Step 7: Commit the verification report** with `git add docs/superpowers/reports/2026-08-27-a6000-local-inference-verification.md && git commit -m "test: record local inference stage verification"`; stop here for user acceptance before any later stage or target-repository PR.
+- [x] **Step 6: Review the report against the explicit acceptance rules**: no public inference request succeeds in LOCAL_ONLY; every model is local and reachable; 32K is either accepted with evidence or the stable 16K profile is selected with the reason; no fixed throughput promise is made without customer measurements.
+- [x] **Step 7: Commit the verification report** with `git add docs/superpowers/reports/2026-08-27-a6000-local-inference-verification.md && git commit -m "test: record local inference stage verification"`; stop here for user acceptance before any later stage or target-repository PR.
 
 ## Self-review checklist
 
