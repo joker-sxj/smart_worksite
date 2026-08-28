@@ -331,6 +331,12 @@ public class QaApplicationService {
             routeResponse = systemCall ? aiGateway.routeForSystem(routeRequest) : aiGateway.route(routeRequest);
             route = normalizeRouteMode(routeResponse.getRouteType());
             route = constrainRouteToAvailableResources(route, knowledgeBaseIds, dataSourceIds);
+            // Explicitly selected knowledge bases are the user's source-of-truth scope. The
+            // router must not block that scope with an ungrounded clarification request.
+            if (route == QaRouteMode.NEED_MORE_INFO
+                    && knowledgeBaseIds != null && !knowledgeBaseIds.isEmpty()) {
+                route = QaRouteMode.KNOWLEDGE;
+            }
         }
         return switch (route) {
             case NEED_MORE_INFO -> clarificationResponse(message, routeResponse);

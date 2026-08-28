@@ -157,6 +157,23 @@ class QaApplicationServiceTest {
         assertThat(message.getRouteMode()).isEqualTo("MODEL");
         assertThat(aiGateway.lastRagRequest).isNull();
     }
+
+    @Test
+    void autoRouteClarificationFallsBackToSelectedKnowledgeBase() {
+        aiGateway.nextRoute = "NEED_MORE_INFO";
+        aiGateway.nextFollowUpQuestions = List.of();
+        var session = service.createSession(createSessionRequest(1L, "auto-route"));
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("夜间噪声56 dB(A)而限值为55 dB(A)是否超标");
+        request.setKnowledgeBaseIds(List.of(10L));
+
+        var message = service.sendMessage(session.getSessionId(), request);
+
+        assertThat(message.getStatus()).isEqualTo("SUCCESS");
+        assertThat(message.getRouteMode()).isEqualTo("KNOWLEDGE");
+        assertThat(aiGateway.lastRagRequest.getKnowledgeBaseIds()).containsExactly(10L);
+    }
+
     @Test
     void sendMessageRejectsForeignKnowledgeBaseBeforeCallingAi() {
         var session = service.createSession(createSessionRequest(1L, "current-project"));
@@ -361,6 +378,7 @@ class QaApplicationServiceTest {
 
     private static class StubQaAiGateway implements QaAiGateway {
         private String nextRoute = "MODEL";
+        private List<String> nextFollowUpQuestions = List.of();
         private RagSearchRequest lastRagRequest;
         private DatabaseQueryRequest lastDatabaseRequest;
 
@@ -368,6 +386,7 @@ class QaApplicationServiceTest {
         public RouteResponse route(RouteRequest request) {
             RouteResponse response = new RouteResponse();
             response.setRouteType(nextRoute);
+            response.setFollowUpQuestions(nextFollowUpQuestions);
             response.setProviderTraceId("route-trace");
             return response;
         }
