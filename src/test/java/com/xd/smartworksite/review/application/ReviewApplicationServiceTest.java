@@ -74,8 +74,9 @@ class ReviewApplicationServiceTest {
                 reviewAiGateway,
                 extractor,
                 new ObjectMapper(),
-                taskRepository,
-                taskOutboxApplicationService,
+                null,
+                null,
+                null,
                 mock(KnowledgeBaseApplicationService.class)
         );
     }

@@ -136,7 +136,7 @@ class MigrationContractTest {
     @Test
     void reviewMultiSourceMigrationAddsSourceSnapshotsAndCitations() throws IOException {
         String migration = Files.readString(
-                MIGRATION_DIR.resolve("V21__add_review_multi_sources.sql"),
+                MIGRATION_DIR.resolve("V23__add_review_multi_sources.sql"),
                 StandardCharsets.UTF_8
         );
 

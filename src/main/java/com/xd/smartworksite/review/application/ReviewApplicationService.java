@@ -77,6 +77,21 @@ public class ReviewApplicationService {
                 reviewAiGateway, documentTextExtractor, objectMapper, null, null, null, null);
     }
 
+    public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
+                                    ProjectAccessApplicationService projectAccessApplicationService,
+                                    FileObjectApplicationService fileObjectApplicationService,
+                                    TemplateApplicationService templateApplicationService,
+                                    ReviewAiGateway reviewAiGateway,
+                                    ReviewDocumentTextExtractor documentTextExtractor,
+                                    ObjectMapper objectMapper,
+                                    TaskRepository taskRepository,
+                                    TaskOutboxApplicationService taskOutboxApplicationService,
+                                    TaskWorkerApplicationService taskWorkerApplicationService) {
+        this(reviewRecordRepository, projectAccessApplicationService, fileObjectApplicationService, templateApplicationService,
+                reviewAiGateway, documentTextExtractor, objectMapper, taskRepository, taskOutboxApplicationService,
+                taskWorkerApplicationService, null);
+    }
+
     @Autowired
     public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
                                     ProjectAccessApplicationService projectAccessApplicationService,
@@ -118,7 +133,9 @@ public class ReviewApplicationService {
             }
         }
         List<Long> knowledgeBaseIds = normalizeIds(request.getKnowledgeBaseIds());
-        knowledgeBaseApplicationService.validateEnabledForReview(request.getProjectId(), knowledgeBaseIds);
+        if (knowledgeBaseApplicationService != null) {
+            knowledgeBaseApplicationService.validateEnabledForReview(request.getProjectId(), knowledgeBaseIds);
+        }
         FileUploadRequest uploadRequest = new FileUploadRequest();
         uploadRequest.setProjectId(request.getProjectId());
         uploadRequest.setBizType("REVIEW_DOC");
@@ -416,8 +433,10 @@ public class ReviewApplicationService {
             evidence.add(source);
         }
         List<Long> knowledgeBaseIds = normalizeIds(readLongList(record.getKnowledgeBaseIds()));
-        if (systemExecution) knowledgeBaseApplicationService.validateEnabledForReviewForSystem(record.getProjectId(), knowledgeBaseIds);
-        else knowledgeBaseApplicationService.validateEnabledForReview(record.getProjectId(), knowledgeBaseIds);
+        if (knowledgeBaseApplicationService != null) {
+            if (systemExecution) knowledgeBaseApplicationService.validateEnabledForReviewForSystem(record.getProjectId(), knowledgeBaseIds);
+            else knowledgeBaseApplicationService.validateEnabledForReview(record.getProjectId(), knowledgeBaseIds);
+        }
         if (!knowledgeBaseIds.isEmpty()) {
             RagSearchRequest search = new RagSearchRequest();
             search.setProjectId(record.getProjectId());
