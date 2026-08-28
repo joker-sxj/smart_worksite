@@ -228,3 +228,128 @@ def test_rag_search_promotes_exact_clause_body_over_toc(tmp_path):
 
     assert result.records[0].metadata["location"] == {"page": 6}
     assert "无雨雪" in result.records[0].contentSnippet
+def test_rag_search_promotes_numeric_limit_table_evidence_over_semantic_distractor(tmp_path):
+    settings = Settings(rag_provider="LOCAL", rag_data_dir=str(tmp_path), embedding_provider="LOCAL_HASH")
+    service = RagService(settings, FakeQwen())
+    from app.services.vector_store import ChunkRecord
+
+    def record(chunk_id, content, score):
+        return ChunkRecord(
+            id=chunk_id, projectId=1, knowledgeBaseId=5, documentId="doc-35",
+            title="GB 12523", content=content, sourceType="DOCUMENT", sourceId="35",
+            metadata={"unitIndex": int(chunk_id), "chunkIndex": 0, "location": {"page": int(chunk_id)}},
+            embedding=[score, 0.0],
+        )
+
+    class Store:
+        async def search(self, query_embedding, project_id, knowledge_base_ids, top_k):
+            return [
+                (record("1", "建筑施工噪声排放标准适用于场界噪声监测和评价。", 0.99), 0.99),
+                (record("5", "表 1 建筑施工场界噪声排放限值 单位：dB（A） 昼间 夜间 70 55。", 0.50), 0.50),
+            ]
+
+        async def adjacent(self, chunk, before=1, after=1):
+            return []
+
+    service.store = Store()
+    result, _ = asyncio.run(service.search(RagSearchRequest.model_validate({
+        "query": "建筑施工场界噪声排放限值，昼间和夜间分别是多少？", "projectId": 1,
+        "knowledgeBaseIds": [5], "topK": 1, "rerankEnabled": False,
+    })))
+
+    assert result.records[0].metadata["location"] == {"page": 5}
+    assert "昼间 夜间 70 55" in result.records[0].contentSnippet
+
+def test_local_text_search_recalls_exact_policy_evidence_outside_vector_top_k(tmp_path):
+    from app.services.vector_store import ChunkRecord, LocalJsonVectorStore
+
+    def record(chunk_id, content, unit_index):
+        return ChunkRecord(
+            id=chunk_id, projectId=1, knowledgeBaseId=5, documentId="doc-35",
+            title="GB 12523", content=content, sourceType="DOCUMENT", sourceId="35",
+            metadata={"unitIndex": unit_index, "chunkIndex": 0}, embedding=[1.0, 0.0],
+        )
+
+    store = LocalJsonVectorStore(str(tmp_path))
+    store._write([
+        record("distractor", "建筑施工噪声排放标准的适用范围和术语定义。", 0),
+        record("clause-7-2", "7.2 建设单位、施工单位是实施排放标准的责任主体，应采取必要措施，达到规定的建筑施工噪声排放限值。", 1),
+    ])
+
+    results = asyncio.run(store.search_text(
+        "GB12523第7.2条规定建设单位和施工单位承担什么责任？", 1, [5], 1
+    ))
+
+    assert [record.id for record, _ in results] == ["clause-7-2"]
+
+
+def test_rag_search_merges_text_candidates_before_reranking(tmp_path):
+    from app.services.vector_store import ChunkRecord, LocalJsonVectorStore
+
+    settings = Settings(
+        rag_provider="LOCAL", rag_data_dir=str(tmp_path), embedding_provider="QWEN",
+        rag_rerank_top_k=1,
+    )
+    service = RagService(settings, FakeQwen())
+
+    def record(chunk_id, content, embedding, unit_index):
+        return ChunkRecord(
+            id=chunk_id, projectId=1, knowledgeBaseId=5, documentId="doc-36",
+            title="建筑施工特种作业人员管理规定", content=content,
+            sourceType="DOCUMENT", sourceId="36",
+            metadata={"unitIndex": unit_index, "chunkIndex": 0}, embedding=embedding,
+        )
+
+    store = LocalJsonVectorStore(str(tmp_path))
+    store._write([
+        record("semantic-distractor", "施工安全保证措施和人员配备。", [1.0, 0.0], 0),
+        record("article-27", "第二十七条 建筑施工特种作业人员有权拒绝违章指挥和强令冒险作业。", [0.0, 1.0], 1),
+    ])
+    service.store = store
+
+    result, _ = asyncio.run(service.search(RagSearchRequest.model_validate({
+        "query": "建筑施工特种作业人员是否有权拒绝违章指挥和强令冒险作业？",
+        "projectId": 1, "knowledgeBaseIds": [5], "topK": 1, "rerankEnabled": False,
+    })))
+
+    assert result.records[0].metadata["chunkId"] == "article-27"
+    assert "有权拒绝违章指挥" in result.records[0].contentSnippet
+
+def test_rag_search_keeps_direct_text_evidence_above_bad_model_rerank(tmp_path):
+    from app.services.vector_store import ChunkRecord, LocalJsonVectorStore
+
+    class BadRerankQwen(FakeQwen):
+        async def rerank(self, query, documents, top_n):
+            return [
+                {"index": index, "relevance_score": 0.20 if "每年体检1次" in content else 0.90}
+                for index, content in enumerate(documents)
+            ], {"provider": "fake-reranker"}
+
+    settings = Settings(
+        rag_provider="LOCAL", rag_data_dir=str(tmp_path), embedding_provider="QWEN",
+        rerank_provider="QWEN", rag_rerank_top_k=2,
+    )
+    service = RagService(settings, BadRerankQwen())
+
+    def record(chunk_id, content, embedding, unit_index):
+        return ChunkRecord(
+            id=chunk_id, projectId=1, knowledgeBaseId=5, documentId="doc-36",
+            title="建筑施工特种作业人员管理规定", content=content,
+            sourceType="DOCUMENT", sourceId="36",
+            metadata={"unitIndex": unit_index, "chunkIndex": 0}, embedding=embedding,
+        )
+
+    store = LocalJsonVectorStore(str(tmp_path))
+    store._write([
+        record("semantic-distractor", "施工安全保证措施和人员配备。", [1.0, 0.0], 0),
+        record("article-24", "年龄超过60周岁从事建筑施工特种作业的人员，应当每年体检1次。", [0.0, 1.0], 1),
+    ])
+    service.store = store
+
+    result, _ = asyncio.run(service.search(RagSearchRequest.model_validate({
+        "query": "建筑施工特种作业人员年龄超过60周岁从事特种作业需要多久体检一次？",
+        "projectId": 1, "knowledgeBaseIds": [5], "topK": 1, "rerankEnabled": True,
+    })))
+
+    assert result.records[0].metadata["chunkId"] == "article-24"
+    assert "每年体检1次" in result.records[0].contentSnippet

@@ -8,7 +8,8 @@ from app.core.settings import Settings
 from app.models.schemas import (RagIndexRequest, RagIndexData, RagSearchRequest, RagSearchData, RagRecord,
                                 RagDeleteRequest, RagDeleteData)
 from .qwen_client import QwenClient
-from .vector_store import ChunkRecord, LocalJsonVectorStore, PgVectorStore, MilvusVectorStore, VectorStore
+from .vector_store import (ChunkRecord, LocalJsonVectorStore, PgVectorStore, MilvusVectorStore, VectorStore,
+                           text_match_score)
 
 
 def split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
@@ -119,12 +120,15 @@ class RagService:
 
     async def search(self, request: RagSearchRequest) -> tuple[RagSearchData, dict[str, Any]]:
         vectors, usage = await self.embed([request.query])
+        candidate_limit = max(request.topK, self.settings.rag_rerank_top_k if request.rerankEnabled else request.topK)
         candidates = await self.store.search(
-            vectors[0],
-            request.projectId,
-            request.knowledgeBaseIds,
-            max(request.topK, self.settings.rag_rerank_top_k if request.rerankEnabled else request.topK),
+            vectors[0], request.projectId, request.knowledgeBaseIds, candidate_limit
         )
+        text_search = getattr(self.store, "search_text", None)
+        text_candidates = await text_search(
+            request.query, request.projectId, request.knowledgeBaseIds, max(candidate_limit, request.topK * 4)
+        ) if text_search else []
+        candidates = merge_candidates(candidates, text_candidates)
         threshold = request.scoreThreshold if request.scoreThreshold is not None else -1.0
         records = []
         for chunk, score in candidates:
@@ -212,6 +216,24 @@ class RagService:
             return records, {"rerankProvider": "LEXICAL_FALLBACK"}
 
 
+
+def merge_candidates(
+    vector_candidates: list[tuple[ChunkRecord, float]],
+    text_candidates: list[tuple[ChunkRecord, float]],
+) -> list[tuple[ChunkRecord, float]]:
+    merged: dict[str, tuple[ChunkRecord, float]] = {chunk.id: (chunk, score) for chunk, score in vector_candidates}
+    if text_candidates:
+        max_text_score = max(score for _, score in text_candidates)
+        for chunk, score in text_candidates:
+            # Keep exact text evidence competitive with semantic distractors while
+            # retaining the original vector score for diagnostics.
+            normalized = 0.80 + 0.25 * score / max_text_score if max_text_score > 0 else 0.80
+            current = merged.get(chunk.id)
+            if current is None or normalized > current[1]:
+                merged[chunk.id] = (chunk, normalized)
+    return sorted(merged.values(), key=lambda item: item[1], reverse=True)
+
+
 def to_rag_record(chunk: ChunkRecord, score: float, rerank_score: float) -> RagRecord:
     return RagRecord(
         title=chunk.title,
@@ -231,6 +253,8 @@ def to_rag_record(chunk: ChunkRecord, score: float, rerank_score: float) -> RagR
 
 
 def clause_aware_score(query: str, chunk: ChunkRecord, score: float) -> float:
+    score += 1.25 * text_match_score(query, chunk.content)
+    score = numeric_limit_evidence_score(query, chunk.content, score)
     clauses = set(re.findall(r"(?:第\s*)?(\d+(?:\.\d+)+)\s*条?", query))
     if not clauses:
         return score
@@ -240,6 +264,24 @@ def clause_aware_score(query: str, chunk: ChunkRecord, score: float) -> float:
     if "目次" in chunk.content or "目录" in chunk.content:
         return score - 0.35
     return score + 1.0
+
+
+def numeric_limit_evidence_score(query: str, content: str, score: float) -> float:
+    """Prefer a table that directly contains requested day/night limits."""
+    query_compact = re.sub(r"\s+", "", query)
+    content_compact = re.sub(r"\s+", "", content)
+    asks_day_night_limits = all(term in query_compact for term in ("昼间", "夜间", "限值"))
+    has_paired_values = bool(
+        re.search(r"昼\s*间\s+夜\s*间\s+\d+(?:\.\d+)?\s+\d+(?:\.\d+)?", content)
+        or re.search(r"昼\s*间\D{0,20}\d+(?:\.\d+)?\D{0,20}夜\s*间\D{0,20}\d+", content)
+    )
+    has_limit_table = (
+        "表1" in content_compact
+        and "昼间" in content_compact
+        and "夜间" in content_compact
+        and has_paired_values
+    )
+    return score + 1.0 if asks_day_night_limits and has_limit_table else score
 
 def lexical_rerank(query: str, content: str, vector_score: float) -> float:
     query_terms = set(re.findall(r"[\w\u4e00-\u9fff]+", query.lower()))

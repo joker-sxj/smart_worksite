@@ -71,6 +71,7 @@ class VectorStore(Protocol):
     async def upsert(self, chunks: list[ChunkRecord]) -> None: ...
     async def replace_document(self, project_id: int, knowledge_base_id: int, document_id: str, chunks: list[ChunkRecord]) -> None: ...
     async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]: ...
+    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]: ...
     async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]: ...
     async def delete_sources(self, project_id: int, source_type: str, source_ids: list[str], exclude_knowledge_base_id: int | None) -> int: ...
 
@@ -277,6 +278,19 @@ class LocalJsonVectorStore:
                 )
         results.sort(key=lambda item: item[1], reverse=True)
         return results[:top_k]
+
+    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]:
+        validate_search_scope(project_id, knowledge_base_ids)
+        scored: list[tuple[ChunkRecord, float]] = []
+        kb_filter = set(knowledge_base_ids)
+        for record in self._load():
+            if record.projectId != project_id or record.knowledgeBaseId not in kb_filter:
+                continue
+            score = text_match_score(query, record.content)
+            if score > 0:
+                scored.append((record, score))
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return scored[:max(0, top_k)]
 
     async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]:
         records = [
@@ -532,6 +546,28 @@ class MilvusVectorStore:
             for row in rows
         ]
         return select_adjacent(records, chunk, before, after)
+
+
+
+def compact_search_text(value: str) -> str:
+    return re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff.]", "", value or "").lower()
+
+
+def iter_bigrams(value: str):
+    for index in range(len(value) - 1):
+        yield value[index:index + 2]
+
+
+def text_match_score(query: str, content: str) -> float:
+    query_compact = compact_search_text(query)
+    content_compact = compact_search_text(content)
+    if not query_compact or not content_compact:
+        return 0.0
+    query_bigrams = set(iter_bigrams(query_compact))
+    overlap = sum(1 for bigram in query_bigrams if bigram in content_compact) / max(len(query_bigrams), 1)
+    clauses = set(re.findall(r"(?:第\s*)?(\d+(?:\.\d+)+)\s*条?", query))
+    clause_hits = sum(1 for clause in clauses if clause in content_compact)
+    return overlap + clause_hits * 2.0
 
 
 def same_document_scope(left: ChunkRecord, right: ChunkRecord) -> bool:
