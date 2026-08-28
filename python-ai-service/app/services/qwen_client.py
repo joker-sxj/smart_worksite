@@ -35,6 +35,9 @@ class OpenAICompatibleProvider:
         }
         if parameters:
             payload.update(parameters)
+        if self.settings.ai_deployment_mode == AiDeploymentMode.LOCAL_ONLY:
+            # Strict local deployments must never expose reasoning traces to users.
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         url = self.settings.qwen_base_url.rstrip("/") + "/chat/completions"
         headers = self._json_headers(self.settings.qwen_api_key)
         async with httpx.AsyncClient(timeout=self.settings.qwen_timeout_seconds) as client:

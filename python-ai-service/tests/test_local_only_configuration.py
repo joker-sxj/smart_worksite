@@ -121,6 +121,20 @@ def install_fake_http(monkeypatch, *responses):
     monkeypatch.setattr(qwen_module.httpx, "AsyncClient", FakeAsyncClient)
 
 
+def test_local_openai_compatible_chat_forces_thinking_off(monkeypatch):
+    install_fake_http(monkeypatch, {
+        "choices": [{"message": {"content": "LOCAL_OK"}}],
+        "usage": {},
+    })
+
+    asyncio.run(QwenClient(local_settings()).chat(
+        [Message(role="user", content="ping")],
+        parameters={"chat_template_kwargs": {"enable_thinking": True}},
+    ))
+
+    payload = FakeAsyncClient.calls[0]["json"]
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
 def test_local_openai_compatible_chat_does_not_require_api_key(monkeypatch):
     install_fake_http(monkeypatch, {
         "choices": [{"message": {"content": "LOCAL_OK"}}],
