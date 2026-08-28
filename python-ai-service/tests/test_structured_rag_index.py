@@ -200,3 +200,31 @@ def test_local_adjacent_chunks_never_cross_document_or_knowledge_scope(tmp_path)
     adjacent = asyncio.run(store.adjacent(target, before=0, after=1))
 
     assert [record.id for record in adjacent] == ["same-doc"]
+
+def test_rag_search_promotes_exact_clause_body_over_toc(tmp_path):
+    settings = Settings(rag_provider="LOCAL", rag_data_dir=str(tmp_path), embedding_provider="LOCAL_HASH")
+    service = RagService(settings, FakeQwen())
+    from app.services.vector_store import ChunkRecord
+
+    def record(chunk_id, content, score):
+        return ChunkRecord(
+            id=chunk_id, projectId=1, knowledgeBaseId=5, documentId="doc-35",
+            title="GB 12523", content=content, sourceType="DOCUMENT", sourceId="35",
+            metadata={"unitIndex": int(chunk_id), "chunkIndex": 0, "location": {"page": int(chunk_id)}},
+            embedding=[score, 0.0],
+        )
+
+    class Store:
+        async def search(self, query_embedding, project_id, knowledge_base_ids, top_k):
+            return [(record("2", "目次 5.4.2 测量仪器", 0.99), 0.99), (record("6", "5.4.2 测量应在无雨雪、无雷电天气，风速5 m/s以下时进行。", 0.40), 0.40)]
+        async def adjacent(self, chunk, before=1, after=1):
+            return []
+
+    service.store = Store()
+    result, _ = asyncio.run(service.search(RagSearchRequest.model_validate({
+        "query": "GB12523第5.4.2条规定了什么？", "projectId": 1,
+        "knowledgeBaseIds": [5], "topK": 1, "rerankEnabled": False,
+    })))
+
+    assert result.records[0].metadata["location"] == {"page": 6}
+    assert "无雨雪" in result.records[0].contentSnippet

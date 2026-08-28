@@ -133,8 +133,12 @@ class RagService:
             rerank_score = lexical_rerank(request.query, chunk.content, score) if request.rerankEnabled else score
             records.append((chunk, score, rerank_score))
         if request.rerankEnabled:
-            records, rerank_usage = await self.rerank(request.query, records, request.topK)
+            records, rerank_usage = await self.rerank(request.query, records, len(records))
             usage = merge_usage(usage, rerank_usage)
+        records = [
+            (chunk, score, clause_aware_score(request.query, chunk, rerank_score))
+            for chunk, score, rerank_score in records
+        ]
         records.sort(key=lambda item: item[2], reverse=True)
         selected = records[: request.topK]
         output: list[RagRecord] = []
@@ -225,6 +229,17 @@ def to_rag_record(chunk: ChunkRecord, score: float, rerank_score: float) -> RagR
         },
     )
 
+
+def clause_aware_score(query: str, chunk: ChunkRecord, score: float) -> float:
+    clauses = set(re.findall(r"(?:第\s*)?(\d+(?:\.\d+)+)\s*条?", query))
+    if not clauses:
+        return score
+    normalized_content = re.sub(r"\s+", "", chunk.content)
+    if not any(clause in normalized_content for clause in clauses):
+        return score
+    if "目次" in chunk.content or "目录" in chunk.content:
+        return score - 0.35
+    return score + 1.0
 
 def lexical_rerank(query: str, content: str, vector_score: float) -> float:
     query_terms = set(re.findall(r"[\w\u4e00-\u9fff]+", query.lower()))
