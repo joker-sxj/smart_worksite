@@ -1,7 +1,7 @@
 import asyncio
 
 from app.core.settings import Settings
-from app.models.schemas import RagIndexRequest
+from app.models.schemas import RagIndexRequest, RagSearchRequest
 from app.services.rag_service import RagService
 
 
@@ -134,3 +134,69 @@ def test_rag_index_does_not_replace_any_document_when_embedding_preparation_fail
         raise AssertionError("expected embedding failure")
 
     assert store.replacements == []
+
+
+def test_rag_search_expands_a_hit_with_adjacent_pdf_blocks(tmp_path):
+    settings = Settings(
+        rag_provider="LOCAL",
+        rag_data_dir=str(tmp_path),
+        embedding_provider="LOCAL_HASH",
+        rag_chunk_size=800,
+        rag_chunk_overlap=0,
+    )
+    service = RagService(settings, FakeQwen())
+    request = RagIndexRequest.model_validate({
+        "projectId": 1,
+        "knowledgeBaseId": 5,
+        "documents": [{
+            "documentId": "doc-36",
+            "title": "特种作业人员管理规定",
+            "content": "",
+            "blocks": [
+                {"blockId": "page-2", "blockType": "TEXT", "content": "第七条 （一）年满18周岁；", "location": {"page": 2}},
+                {"blockId": "page-3", "blockType": "TEXT", "content": "（二）初中以上学历；", "location": {"page": 3}},
+            ],
+        }],
+    })
+    asyncio.run(service.index(request))
+
+    result, _ = asyncio.run(service.search(RagSearchRequest.model_validate({
+        "query": "报名特种作业考核的年龄和学历要求是什么？",
+        "projectId": 1,
+        "knowledgeBaseIds": [5],
+        "topK": 1,
+        "rerankEnabled": False,
+    })))
+
+    assert len(result.records) == 2
+    assert {record.metadata["location"]["page"] for record in result.records} == {2, 3}
+    context = "\n".join(record.contentSnippet for record in result.records)
+    assert "年满18周岁" in context
+    assert "初中以上学历" in context
+    assert sum(bool(record.metadata.get("contextExpansion")) for record in result.records) == 1
+
+
+
+def test_local_adjacent_chunks_never_cross_document_or_knowledge_scope(tmp_path):
+    from app.services.vector_store import ChunkRecord, LocalJsonVectorStore
+
+    def record(chunk_id, project_id, kb_id, document_id, unit_index):
+        return ChunkRecord(
+            id=chunk_id, projectId=project_id, knowledgeBaseId=kb_id, documentId=document_id,
+            title="法规", content=chunk_id, sourceType="DOCUMENT", sourceId=document_id,
+            metadata={"unitIndex": unit_index, "chunkIndex": 0}, embedding=[1.0, 0.0],
+        )
+
+    store = LocalJsonVectorStore(str(tmp_path))
+    target = record("target", 1, 5, "doc-a", 1)
+    expected = record("same-doc", 1, 5, "doc-a", 2)
+    store._write([
+        record("before", 1, 5, "doc-a", 0), target, expected,
+        record("other-doc", 1, 5, "doc-b", 2),
+        record("other-kb", 1, 6, "doc-a", 2),
+        record("other-project", 2, 5, "doc-a", 2),
+    ])
+
+    adjacent = asyncio.run(store.adjacent(target, before=0, after=1))
+
+    assert [record.id for record in adjacent] == ["same-doc"]

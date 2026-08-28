@@ -71,6 +71,7 @@ class VectorStore(Protocol):
     async def upsert(self, chunks: list[ChunkRecord]) -> None: ...
     async def replace_document(self, project_id: int, knowledge_base_id: int, document_id: str, chunks: list[ChunkRecord]) -> None: ...
     async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]: ...
+    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]: ...
     async def delete_sources(self, project_id: int, source_type: str, source_ids: list[str], exclude_knowledge_base_id: int | None) -> int: ...
 
 
@@ -277,6 +278,13 @@ class LocalJsonVectorStore:
         results.sort(key=lambda item: item[1], reverse=True)
         return results[:top_k]
 
+    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]:
+        records = [
+            record for record in self._load()
+            if same_document_scope(record, chunk)
+        ]
+        return select_adjacent(records, chunk, before, after)
+
 
 def dimension_counts(records: list[ChunkRecord], expected_dimension: int) -> dict[int, int]:
     counts: dict[int, int] = {}
@@ -399,6 +407,24 @@ class PgVectorStore:
             results.append((record, 1.0 - distance))
         return results
 
+    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata "
+                    f"from {self.table} where project_id = %s and knowledge_base_id = %s and document_id = %s",
+                    [chunk.projectId, chunk.knowledgeBaseId, chunk.documentId],
+                )
+                rows = cur.fetchall()
+        records = [
+            ChunkRecord(
+                id=row[0], chunkId=row[1], projectId=row[2], knowledgeBaseId=row[3], documentId=row[4],
+                title=row[5], content=row[6], sourceType=row[7], sourceId=row[8], metadata=row[9] or {}, embedding=[]
+            )
+            for row in rows
+        ]
+        return select_adjacent(records, chunk, before, after)
+
 
 class MilvusVectorStore:
     def __init__(self, uri: str, token: str, collection: str):
@@ -485,6 +511,64 @@ class MilvusVectorStore:
             )
             results.append((record, float(hit.get("distance", 0.0))))
         return results
+
+    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]:
+        from pymilvus import MilvusClient
+        client = MilvusClient(uri=self.uri, token=self.token or None)
+        if not client.has_collection(self.collection):
+            return []
+        expr = (
+            f"projectId == {chunk.projectId} and knowledgeBaseId == {chunk.knowledgeBaseId} "
+            f"and documentId == {json.dumps(chunk.documentId)}"
+        )
+        rows = client.query(collection_name=self.collection, filter=expr, output_fields=["*"], limit=256)
+        records = [
+            ChunkRecord(
+                id=row.get("id"), chunkId=row.get("chunkId") or row.get("id"), projectId=row.get("projectId"),
+                knowledgeBaseId=row.get("knowledgeBaseId"), documentId=row.get("documentId"), title=row.get("title"),
+                content=row.get("content"), sourceType=row.get("sourceType"), sourceId=row.get("sourceId"),
+                metadata=row.get("metadata") or {}, embedding=[]
+            )
+            for row in rows
+        ]
+        return select_adjacent(records, chunk, before, after)
+
+
+def same_document_scope(left: ChunkRecord, right: ChunkRecord) -> bool:
+    return (
+        left.projectId == right.projectId
+        and left.knowledgeBaseId == right.knowledgeBaseId
+        and left.documentId == right.documentId
+    )
+
+
+def chunk_order(record: ChunkRecord) -> tuple[int, int] | None:
+    unit_index = record.metadata.get("unitIndex")
+    chunk_index = record.metadata.get("chunkIndex")
+    if not isinstance(unit_index, int) or not isinstance(chunk_index, int):
+        return None
+    return unit_index, chunk_index
+
+
+def select_adjacent(
+    records: list[ChunkRecord],
+    target: ChunkRecord,
+    before: int,
+    after: int,
+) -> list[ChunkRecord]:
+    target_order = chunk_order(target)
+    if target_order is None:
+        return []
+    ordered = sorted(
+        (record for record in records if chunk_order(record) is not None),
+        key=lambda record: chunk_order(record),
+    )
+    target_index = next((index for index, record in enumerate(ordered) if record.id == target.id), None)
+    if target_index is None:
+        return []
+    start = max(0, target_index - max(0, before))
+    end = min(len(ordered), target_index + max(0, after) + 1)
+    return [record for record in ordered[start:end] if record.id != target.id]
 
 
 def safe_identifier(value: str, name: str) -> str:

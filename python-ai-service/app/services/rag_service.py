@@ -136,24 +136,37 @@ class RagService:
             records, rerank_usage = await self.rerank(request.query, records, request.topK)
             usage = merge_usage(usage, rerank_usage)
         records.sort(key=lambda item: item[2], reverse=True)
-        output = [
-            RagRecord(
-                title=chunk.title,
-                contentSnippet=chunk.content,
-                sourceType=chunk.sourceType,
-                sourceId=chunk.sourceId or chunk.documentId,
-                score=float(score),
-                metadata={
-                    **chunk.metadata,
-                    "projectId": chunk.projectId,
-                    "knowledgeBaseId": chunk.knowledgeBaseId,
-                    "documentId": chunk.documentId,
-                    "chunkId": chunk.chunkId,
-                    "rerankScore": float(rerank_score),
-                },
-            )
-            for chunk, score, rerank_score in records[: request.topK]
-        ]
+        selected = records[: request.topK]
+        output: list[RagRecord] = []
+        selected_ids = {chunk.id for chunk, _, _ in selected}
+        emitted_ids: set[str] = set()
+        for chunk, score, rerank_score in selected:
+            if chunk.id in emitted_ids:
+                continue
+            output.append(to_rag_record(chunk, score, rerank_score))
+            emitted_ids.add(chunk.id)
+            adjacent = await self.store.adjacent(chunk, before=1, after=1)
+            for neighbor in adjacent:
+                if neighbor.id in selected_ids or neighbor.id in emitted_ids:
+                    continue
+                neighbor_metadata = {
+                    **neighbor.metadata,
+                    "projectId": neighbor.projectId,
+                    "knowledgeBaseId": neighbor.knowledgeBaseId,
+                    "documentId": neighbor.documentId,
+                    "chunkId": neighbor.chunkId,
+                    "contextExpansion": True,
+                    "expandedFromChunkId": chunk.chunkId,
+                }
+                output.append(RagRecord(
+                    title=neighbor.title,
+                    contentSnippet=neighbor.content,
+                    sourceType=neighbor.sourceType,
+                    sourceId=neighbor.sourceId or neighbor.documentId,
+                    score=float(score),
+                    metadata=neighbor_metadata,
+                ))
+                emitted_ids.add(neighbor.id)
         return RagSearchData(records=output), usage
 
     async def embed(self, texts: list[str]) -> tuple[list[list[float]], dict[str, Any]]:
@@ -193,6 +206,24 @@ class RagService:
             return scored, usage
         except Exception:
             return records, {"rerankProvider": "LEXICAL_FALLBACK"}
+
+
+def to_rag_record(chunk: ChunkRecord, score: float, rerank_score: float) -> RagRecord:
+    return RagRecord(
+        title=chunk.title,
+        contentSnippet=chunk.content,
+        sourceType=chunk.sourceType,
+        sourceId=chunk.sourceId or chunk.documentId,
+        score=float(score),
+        metadata={
+            **chunk.metadata,
+            "projectId": chunk.projectId,
+            "knowledgeBaseId": chunk.knowledgeBaseId,
+            "documentId": chunk.documentId,
+            "chunkId": chunk.chunkId,
+            "rerankScore": float(rerank_score),
+        },
+    )
 
 
 def lexical_rerank(query: str, content: str, vector_score: float) -> float:
