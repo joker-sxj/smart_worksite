@@ -73,6 +73,7 @@ class VectorStore(Protocol):
     async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]: ...
     async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]: ...
     async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]: ...
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1) -> dict[str, list[ChunkRecord]]: ...
     async def delete_sources(self, project_id: int, source_type: str, source_ids: list[str], exclude_knowledge_base_id: int | None) -> int: ...
 
 
@@ -293,11 +294,17 @@ class LocalJsonVectorStore:
         return scored[:max(0, top_k)]
 
     async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]:
-        records = [
-            record for record in self._load()
-            if same_document_scope(record, chunk)
-        ]
-        return select_adjacent(records, chunk, before, after)
+        return (await self.adjacent_many([chunk], before, after)).get(chunk.id, [])
+
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1) -> dict[str, list[ChunkRecord]]:
+        if not chunks:
+            return {}
+        records = self._load()
+        result: dict[str, list[ChunkRecord]] = {}
+        for chunk in chunks:
+            scoped = [record for record in records if same_document_scope(record, chunk)]
+            result[chunk.id] = select_adjacent(scoped, chunk, before, after)
+        return result
 
 
 def dimension_counts(records: list[ChunkRecord], expected_dimension: int) -> dict[int, int]:
@@ -422,22 +429,27 @@ class PgVectorStore:
         return results
 
     async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]:
+        return (await self.adjacent_many([chunk], before, after)).get(chunk.id, [])
+
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1) -> dict[str, list[ChunkRecord]]:
+        if not chunks:
+            return {}
+        scopes = {(chunk.projectId, chunk.knowledgeBaseId, chunk.documentId) for chunk in chunks}
+        records_by_scope: dict[tuple[int, int, str], list[ChunkRecord]] = {}
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata "
-                    f"from {self.table} where project_id = %s and knowledge_base_id = %s and document_id = %s",
-                    [chunk.projectId, chunk.knowledgeBaseId, chunk.documentId],
-                )
-                rows = cur.fetchall()
-        records = [
-            ChunkRecord(
-                id=row[0], chunkId=row[1], projectId=row[2], knowledgeBaseId=row[3], documentId=row[4],
-                title=row[5], content=row[6], sourceType=row[7], sourceId=row[8], metadata=row[9] or {}, embedding=[]
-            )
-            for row in rows
-        ]
-        return select_adjacent(records, chunk, before, after)
+                for project_id, knowledge_base_id, document_id in scopes:
+                    cur.execute(
+                        f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata "
+                        f"from {self.table} where project_id = %s and knowledge_base_id = %s and document_id = %s",
+                        [project_id, knowledge_base_id, document_id],
+                    )
+                    records_by_scope[(project_id, knowledge_base_id, document_id)] = [
+                        ChunkRecord(id=row[0], chunkId=row[1], projectId=row[2], knowledgeBaseId=row[3], documentId=row[4],
+                                    title=row[5], content=row[6], sourceType=row[7], sourceId=row[8], metadata=row[9] or {}, embedding=[])
+                        for row in cur.fetchall()
+                    ]
+        return {chunk.id: select_adjacent(records_by_scope.get((chunk.projectId, chunk.knowledgeBaseId, chunk.documentId), []), chunk, before, after) for chunk in chunks}
 
 
 class MilvusVectorStore:
@@ -527,25 +539,53 @@ class MilvusVectorStore:
         return results
 
     async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]:
+        return (await self.adjacent_many([chunk], before, after)).get(chunk.id, [])
+
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1) -> dict[str, list[ChunkRecord]]:
         from pymilvus import MilvusClient
+        if not chunks:
+            return {}
         client = MilvusClient(uri=self.uri, token=self.token or None)
         if not client.has_collection(self.collection):
-            return []
-        expr = (
-            f"projectId == {chunk.projectId} and knowledgeBaseId == {chunk.knowledgeBaseId} "
-            f"and documentId == {json.dumps(chunk.documentId)}"
-        )
-        rows = client.query(collection_name=self.collection, filter=expr, output_fields=["*"], limit=256)
-        records = [
-            ChunkRecord(
-                id=row.get("id"), chunkId=row.get("chunkId") or row.get("id"), projectId=row.get("projectId"),
-                knowledgeBaseId=row.get("knowledgeBaseId"), documentId=row.get("documentId"), title=row.get("title"),
-                content=row.get("content"), sourceType=row.get("sourceType"), sourceId=row.get("sourceId"),
-                metadata=row.get("metadata") or {}, embedding=[]
-            )
-            for row in rows
-        ]
-        return select_adjacent(records, chunk, before, after)
+            return {chunk.id: [] for chunk in chunks}
+        scopes = {(chunk.projectId, chunk.knowledgeBaseId, chunk.documentId) for chunk in chunks}
+        records_by_scope: dict[tuple[int, int, str], list[ChunkRecord]] = {}
+        for project_id, knowledge_base_id, document_id in scopes:
+            expr = (f"projectId == {project_id} and knowledgeBaseId == {knowledge_base_id} "
+                    f"and documentId == {json.dumps(document_id)}")
+            rows: list[dict[str, Any]] = []
+            # Query until exhaustion so long documents do not lose neighbors past the first page.
+            iterator = getattr(client, "query_iterator", None)
+            if iterator is not None:
+                handle = iterator(collection_name=self.collection, filter=expr, output_fields=["*"], batch_size=256)
+                try:
+                    while True:
+                        page = handle.next()
+                        if not page:
+                            break
+                        rows.extend(page)
+                finally:
+                    close = getattr(handle, "close", None)
+                    if close:
+                        close()
+            else:
+                offset = 0
+                while True:
+                    page = client.query(collection_name=self.collection, filter=expr, output_fields=["*"], limit=256, offset=offset)
+                    if not page:
+                        break
+                    rows.extend(page)
+                    if len(page) < 256:
+                        break
+                    offset += len(page)
+            records_by_scope[(project_id, knowledge_base_id, document_id)] = [
+                ChunkRecord(id=row.get("id"), chunkId=row.get("chunkId") or row.get("id"), projectId=row.get("projectId"),
+                            knowledgeBaseId=row.get("knowledgeBaseId"), documentId=row.get("documentId"), title=row.get("title"),
+                            content=row.get("content"), sourceType=row.get("sourceType"), sourceId=row.get("sourceId"),
+                            metadata=row.get("metadata") or {}, embedding=[])
+                for row in rows
+            ]
+        return {chunk.id: select_adjacent(records_by_scope.get((chunk.projectId, chunk.knowledgeBaseId, chunk.documentId), []), chunk, before, after) for chunk in chunks}
 
 
 
@@ -558,6 +598,44 @@ def iter_bigrams(value: str):
         yield value[index:index + 2]
 
 
+def extract_clause_numbers(value: str) -> set[str]:
+    """Extract dotted and article-style clause identifiers without substring collisions."""
+    text = value or ""
+    clauses = set(re.findall(r"(?<![\d.])(\d+(?:\.\d+)+)(?![\d.])", text))
+    clauses.update(re.findall(r"第\s*(\d+)\s*条", text))
+    for chinese in re.findall(r"第\s*([零〇一二两三四五六七八九十百千万]+)\s*条", text):
+        number = chinese_numeral_to_int(chinese)
+        if number is not None:
+            clauses.add(str(number))
+    return clauses
+
+
+def chinese_numeral_to_int(value: str) -> int | None:
+    digits = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if value.isdigit():
+        return int(value)
+    if not value or any(char not in digits and char not in {"十", "百", "千", "万"} for char in value):
+        return None
+    total = 0
+    section = 0
+    number = 0
+    units = {"十": 10, "百": 100, "千": 1000, "万": 10000}
+    for char in value:
+        if char in digits:
+            number = digits[char]
+        else:
+            unit = units[char]
+            if unit == 10000:
+                section = (section + number) * unit
+                total += section
+                section = 0
+            else:
+                section += (number or 1) * unit
+            number = 0
+    return total + section + number
+
+
 def text_match_score(query: str, content: str) -> float:
     query_compact = compact_search_text(query)
     content_compact = compact_search_text(content)
@@ -565,8 +643,9 @@ def text_match_score(query: str, content: str) -> float:
         return 0.0
     query_bigrams = set(iter_bigrams(query_compact))
     overlap = sum(1 for bigram in query_bigrams if bigram in content_compact) / max(len(query_bigrams), 1)
-    clauses = set(re.findall(r"(?:第\s*)?(\d+(?:\.\d+)+)\s*条?", query))
-    clause_hits = sum(1 for clause in clauses if clause in content_compact)
+    clauses = extract_clause_numbers(query)
+    content_clauses = extract_clause_numbers(content_compact)
+    clause_hits = len(clauses & content_clauses)
     return overlap + clause_hits * 2.0
 
 
@@ -604,7 +683,27 @@ def select_adjacent(
         return []
     start = max(0, target_index - max(0, before))
     end = min(len(ordered), target_index + max(0, after) + 1)
-    return [record for record in ordered[start:end] if record.id != target.id]
+    neighbors: list[ChunkRecord] = []
+    for record in ordered[start:end]:
+        if record.id == target.id:
+            continue
+        record_order = chunk_order(record)
+        if record_order is not None and are_adjacent_chunks(target_order, record_order):
+            neighbors.append(record)
+    return neighbors
+
+
+def are_adjacent_chunks(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    """Only join contiguous parser units; do not bridge missing blocks."""
+    left_unit, left_chunk = left
+    right_unit, right_chunk = right
+    if left_unit == right_unit:
+        return abs(left_chunk - right_chunk) == 1
+    if abs(left_unit - right_unit) != 1:
+        return False
+    if left_unit < right_unit:
+        return right_chunk == 0
+    return left_chunk == 0
 
 
 def safe_identifier(value: str, name: str) -> str:
