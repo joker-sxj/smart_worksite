@@ -9,10 +9,11 @@ import TaskProgress from '../../components/common/TaskProgress.vue';
 import StatusTag from '../../components/common/StatusTag.vue';
 import EmptyState from '../../components/common/EmptyState.vue';
 import { fetchReviewRecord, fetchReviewTemplates, submitReviewRecord, updateReviewIssue } from '../../api/review';
+import { fetchKnowledgeBases } from '../../api/knowledge';
 import { fetchTaskStages } from '../../api/task';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
-import type { ID, ReviewRecord, ReviewTemplate, TaskStageLog } from '../../api/types';
+import type { ID, KnowledgeBase, ReviewRecord, ReviewTemplate, TaskStageLog } from '../../api/types';
 import { isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
 
 const router = useRouter();
@@ -27,6 +28,9 @@ const stageNotice = ref('');
 const templates = ref<ReviewTemplate[]>([]);
 const selectedTemplateId = ref<ID>('');
 const file = ref<File | null>(null);
+const referenceFiles = ref<File[]>([]);
+const knowledgeBases = ref<KnowledgeBase[]>([]);
+const selectedKnowledgeBaseIds = ref<ID[]>([]);
 const currentRecord = ref<ReviewRecord | null>(null);
 const submittedInfo = ref<{ recordId?: ID; taskId?: ID; status?: string } | null>(null);
 const logs = ref<TaskStageLog[]>([]);
@@ -88,6 +92,7 @@ async function loadTemplates() {
     if (!projectStore.currentProject) await projectStore.fetchProjects();
     const projectId = projectStore.currentProject?.projectId;
     templates.value = projectId ? await fetchReviewTemplates(projectId) : [];
+    knowledgeBases.value = projectId ? await fetchKnowledgeBases(projectId, { status: 'ENABLED' }) : [];
     if (!selectedTemplateId.value && templates.value[0]) selectedTemplateId.value = templates.value[0].templateId;
   } catch (err) {
     const detail = err instanceof Error && err.message ? ` ${err.message}` : '';
@@ -133,7 +138,7 @@ async function submit() {
   resultNotice.value = '';
   stageNotice.value = '';
   try {
-    const result = await submitReviewRecord({ projectId, templateId: selectedTemplateId.value, file: file.value });
+    const result = await submitReviewRecord({ projectId, templateId: selectedTemplateId.value, file: file.value, referenceFiles: referenceFiles.value, knowledgeBaseIds: selectedKnowledgeBaseIds.value });
     submittedInfo.value = result;
     ElMessage.success(t('审查任务已提交'));
     persistRecordId(projectId, result.recordId);
@@ -227,6 +232,14 @@ onUnmounted(stopRecordPolling);
         <div class="upload-title required-label">2. 上传待审文件</div>
         <AppUpload v-if="canManageReview" :model-value="file ? [file] : []" accept=".doc,.docx,.pdf" :max-size-mb="100" :multiple="false" :uploading="submitting" @update:model-value="file = $event[0] || null" />
         <p class="upload-tip">支持 Word、PDF。选择模板和文件后，点击“发起审查”。</p>
+        <div class="upload-title">参考资料</div>
+        <AppUpload v-if="canManageReview" :model-value="referenceFiles" accept=".pdf,.doc,.docx" :multiple="true" :uploading="submitting" @update:model-value="referenceFiles = $event.slice(0, 5)" />
+        <el-form-item label="项目知识库（可多选）">
+          <el-select v-model="selectedKnowledgeBaseIds" multiple collapse-tags clearable style="width: 360px" placeholder="选择已启用的项目知识库">
+            <el-option v-for="base in knowledgeBases" :key="base.knowledgeBaseId" :label="base.name" :value="base.knowledgeBaseId" />
+          </el-select>
+        </el-form-item>
+        <p class="upload-tip">最多 5 个参考文件，支持 PDF、Word（DOC/DOCX）。参考文件和知识库会作为审查依据；结果中的引用来源只展示模型实际使用且经过系统校验的资料。</p>
       </template>
     </el-card>
     <el-card v-if="submittedInfo && !currentRecord" class="work-card"><h3 class="panel-title">{{ t('已提交任务') }}</h3><p>recordId: {{ submittedInfo.recordId || '-' }}</p><p>taskId: {{ submittedInfo.taskId || '-' }}</p><p>status: {{ submittedInfo.status || '-' }}</p></el-card>
@@ -245,6 +258,15 @@ onUnmounted(stopRecordPolling);
             <el-table-column :label="t('问题状态')" width="140"><template #default="{ row }"><StatusTag :status="row.status || 'OPEN'" /></template></el-table-column>
             <el-table-column :label="t('处理')" width="180"><template #default="{ row }"><el-select :model-value="row.status || 'OPEN'" size="small" :disabled="!canUpdateIssue(currentRecord)" :loading="updatingIssueId === row.issueId" @change="(value: string) => changeIssueStatus(row.issueId, value, row.comment)"><el-option v-for="item in issueStatusOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></template></el-table-column>
           </AppTable>
+        </el-card>
+        <el-card class="work-card">
+          <h3 class="panel-title">引用来源</h3>
+          <el-empty v-if="!currentRecord.references?.length" description="模型未返回可验证的引用来源" :image-size="60" />
+          <div v-for="reference in currentRecord.references || []" :key="`${reference.sourceType}-${reference.sourceId}`" class="review-reference">
+            <strong>{{ reference.title || reference.sourceId }}</strong>
+            <span>{{ reference.sourceType }} · {{ reference.location || '未标注位置' }}</span>
+            <p>{{ reference.excerpt || '已使用该来源，但模型未返回摘录。' }}</p>
+          </div>
         </el-card>
         <JsonViewer :value="currentRecord" :title="t('审查 JSON 结果')" />
       </div>
@@ -285,6 +307,11 @@ onUnmounted(stopRecordPolling);
 .guide-step p { margin: 0; color: var(--sw-muted); line-height: 1.6; }
 .upload-title { margin: 4px 0 10px; font-weight: 700; }
 .upload-tip { margin: 10px 0 0; color: var(--sw-muted); font-size: 13px; }
+.review-reference { padding: 12px 0; border-bottom: 1px solid var(--sw-border); }
+.review-reference:last-child { border-bottom: 0; }
+.review-reference strong, .review-reference span { display: block; }
+.review-reference span { margin-top: 4px; color: var(--sw-primary); font-size: 12px; }
+.review-reference p { margin: 8px 0 0; color: var(--sw-muted); line-height: 1.6; }
 @media (max-width: 900px) {
   .review-guide { grid-template-columns: 1fr; }
 }

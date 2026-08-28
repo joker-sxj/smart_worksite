@@ -6,6 +6,7 @@ import com.xd.smartworksite.auth.mapper.ProjectMemberMapper;
 import com.xd.smartworksite.common.exception.BusinessException;
 import com.xd.smartworksite.common.security.UserPrincipal;
 import com.xd.smartworksite.file.domain.FileObject;
+import com.xd.smartworksite.file.domain.FileBizType;
 import com.xd.smartworksite.file.dto.FileQueryRequest;
 import com.xd.smartworksite.file.dto.FileUploadRequest;
 import com.xd.smartworksite.file.infra.StorageAdapter;
@@ -32,6 +33,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class FileObjectApplicationServiceTest {
+
+    @Test
+    void reviewReferenceIsAValidFileBusinessType() {
+        assertThat(FileBizType.from("REVIEW_REFERENCE")).isEqualTo(FileBizType.REVIEW_REFERENCE);
+    }
 
     @BeforeEach
     void setUpSecurityContext() {

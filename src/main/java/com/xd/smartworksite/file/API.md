@@ -68,7 +68,7 @@ Content-Type: multipart/form-data
 | --- | --- | --- | --- |
 | file | MultipartFile | 是 | 上传文件 |
 | projectId | Long | 是 | 项目 ID |
-| bizType | String | 是 | DOCUMENT、IMAGE、TEMPLATE、REPORT、OCR、OTHER |
+| bizType | String | 是 | KNOWLEDGE_DOC、REVIEW_DOC、REVIEW_REFERENCE、REPORT_TEMPLATE、REVIEW_TEMPLATE、REPORT_OUTPUT、OCR_INPUT |
 | bizId | Long | 否 | 业务 ID |
 | metadata | String | 否 | JSON 字符串 |
 

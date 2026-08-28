@@ -3,6 +3,8 @@ package com.xd.smartworksite.review.application;
 import com.xd.smartworksite.ai.application.AiApplicationService;
 import com.xd.smartworksite.ai.dto.AgentInvokeRequest;
 import com.xd.smartworksite.ai.dto.AgentInvokeResponse;
+import com.xd.smartworksite.ai.dto.RagSearchRequest;
+import com.xd.smartworksite.ai.dto.RagSearchResponse;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -21,5 +23,10 @@ public class AiApplicationReviewGateway implements ReviewAiGateway {
     @Override
     public AgentInvokeResponse invokeAgentForSystem(AgentInvokeRequest request) {
         return aiApplicationService.invokeAgentForSystem(request);
+    }
+
+    @Override
+    public RagSearchResponse searchKnowledgeForSystem(RagSearchRequest request) {
+        return aiApplicationService.searchKnowledgeForSystem(request);
     }
 }

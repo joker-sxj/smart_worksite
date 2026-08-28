@@ -51,7 +51,7 @@ class ReviewAsyncExecutionFailureTest {
 
         when(repository.findById(21L)).thenReturn(Optional.of(record));
         when(repository.markProcessing(21L, 31L, 1L)).thenReturn(1);
-        when(repository.markCompleted(any(), any(), any(), any())).thenReturn(1);
+        when(repository.markCompleted(any(), any(), any(), any(), any())).thenReturn(1);
         when(templateService.getTemplateForSystem(10L)).thenReturn(template);
         when(fileService.getFileForSystem(99L)).thenReturn(file);
         when(fileService.openFileContentForSystem(99L, 1L, null)).thenReturn(fileContent(99L, "待审查方案.docx"));
@@ -69,7 +69,7 @@ class ReviewAsyncExecutionFailureTest {
         verify(fileService).getFileForSystem(99L);
         verify(reviewAiGateway).invokeAgentForSystem(any());
         verify(reviewAiGateway, never()).invokeAgent(any());
-        verify(repository).markCompleted(any(), any(), any(), any());
+        verify(repository).markCompleted(any(), any(), any(), any(), any());
     }
 
     @Test

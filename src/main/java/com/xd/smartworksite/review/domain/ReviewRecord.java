@@ -7,10 +7,13 @@ public class ReviewRecord {
     private Long projectId;
     private Long templateId;
     private Long fileId;
+    private String referenceFileIds;
+    private String knowledgeBaseIds;
     private Long taskId;
     private String status;
     private String issuesJson;
     private String resultJson;
+    private String referencesJson;
     private String errorMessage;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -25,6 +28,10 @@ public class ReviewRecord {
     public void setTemplateId(Long templateId) { this.templateId = templateId; }
     public Long getFileId() { return fileId; }
     public void setFileId(Long fileId) { this.fileId = fileId; }
+    public String getReferenceFileIds() { return referenceFileIds; }
+    public void setReferenceFileIds(String referenceFileIds) { this.referenceFileIds = referenceFileIds; }
+    public String getKnowledgeBaseIds() { return knowledgeBaseIds; }
+    public void setKnowledgeBaseIds(String knowledgeBaseIds) { this.knowledgeBaseIds = knowledgeBaseIds; }
     public Long getTaskId() { return taskId; }
     public void setTaskId(Long taskId) { this.taskId = taskId; }
     public String getStatus() { return status; }
@@ -33,6 +40,8 @@ public class ReviewRecord {
     public void setIssuesJson(String issuesJson) { this.issuesJson = issuesJson; }
     public String getResultJson() { return resultJson; }
     public void setResultJson(String resultJson) { this.resultJson = resultJson; }
+    public String getReferencesJson() { return referencesJson; }
+    public void setReferencesJson(String referencesJson) { this.referencesJson = referencesJson; }
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
     public LocalDateTime getCreatedAt() { return createdAt; }

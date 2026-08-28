@@ -66,7 +66,7 @@ Follow the project layering rules:
 
 ## Business Types
 
-Use a domain enum for `biz_type`. Recommended values:
+Use a domain enum for `biz_type`. Current values include:
 
 ```text
 DOCUMENT    Project documents, standards, PDF, Word, Excel, and uploaded knowledge files
@@ -75,6 +75,7 @@ TEMPLATE    Report templates, review templates, and reusable document templates
 REPORT      Generated reports and exported result files
 OCR         OCR source files or OCR result attachments
 OTHER       Other attachments
+REVIEW_REFERENCE  Compliance review reference PDF/DOC/DOCX files
 ```
 
 `biz_id` is optional during upload. It can be null for temporary or unbound files, then associated later by a business use case.

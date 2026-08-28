@@ -561,4 +561,27 @@ public class KnowledgeBaseApplicationService {
         response.setUpdatedAt(document.getUpdatedAt());
         return response;
     }
+
+    public void validateEnabledForReview(Long projectId, List<Long> knowledgeBaseIds) {
+        projectAccessApplicationService.requireProjectWritableAccess(projectId);
+        validateEnabledForReviewInternal(projectId, knowledgeBaseIds);
+    }
+
+    public void validateEnabledForReviewForSystem(Long projectId, List<Long> knowledgeBaseIds) {
+        projectAccessApplicationService.requireProjectWritableForSystem(projectId);
+        validateEnabledForReviewInternal(projectId, knowledgeBaseIds);
+    }
+
+    private void validateEnabledForReviewInternal(Long projectId, List<Long> knowledgeBaseIds) {
+        for (Long id : knowledgeBaseIds == null ? List.<Long>of() : knowledgeBaseIds) {
+            KnowledgeBase knowledgeBase = knowledgeBaseRepository.findById(id)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "知识库不存在"));
+            if (!projectId.equals(knowledgeBase.getProjectId()) || !"PROJECT".equals(knowledgeBase.getKnowledgeBaseType())) {
+                throw new BusinessException(ErrorCode.FORBIDDEN, "参考知识库不属于当前项目");
+            }
+            if (!KnowledgeBaseStatus.ENABLED.name().equals(knowledgeBase.getStatus())) {
+                throw new BusinessException(ErrorCode.CONFLICT, "参考知识库未启用");
+            }
+        }
+    }
 }
