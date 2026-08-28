@@ -151,6 +151,8 @@ Business modules may use these layers as needed: `controller`, `application`, `d
 - Knowledge document uploads must verify generated IDs and read back inserted records before returning success; missing IDs or unreadable inserts must fail before any indexing work starts.
 - Knowledge document indexing must create `KNOWLEDGE_INDEXING` async tasks and call Python RAG indexing through the AI adapter. Java may only orchestrate task state, parse-content loading, project isolation, and error recording; it must not access vector databases, run embeddings, or mark success when parsing or Python indexing fails.
 - Knowledge indexing state transitions to `INDEXING`, `SUCCESS`, and `FAILED` must check affected rows. If failure-state persistence itself fails, the worker must fail visibly with the original error included instead of losing observability.
+- File parsing supports Word/PDF/Excel/CSV/PowerPoint through the `DocumentParser` registry; structured office outputs must preserve sheet/range or slide anchors, and PDF low-quality native text must fall back to page OCR with bounded rendering.
+- PDF recovery must run only through the Python adapter with byte/page limits and stable classifications; never overwrite the original uploaded object or execute macros/embedded commands.
 - Knowledge document index task creation is allowed only from `PENDING` or `FAILED`. `INDEXING` and `SUCCESS` documents must not expose a repeat-submit frontend action; if a stale client submits anyway, the backend conflict is the correct fail-fast result.
 - OCR module implementation is owned outside this workstream; do not add or refactor OCR business code unless the user explicitly reassigns it.
 

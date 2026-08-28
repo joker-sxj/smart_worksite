@@ -63,6 +63,7 @@ public class AiPythonServiceProperties {
         private String ocrRecognize = "/v1/ocr/recognize";
         private String policyCrawl = "/v1/policy/crawl";
         private String documentUnderstand = "/v1/document/understand";
+        private String documentPdfRecover = "/v1/document/pdf/recover";
         public String getModelInvoke() { return modelInvoke; }
         public void setModelInvoke(String modelInvoke) { this.modelInvoke = modelInvoke; }
         public String getAgentInvoke() { return agentInvoke; }
@@ -87,6 +88,8 @@ public class AiPythonServiceProperties {
         public void setPolicyCrawl(String policyCrawl) { this.policyCrawl = policyCrawl; }
         public String getDocumentUnderstand() { return documentUnderstand; }
         public void setDocumentUnderstand(String documentUnderstand) { this.documentUnderstand = documentUnderstand; }
+        public String getDocumentPdfRecover() { return documentPdfRecover; }
+        public void setDocumentPdfRecover(String documentPdfRecover) { this.documentPdfRecover = documentPdfRecover; }
     }
 
     public static class Database {

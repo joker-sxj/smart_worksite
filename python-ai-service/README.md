@@ -68,3 +68,5 @@ Supported OCR types are `ID_CARD`, `LICENSE_PLATE`, `INVOICE`, and `CUSTOM`. Con
 ## Policy Crawler
 
 Policy/news HTML extraction is available at `POST /v1/policy/crawl`. Java sends the project ID, source ID, URL, and optional last crawl time. The Python service downloads public HTML, removes common page noise, extracts title, content, publish date, and policy number, then returns structured articles. It does not write Java databases, MinIO, or vector stores directly; Java owns persistence, external-call logs, and RAG indexing.
+
+Document page OCR is available at `POST /v1/document/understand`. Bounded PDF recovery is available at `POST /v1/document/pdf/recover`: it validates decoded size, PDF signature, encryption, and page count, then uses `pypdf` strict-disabled reading to rewrite only a recoverable in-memory copy. It never overwrites the uploaded source and returns stable classifications such as `PASSWORD_REQUIRED`, `RECOVERED`, and `UNRECOVERABLE`.

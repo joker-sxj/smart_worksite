@@ -73,6 +73,7 @@ class FileParseApplicationServiceTest {
     @ParameterizedTest
     @CsvSource({
             "risk-register.xlsx, xlsx, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, SPREADSHEET_TO_MARKDOWN",
+            "risk-register.csv, csv, text/csv, SPREADSHEET_TO_MARKDOWN",
             "site-plan.pptx, pptx, application/vnd.openxmlformats-officedocument.presentationml.presentation, PRESENTATION_TO_MARKDOWN"
     })
     void createParseSupportsStructuredOfficeDocuments(String fileName, String fileExt,
