@@ -7,9 +7,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from app.core.deployment import AiDeploymentMode
+from app.core.deployment import AiDeploymentMode, is_local_model_endpoint
 from app.core.settings import Settings
 from app.models.schemas import Message
+from app.services.token_counter import LocalTokenizationError, TokenCount
 
 
 def extract_final_answer(message: dict[str, Any]) -> str:
@@ -26,6 +27,55 @@ def extract_final_answer(message: dict[str, Any]) -> str:
 class OpenAICompatibleProvider:
     def __init__(self, settings: Settings):
         self.settings = settings
+
+    async def count_chat_tokens(self, messages: list[Message]) -> TokenCount:
+        """Count a chat payload through the configured local vLLM endpoint only."""
+        if not is_local_model_endpoint(self.settings.qwen_base_url):
+            raise LocalTokenizationError("local vLLM tokenize endpoint is not local")
+
+        endpoint = self._tokenize_endpoint()
+        payload = {
+            "model": self.settings.qwen_model,
+            "messages": [{"role": item.role, "content": item.content} for item in messages],
+        }
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.qwen_timeout_seconds) as client:
+                response = await client.post(endpoint, headers=headers, json=payload)
+                if response.status_code in (400, 422):
+                    response = await client.post(
+                        endpoint,
+                        headers=headers,
+                        json={
+                            "model": self.settings.qwen_model,
+                            "prompt": self._serialize_chat_for_tokenize(messages),
+                        },
+                    )
+                response.raise_for_status()
+                body = response.json()
+        except (httpx.HTTPError, ValueError, TypeError):
+            raise LocalTokenizationError("local vLLM tokenize request failed") from None
+
+        if not isinstance(body, dict):
+            raise LocalTokenizationError("local vLLM tokenize response was invalid")
+
+        token_value = body.get("count", body.get("token_count", body.get("tokens")))
+        if isinstance(token_value, list):
+            token_value = len(token_value)
+        if not isinstance(token_value, int) or token_value < 0:
+            raise LocalTokenizationError("local vLLM tokenize response did not contain a token count")
+        tokenizer = body.get("tokenizer") or body.get("model") or self.settings.qwen_model
+        return TokenCount(tokens=token_value, mode="EXACT", tokenizer=str(tokenizer))
+
+    def _tokenize_endpoint(self) -> str:
+        base = self.settings.qwen_base_url.rstrip("/")
+        if base.lower().endswith("/v1"):
+            base = base[:-3]
+        return base.rstrip("/") + "/tokenize"
+
+    @staticmethod
+    def _serialize_chat_for_tokenize(messages: list[Message]) -> str:
+        return "\n".join(f"{item.role}: {item.content}" for item in messages)
 
     async def chat(self, messages: list[Message], model: str | None = None, parameters: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
         self._require_api_key(self.settings.qwen_api_key, "QWEN_API_KEY")
