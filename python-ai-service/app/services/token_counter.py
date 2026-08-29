@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import dataclass
 from typing import Any, Iterable, Protocol
 
@@ -18,9 +20,7 @@ class LocalTokenizationError(RuntimeError):
 
 
 class ChatTokenCounter(Protocol):
-    def count_text(self, text: str) -> TokenCount: ...
-
-    def count_chat(self, messages: Iterable[Message]) -> TokenCount: ...
+    async def count_chat(self, messages: Iterable[Message]) -> TokenCount: ...
 
 
 class ConservativeTokenCounter:
@@ -65,6 +65,7 @@ class LocalHfTokenCounter:
     def __init__(self, tokenizer_path: str):
         self.tokenizer_path = tokenizer_path
         self._tokenizer: Any | None = None
+        self._load_lock = threading.Lock()
 
     def count_chat(self, messages: Iterable[Message]) -> TokenCount:
         tokenizer = self._load_tokenizer()
@@ -85,17 +86,23 @@ class LocalHfTokenCounter:
         return TokenCount(tokens=tokens, mode="EXACT", tokenizer=tokenizer_name)
 
     def _load_tokenizer(self):
-        if self._tokenizer is None:
-            try:
-                from transformers import AutoTokenizer
+        tokenizer = self._tokenizer
+        if tokenizer is not None:
+            return tokenizer
+        with self._load_lock:
+            tokenizer = self._tokenizer
+            if tokenizer is None:
+                try:
+                    from transformers import AutoTokenizer
 
-                self._tokenizer = AutoTokenizer.from_pretrained(
-                    self.tokenizer_path,
-                    local_files_only=True,
-                )
-            except Exception:
-                raise LocalTokenizationError("local Hugging Face tokenizer load failed") from None
-        return self._tokenizer
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        self.tokenizer_path,
+                        local_files_only=True,
+                    )
+                except Exception:
+                    raise LocalTokenizationError("local Hugging Face tokenizer load failed") from None
+                self._tokenizer = tokenizer
+        return tokenizer
 
     @staticmethod
     def _encoded_length(encoded: Any) -> int:
@@ -125,7 +132,7 @@ class TokenCounter:
         message_list = list(messages)
         if self.local_counter is not None:
             try:
-                return self.local_counter.count_chat(message_list)
+                return await asyncio.to_thread(self.local_counter.count_chat, message_list)
             except LocalTokenizationError:
                 pass
 

@@ -1,4 +1,7 @@
 import asyncio
+import inspect
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import json
@@ -10,7 +13,13 @@ from app.core.deployment import AiDeploymentMode
 from app.core.settings import Settings
 from app.models.schemas import Message
 from app.services.qwen_client import QwenClient
-from app.services.token_counter import ConservativeTokenCounter, TokenCount, TokenCounter
+from app.services.token_counter import (
+    ChatTokenCounter,
+    ConservativeTokenCounter,
+    LocalHfTokenCounter,
+    TokenCount,
+    TokenCounter,
+)
 
 
 @pytest.mark.parametrize(
@@ -242,6 +251,81 @@ def test_conservative_estimator_charges_every_utf8_byte(text):
     assert result.tokens == len(text.encode("utf-8"))
 
 
+def test_chat_token_counter_protocol_declares_async_count_chat():
+    assert inspect.iscoroutinefunction(ChatTokenCounter.count_chat)
+
+
+def test_token_counter_offloads_local_hf_count_to_thread(monkeypatch, tmp_path):
+    scheduled = []
+
+    class StubLocalCounter:
+        def count_chat(self, messages):
+            return TokenCount(tokens=7, mode="EXACT", tokenizer="stub-local")
+
+    async def fake_to_thread(function, *args):
+        scheduled.append((function, args))
+        return function(*args)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+    settings = local_settings(context_tokenizer_path=str(tmp_path))
+    counter = TokenCounter(settings, QwenClient(settings))
+    counter.local_counter = StubLocalCounter()
+
+    result = asyncio.run(counter.count_chat(chat_messages()))
+
+    assert result == TokenCount(tokens=7, mode="EXACT", tokenizer="stub-local")
+    assert len(scheduled) == 1
+    assert scheduled[0][0].__self__ is counter.local_counter
+    assert scheduled[0][0].__name__ == "count_chat"
+
+
+def test_local_hf_tokenizer_load_is_single_flight_across_threads(monkeypatch, tmp_path):
+    load_started = threading.Event()
+    second_load_started = threading.Event()
+    release_load = threading.Event()
+    load_count = 0
+    count_lock = threading.Lock()
+
+    class FakeTokenizer:
+        name_or_path = "single-flight-tokenizer"
+
+        def apply_chat_template(self, messages, **kwargs):
+            return [1, 2]
+
+    class FakeAutoTokenizer:
+        @classmethod
+        def from_pretrained(cls, path, **kwargs):
+            nonlocal load_count
+            with count_lock:
+                load_count += 1
+                if load_count == 1:
+                    load_started.set()
+                else:
+                    second_load_started.set()
+            assert release_load.wait(timeout=2)
+            return FakeTokenizer()
+
+    class FakeTransformers:
+        AutoTokenizer = FakeAutoTokenizer
+
+    monkeypatch.setitem(__import__("sys").modules, "transformers", FakeTransformers)
+    counter = LocalHfTokenCounter(str(tmp_path))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(counter.count_chat, chat_messages())
+        assert load_started.wait(timeout=1)
+        second = executor.submit(counter.count_chat, chat_messages())
+        second_load_started.wait(timeout=0.2)
+        release_load.set()
+        results = [first.result(timeout=2), second.result(timeout=2)]
+
+    assert load_count == 1
+    assert results == [
+        TokenCount(tokens=2, mode="EXACT", tokenizer="single-flight-tokenizer"),
+        TokenCount(tokens=2, mode="EXACT", tokenizer="single-flight-tokenizer"),
+    ]
+
+
 def test_local_hf_tokenizer_is_used_without_network_when_path_is_configured(monkeypatch, tmp_path):
     calls = []
 
@@ -328,7 +412,7 @@ def test_configured_local_hf_chat_template_failure_is_sanitized_and_follows_poli
     monkeypatch, tmp_path, require_exact
 ):
     class FakeTokenizer:
-        def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+        def apply_chat_template(self, messages, **kwargs):
             raise ValueError("Authorization: top-secret private prompt")
 
     class FakeAutoTokenizer:
