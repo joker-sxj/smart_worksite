@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     context_history_budget_ratio: float = Field(default=0.30, gt=0, le=1)
     context_evidence_budget_ratio: float = Field(default=0.70, gt=0, le=1)
     context_tokenizer_endpoint_enabled: bool = True
+    context_tokenizer_path: str = ""
     context_require_exact_tokenizer: bool = False
     context_history_candidate_limit: int = Field(default=100, gt=0)
     model_health_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
@@ -83,6 +84,10 @@ class Settings(BaseSettings):
 
         if self.ai_deployment_mode != AiDeploymentMode.LOCAL_ONLY:
             return self
+
+        tokenizer_path = self.context_tokenizer_path.strip()
+        if tokenizer_path.startswith(("\\\\", "//")) or "://" in tokenizer_path:
+            raise ValueError("AI_DEPLOYMENT_MODE=LOCAL_ONLY requires CONTEXT_TOKENIZER_PATH to be local")
 
         policy_violations = local_only_policy_violations(
             self.ai_allow_remote_inference,

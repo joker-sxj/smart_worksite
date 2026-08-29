@@ -14,6 +14,7 @@ from app.services.qwen_client import OpenAICompatibleProvider, QwenClient
 def local_settings(**overrides) -> Settings:
     values = {
         "ai_deployment_mode": "LOCAL_ONLY",
+        "chat_max_model_len": 16384,
         "qwen_base_url": "http://local-llm:8000/v1",
         "qwen_vl_endpoint": "http://local-vlm:8000/v1/chat/completions",
         "qwen_embedding_base_url": "http://local-embedding:8000/v1",

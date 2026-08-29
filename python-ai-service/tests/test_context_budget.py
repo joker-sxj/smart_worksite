@@ -28,6 +28,7 @@ def test_context_budget_settings_expose_contract_defaults():
     assert settings.context_history_budget_ratio == pytest.approx(0.30)
     assert settings.context_evidence_budget_ratio == pytest.approx(0.70)
     assert settings.context_tokenizer_endpoint_enabled is True
+    assert settings.context_tokenizer_path == ""
     assert settings.context_require_exact_tokenizer is False
     assert settings.context_history_candidate_limit == 100
 
@@ -126,3 +127,21 @@ def test_context_budget_settings_reject_fixed_reserve_that_consumes_model_window
             context_safety_reserve_tokens=768,
             context_template_overhead_tokens=256,
         )
+
+
+def test_context_budget_settings_accept_local_tokenizer_path():
+    settings = local_settings(context_tokenizer_path="/models/smart-worksite-chat")
+
+    assert settings.context_tokenizer_path == "/models/smart-worksite-chat"
+
+
+@pytest.mark.parametrize(
+    "remote_path",
+    [
+        "https://huggingface.co/example/model",
+        "s3://private-bucket/tokenizer",
+    ],
+)
+def test_context_budget_settings_reject_remote_tokenizer_path_in_local_only(remote_path: str):
+    with pytest.raises(ValidationError, match="CONTEXT_TOKENIZER_PATH"):
+        local_settings(context_tokenizer_path=remote_path)
