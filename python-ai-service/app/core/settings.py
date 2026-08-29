@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     policy_crawler_network_enabled: bool = False
     model_profile_name: str = "unconfigured"
     chat_max_model_len: int = 0
+    context_output_reserve_tokens: int = Field(default=0, ge=0)
+    context_safety_reserve_tokens: int = Field(default=0, ge=0)
+    context_template_overhead_tokens: int = Field(default=256, ge=0)
+    context_history_budget_ratio: float = Field(default=0.30, gt=0, le=1)
+    context_evidence_budget_ratio: float = Field(default=0.70, gt=0, le=1)
+    context_tokenizer_endpoint_enabled: bool = True
+    context_require_exact_tokenizer: bool = False
+    context_history_candidate_limit: int = Field(default=100, gt=0)
     model_health_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
 
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -61,6 +69,18 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_local_only_endpoints(self) -> "Settings":
+        if self.context_history_budget_ratio + self.context_evidence_budget_ratio > 1:
+            raise ValueError("context history and evidence budget ratios must not exceed 1")
+
+        if self.ai_deployment_mode == AiDeploymentMode.LOCAL_ONLY and self.chat_max_model_len <= 0:
+            raise ValueError("AI_DEPLOYMENT_MODE=LOCAL_ONLY requires CHAT_MAX_MODEL_LEN to be positive")
+
+        if (
+            self.chat_max_model_len > 0
+            and self.resolved_context_fixed_reserve_tokens() >= self.chat_max_model_len
+        ):
+            raise ValueError("fixed context reserves must leave room in CHAT_MAX_MODEL_LEN")
+
         if self.ai_deployment_mode != AiDeploymentMode.LOCAL_ONLY:
             return self
 
@@ -87,6 +107,23 @@ class Settings(BaseSettings):
                 f"or Docker service endpoints; invalid settings: {', '.join(invalid)}"
             )
         return self
+
+    def resolved_context_output_reserve_tokens(self) -> int:
+        if self.context_output_reserve_tokens > 0:
+            return self.context_output_reserve_tokens
+        return min(4096, self.chat_max_model_len // 4)
+
+    def resolved_context_safety_reserve_tokens(self) -> int:
+        if self.context_safety_reserve_tokens > 0:
+            return self.context_safety_reserve_tokens
+        return max(512, self.chat_max_model_len // 32)
+
+    def resolved_context_fixed_reserve_tokens(self) -> int:
+        return (
+            self.resolved_context_output_reserve_tokens()
+            + self.resolved_context_safety_reserve_tokens()
+            + self.context_template_overhead_tokens
+        )
 
     def safe_ai_dependency_descriptors(self) -> dict[str, dict[str, Any]]:
         return {
