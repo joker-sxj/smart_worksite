@@ -74,6 +74,7 @@ class LocalHfTokenCounter:
                 payload,
                 tokenize=True,
                 add_generation_prompt=True,
+                enable_thinking=False,
             )
             tokens = self._encoded_length(encoded)
         except LocalTokenizationError:

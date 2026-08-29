@@ -248,8 +248,8 @@ def test_local_hf_tokenizer_is_used_without_network_when_path_is_configured(monk
     class FakeTokenizer:
         name_or_path = "local-qwen-tokenizer"
 
-        def apply_chat_template(self, messages, tokenize, add_generation_prompt):
-            calls.append((messages, tokenize, add_generation_prompt))
+        def apply_chat_template(self, messages, **kwargs):
+            calls.append((messages, kwargs))
             return [1, 2, 3, 4]
 
     class FakeAutoTokenizer:
@@ -268,7 +268,11 @@ def test_local_hf_tokenizer_is_used_without_network_when_path_is_configured(monk
 
     assert result == TokenCount(tokens=4, mode="EXACT", tokenizer="local-qwen-tokenizer")
     assert calls[0] == (str(tmp_path), {"local_files_only": True})
-    assert calls[1][1:] == (True, True)
+    assert calls[1][1] == {
+        "tokenize": True,
+        "add_generation_prompt": True,
+        "enable_thinking": False,
+    }
 
 
 def test_local_hf_load_failure_tries_local_vllm_exact_before_fallback(monkeypatch, tmp_path):
