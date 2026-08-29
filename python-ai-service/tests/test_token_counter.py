@@ -86,7 +86,7 @@ def test_vllm_count_chat_tokens_uses_local_tokenize_and_chat_messages_without_au
     settings = local_settings(qwen_api_key="top-secret")
     with respx.mock(assert_all_called=True) as router:
         route = router.post("http://127.0.0.1:8000/tokenize").mock(
-            return_value=httpx.Response(200, json={"count": 17, "tokenizer": "Qwen3-local"})
+            return_value=httpx.Response(200, json={"count": 17, "tokenizer": "Qwen3-local", "exactChatTemplate": True})
         )
 
         result = asyncio.run(QwenClient(settings).count_chat_tokens(chat_messages()))
@@ -116,7 +116,42 @@ def test_vllm_count_chat_tokens_retries_with_prompt_for_older_server():
     assert len(route.calls) == 2
     assert "messages" in json.loads(route.calls[0].request.content)
     assert "prompt" in json.loads(route.calls[1].request.content)
-    assert result == TokenCount(tokens=3, mode="EXACT", tokenizer="local-model")
+    assert result == TokenCount(tokens=3, mode="ESTIMATED", tokenizer="vllm-prompt-v1")
+
+
+def test_vllm_prompt_fallback_is_exact_only_when_server_confirms_chat_template():
+    with respx.mock(assert_all_called=True) as router:
+        router.post("http://127.0.0.1:8000/tokenize").mock(
+            side_effect=[
+                httpx.Response(422, json={"detail": "messages unsupported"}),
+                httpx.Response(
+                    200,
+                    json={
+                        "count": 5,
+                        "tokenizer": "local-chat-template",
+                        "exactChatTemplate": True,
+                    },
+                ),
+            ]
+        )
+
+        result = asyncio.run(QwenClient(local_settings()).count_chat_tokens(chat_messages()))
+
+    assert result == TokenCount(tokens=5, mode="EXACT", tokenizer="local-chat-template")
+
+
+def test_vllm_unconfirmed_prompt_fallback_fails_when_exact_is_required():
+    settings = local_settings(context_require_exact_tokenizer=True)
+    with respx.mock(assert_all_called=True) as router:
+        router.post("http://127.0.0.1:8000/tokenize").mock(
+            side_effect=[
+                httpx.Response(422, json={"detail": "messages unsupported"}),
+                httpx.Response(200, json={"count": 5, "tokenizer": "local-model"}),
+            ]
+        )
+
+        with pytest.raises(RuntimeError, match="Exact local tokenization failed"):
+            asyncio.run(TokenCounter(settings, QwenClient(settings)).count_chat(chat_messages()))
 
 
 @pytest.mark.parametrize("failure", [404, "timeout"])
@@ -182,3 +217,145 @@ def test_vllm_count_chat_tokens_rejects_public_endpoint_before_request():
             asyncio.run(QwenClient(settings).count_chat_tokens(chat_messages()))
 
     assert not route.called
+
+
+@pytest.mark.parametrize(
+    "text, minimum",
+    [
+        ("Safety workers must wear helmets before entering the construction site.", 20),
+        ("安全帽 safety helmet 12345", 10),
+        ("def stop_work(risk):\n    if risk >= 3:\n        return True", 25),
+    ],
+)
+def test_conservative_estimator_is_an_explicit_upper_biased_mixed_text_estimate(text, minimum):
+    result = ConservativeTokenCounter().count_text(text)
+
+    assert result.mode == "ESTIMATED"
+    assert result.tokenizer == "conservative-v1"
+    assert result.tokens >= minimum
+
+
+@pytest.mark.parametrize("text", ["space heavy code:    x = 1", "混合 UTF-8 text 🚧"])
+def test_conservative_estimator_charges_every_utf8_byte(text):
+    result = ConservativeTokenCounter().count_text(text)
+
+    assert result.tokens == len(text.encode("utf-8"))
+
+
+def test_local_hf_tokenizer_is_used_without_network_when_path_is_configured(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeTokenizer:
+        name_or_path = "local-qwen-tokenizer"
+
+        def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+            calls.append((messages, tokenize, add_generation_prompt))
+            return [1, 2, 3, 4]
+
+    class FakeAutoTokenizer:
+        @classmethod
+        def from_pretrained(cls, path, **kwargs):
+            calls.append((path, kwargs))
+            return FakeTokenizer()
+
+    class FakeTransformers:
+        AutoTokenizer = FakeAutoTokenizer
+
+    monkeypatch.setitem(__import__("sys").modules, "transformers", FakeTransformers)
+    settings = local_settings(context_tokenizer_path=str(tmp_path))
+
+    result = asyncio.run(TokenCounter(settings, QwenClient(settings)).count_chat(chat_messages()))
+
+    assert result == TokenCount(tokens=4, mode="EXACT", tokenizer="local-qwen-tokenizer")
+    assert calls[0] == (str(tmp_path), {"local_files_only": True})
+    assert calls[1][1:] == (True, True)
+
+
+def test_local_hf_load_failure_tries_local_vllm_exact_before_fallback(monkeypatch, tmp_path):
+    class FakeAutoTokenizer:
+        @classmethod
+        def from_pretrained(cls, path, **kwargs):
+            raise OSError("local tokenizer unavailable")
+
+    class FakeTransformers:
+        AutoTokenizer = FakeAutoTokenizer
+
+    monkeypatch.setitem(__import__("sys").modules, "transformers", FakeTransformers)
+    settings = local_settings(context_tokenizer_path=str(tmp_path))
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://127.0.0.1:8000/tokenize").mock(
+            return_value=httpx.Response(
+                200,
+                json={"count": 19, "tokenizer": "vllm-local", "exactChatTemplate": True},
+            )
+        )
+
+        result = asyncio.run(TokenCounter(settings, QwenClient(settings)).count_chat(chat_messages()))
+
+    assert route.called
+    assert result == TokenCount(tokens=19, mode="EXACT", tokenizer="vllm-local")
+
+
+def test_configured_local_hf_tokenizer_failure_uses_estimate_when_exact_not_required(monkeypatch, tmp_path):
+    class FakeAutoTokenizer:
+        @classmethod
+        def from_pretrained(cls, path, **kwargs):
+            raise OSError("network and prompt must not leak")
+
+    class FakeTransformers:
+        AutoTokenizer = FakeAutoTokenizer
+
+    monkeypatch.setitem(__import__("sys").modules, "transformers", FakeTransformers)
+    settings = local_settings(context_tokenizer_path=str(tmp_path))
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://127.0.0.1:8000/tokenize").mock(
+            return_value=httpx.Response(500, text="Authorization: top-secret private prompt")
+        )
+
+        result = asyncio.run(TokenCounter(settings, QwenClient(settings)).count_chat(chat_messages()))
+
+    assert route.called
+    assert result.mode == "ESTIMATED"
+    assert result.tokenizer == "conservative-v1"
+
+
+@pytest.mark.parametrize("require_exact", [False, True])
+def test_configured_local_hf_chat_template_failure_is_sanitized_and_follows_policy(
+    monkeypatch, tmp_path, require_exact
+):
+    class FakeTokenizer:
+        def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+            raise ValueError("Authorization: top-secret private prompt")
+
+    class FakeAutoTokenizer:
+        @classmethod
+        def from_pretrained(cls, path, **kwargs):
+            return FakeTokenizer()
+
+    class FakeTransformers:
+        AutoTokenizer = FakeAutoTokenizer
+
+    monkeypatch.setitem(__import__("sys").modules, "transformers", FakeTransformers)
+    settings = local_settings(
+        context_tokenizer_path=str(tmp_path),
+        context_require_exact_tokenizer=require_exact,
+    )
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post("http://127.0.0.1:8000/tokenize").mock(
+            return_value=httpx.Response(500, text="Authorization: top-secret private prompt")
+        )
+
+        if require_exact:
+            with pytest.raises(RuntimeError) as error:
+                asyncio.run(TokenCounter(settings, QwenClient(settings)).count_chat(chat_messages()))
+
+            rendered_error = "".join(traceback.format_exception(error.value))
+            assert "top-secret" not in rendered_error
+            assert "private prompt" not in rendered_error
+            assert "tokenizer" in str(error.value).lower()
+        else:
+            result = asyncio.run(TokenCounter(settings, QwenClient(settings)).count_chat(chat_messages()))
+            assert result.mode == "ESTIMATED"
+            assert result.tokenizer == "conservative-v1"
+
+    assert route.called

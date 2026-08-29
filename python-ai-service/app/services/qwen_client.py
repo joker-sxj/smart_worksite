@@ -39,10 +39,12 @@ class OpenAICompatibleProvider:
             "messages": [{"role": item.role, "content": item.content} for item in messages],
         }
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        used_prompt_fallback = False
         try:
             async with httpx.AsyncClient(timeout=self.settings.qwen_timeout_seconds) as client:
                 response = await client.post(endpoint, headers=headers, json=payload)
                 if response.status_code in (400, 422):
+                    used_prompt_fallback = True
                     response = await client.post(
                         endpoint,
                         headers=headers,
@@ -64,6 +66,9 @@ class OpenAICompatibleProvider:
             token_value = len(token_value)
         if not isinstance(token_value, int) or token_value < 0:
             raise LocalTokenizationError("local vLLM tokenize response did not contain a token count")
+        if used_prompt_fallback and body.get("exactChatTemplate") is not True:
+            return TokenCount(tokens=token_value, mode="ESTIMATED", tokenizer="vllm-prompt-v1")
+
         tokenizer = body.get("tokenizer") or body.get("model") or self.settings.qwen_model
         return TokenCount(tokens=token_value, mode="EXACT", tokenizer=str(tokenizer))
 
