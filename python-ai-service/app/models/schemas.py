@@ -297,3 +297,17 @@ class DocumentUnderstandingData(BaseModel):
     totalTextChars: int = 0
     truncated: bool = False
     pages: list[DocumentUnderstandingPageData] = Field(default_factory=list)
+
+
+class PdfRecoveryRequest(BaseModel):
+    contentBase64: str
+    maxBytes: int = 104857600
+    maxPages: int = 100
+
+
+class PdfRecoveryData(BaseModel):
+    classification: str
+    recoverable: bool = False
+    repairedContentBase64: str | None = None
+    pageCount: int | None = None
+    warnings: list[str] = Field(default_factory=list)

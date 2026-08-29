@@ -209,7 +209,9 @@ curl --noproxy '*' -X DELETE http://127.0.0.1:8080/api/files/1
 
 ## 文件解析
 
-文件解析针对已经上传的文件。
+文件解析针对已经上传的文件。当前支持 `.doc/.docx`、`.pdf`、`.xls/.xlsx`、`.csv`、`.ppt/.pptx` 和图片。Excel/CSV 输出按工作表或表格范围生成 Markdown，PPT 输出按幻灯片、文本框、表格和备注生成 Markdown；PDF 对原生文本质量低的页面逐页调用 Python OCR。
+
+PDF 解析不会覆盖原始文件。PDFBox 无法读取时，Java 可调用 Python 的 `/v1/document/pdf/recover` 安全恢复端点；该端点仅在输入大小、PDF 签名、加密状态和页数检查通过后尝试内存重写，并返回 `PASSWORD_REQUIRED`、`RESOURCE_LIMIT_EXCEEDED`、`RECOVERED` 或 `UNRECOVERABLE` 等分类。
 
 支持：
 

@@ -39,7 +39,9 @@ public class FileParseApplicationService {
 
     private static final Set<String> SPREADSHEET_TYPES = Set.of(
             "application/vnd.ms-excel",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "text/csv",
+            "application/csv"
     );
     private static final Set<String> PRESENTATION_TYPES = Set.of(
             "application/vnd.ms-powerpoint",
@@ -288,7 +290,7 @@ public class FileParseApplicationService {
 
     private boolean isSpreadsheet(FileObject fileObject) {
         return SPREADSHEET_TYPES.contains(normalizeContentType(fileObject.getContentType()))
-                || Set.of("xls", "xlsx").contains(normalizeExt(fileObject.getFileExt()));
+                || Set.of("xls", "xlsx", "csv").contains(normalizeExt(fileObject.getFileExt()));
     }
 
     private boolean isPresentation(FileObject fileObject) {

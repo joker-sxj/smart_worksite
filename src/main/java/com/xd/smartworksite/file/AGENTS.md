@@ -358,6 +358,8 @@ Supported input files:
 
 ```text
 Word: .doc, .docx
+Spreadsheets: .xls, .xlsx, .csv
+Presentations: .ppt, .pptx
 PDF: .pdf
 Images: .png, .jpg, .jpeg, .webp
 ```
@@ -365,7 +367,7 @@ Images: .png, .jpg, .jpeg, .webp
 Supported output:
 
 ```text
-Word/PDF -> Markdown
+Word/PDF/Spreadsheet/Presentation -> Markdown
 Image -> Plain text paragraph description
 ```
 
@@ -487,6 +489,13 @@ QwenVL prompt requirements:
 - Do not invent invisible content.
 - Mark unreadable, blurred, or uncertain content explicitly.
 - Preserve safety, quality, compliance, and construction-site terms when visible.
+
+### Spreadsheet, Presentation, And PDF Reliability
+
+- `.xls`/`.xlsx` are parsed with Apache POI into sheet/range blocks; `.csv` uses a dedicated quoted-field parser with UTF-8/GB18030 detection and bounded row/cell budgets.
+- `.ppt`/`.pptx` are parsed into slide blocks containing text, tables, and notes. Image-only slides should be routed to a visual parser in a later enhancement; Java must not execute arbitrary office macros.
+- PDF pages receive a native-text quality check (printable ratio, replacement characters, control characters, and repeated lines). Low-quality text is rendered and sent to the Python document-understanding OCR path.
+- Broken PDFs are never overwritten. The Python recovery endpoint may classify and rewrite only mildly damaged files in memory, with byte/page limits and stable classifications such as `PASSWORD_REQUIRED`, `RECOVERED`, and `UNRECOVERABLE`.
 
 ### File Preparation
 

@@ -89,6 +89,7 @@ class PowerPointDocumentParserTest {
         assertThat(document.getBlocks().get(2).getStructuredData().get("rows")).isInstanceOf(java.util.List.class);
         assertThat(document.getBlocks().get(3).getStructuredData()).containsEntry("notes", true);
         assertThat(document.getBlocks().get(0).getStructuredData()).containsEntry("readingOrder", 0);
+        assertThat(document.getTextContent()).contains("## 第 1 页", "| 风险等级 | 负责人 |", "> 演讲者备注：");
     }
 
     @Test

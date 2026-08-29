@@ -59,6 +59,7 @@ class ExcelDocumentParserTest {
         assertThat(riskTable.getStructuredData()).containsEntry("hidden", false);
         assertThat(riskTable.getStructuredData().get("mergedRegions")).isEqualTo(List.of("A1:B1"));
         assertThat(riskTable.getText()).contains("风险等级", "一级", "2", "4");
+        assertThat(document.getTextContent()).contains("## 工作表：风险台账", "### 范围：A1:C2", "| 风险等级 | 数量 |");
         assertThat(document.getBlocks().get(1).getStructuredData()).containsEntry("hidden", true);
     }
 

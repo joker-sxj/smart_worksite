@@ -101,6 +101,23 @@ class PdfDocumentParserTest {
         assertThat(image.getHeight()).isLessThanOrEqualTo(2048);
     }
 
+    @Test
+    void rejectsGarbledNativeTextQualityBeforeOcrDecision() {
+        PdfDocumentParser parser = parser(new RecordingOcrGateway(List.of()), 1, 1000);
+        assertThat(parser.isUsableNativeText("安全检查记录 2026-08-28")).isTrue();
+        assertThat(parser.isUsableNativeText("损坏文本���")).isFalse();
+        assertThat(parser.isUsableNativeText("正常" + new String(new char[]{0, 1, 2, 3}))).isFalse();
+    }
+
+    @Test
+    void retriesThroughRecoveryGatewayWhenPdfStructureCannotBeRead() throws Exception {
+        byte[] valid = pdf("recovered PDF");
+        PdfDocumentParser parser = new PdfDocumentParser(properties(10, 1000),
+                new RecordingOcrGateway(List.of()), 1, (projectId, ignored) -> valid);
+        PreparedDocument result = parser.parse(file(), "%PDF-1.7\ntruncated".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        assertThat(result.getTextContent()).contains("recovered PDF");
+    }
+
     private PdfDocumentParser parser(RecordingOcrGateway gateway, int minNativeTextChars, int maxTextChars) {
         return new PdfDocumentParser(properties(10, maxTextChars), gateway, minNativeTextChars);
     }

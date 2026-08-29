@@ -28,6 +28,8 @@ from app.models.schemas import (
     PolicyCrawlData,
     DocumentUnderstandingRequest,
     DocumentUnderstandingData,
+    PdfRecoveryRequest,
+    PdfRecoveryData,
 )
 from app.services.qwen_client import QwenClient
 from app.services.model_readiness_service import ModelReadinessService
@@ -39,6 +41,7 @@ from app.services.agent_tools import ToolRegistry, ToolSpec
 from app.services.ocr_service import OcrService
 from app.services.policy_crawler_service import PolicyCrawlerService
 from app.services.document_understanding_service import DocumentUnderstandingService
+from app.services.pdf_recovery_service import PdfRecoveryService
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(verify_service_key)])
 
@@ -88,6 +91,7 @@ def services():
         "ocr": OcrService(qwen),
         "policy": PolicyCrawlerService(settings),
         "documentUnderstanding": DocumentUnderstandingService(qwen),
+        "pdfRecovery": PdfRecoveryService(),
     }
 
 
@@ -174,3 +178,8 @@ async def policy_crawl(request: PolicyCrawlRequest):
 async def document_understand(request: DocumentUnderstandingRequest):
     data, usage = await services()["documentUnderstanding"].understand(request)
     return ok(data, usage)
+
+
+@router.post("/document/pdf/recover", response_model=StandardResponse[PdfRecoveryData])
+async def pdf_recover(request: PdfRecoveryRequest):
+    return ok(services()["pdfRecovery"].recover(request))
