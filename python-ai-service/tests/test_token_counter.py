@@ -182,5 +182,3 @@ def test_vllm_count_chat_tokens_rejects_public_endpoint_before_request():
             asyncio.run(QwenClient(settings).count_chat_tokens(chat_messages()))
 
     assert not route.called
-
-
