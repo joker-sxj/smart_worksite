@@ -129,6 +129,20 @@ def test_context_budget_settings_reject_fixed_reserve_that_consumes_model_window
         )
 
 
+def test_context_budget_settings_normalizes_blank_tokenizer_path():
+    settings = local_settings(context_tokenizer_path="  \t  ")
+
+    assert settings.context_tokenizer_path == ""
+
+
+def test_context_budget_settings_trims_existing_local_tokenizer_path(tmp_path):
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+
+    settings = local_settings(context_tokenizer_path=f"  {tokenizer_dir}  ")
+
+    assert settings.context_tokenizer_path == str(tokenizer_dir)
+
 def test_context_budget_settings_accept_existing_local_tokenizer_path(tmp_path):
     tokenizer_dir = tmp_path / "tokenizer"
     tokenizer_dir.mkdir()

@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.deployment import (
@@ -69,6 +69,14 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    @field_validator("context_tokenizer_path", mode="before")
+    @classmethod
+    def normalize_context_tokenizer_path(cls, value: Any) -> Any:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        return value
     @model_validator(mode="after")
     def validate_local_only_endpoints(self) -> "Settings":
         if self.context_history_budget_ratio + self.context_evidence_budget_ratio > 1:
@@ -86,7 +94,7 @@ class Settings(BaseSettings):
         if self.ai_deployment_mode != AiDeploymentMode.LOCAL_ONLY:
             return self
 
-        tokenizer_path = self.context_tokenizer_path.strip()
+        tokenizer_path = self.context_tokenizer_path
         if tokenizer_path and (
             tokenizer_path.startswith(("\\", "//"))
             or "://" in tokenizer_path
