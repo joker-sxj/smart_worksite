@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from pydantic import Field, model_validator
@@ -86,8 +87,15 @@ class Settings(BaseSettings):
             return self
 
         tokenizer_path = self.context_tokenizer_path.strip()
-        if tokenizer_path.startswith(("\\\\", "//")) or "://" in tokenizer_path:
-            raise ValueError("AI_DEPLOYMENT_MODE=LOCAL_ONLY requires CONTEXT_TOKENIZER_PATH to be local")
+        if tokenizer_path and (
+            tokenizer_path.startswith(("\\", "//"))
+            or "://" in tokenizer_path
+            or not Path(tokenizer_path).expanduser().exists()
+        ):
+            raise ValueError(
+                "AI_DEPLOYMENT_MODE=LOCAL_ONLY requires CONTEXT_TOKENIZER_PATH "
+                "to be an existing local file or directory"
+            )
 
         policy_violations = local_only_policy_violations(
             self.ai_allow_remote_inference,

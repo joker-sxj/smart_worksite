@@ -129,10 +129,27 @@ def test_context_budget_settings_reject_fixed_reserve_that_consumes_model_window
         )
 
 
-def test_context_budget_settings_accept_local_tokenizer_path():
-    settings = local_settings(context_tokenizer_path="/models/smart-worksite-chat")
+def test_context_budget_settings_accept_existing_local_tokenizer_path(tmp_path):
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
 
-    assert settings.context_tokenizer_path == "/models/smart-worksite-chat"
+    settings = local_settings(context_tokenizer_path=str(tokenizer_dir))
+
+    assert settings.context_tokenizer_path == str(tokenizer_dir)
+
+
+def test_context_budget_settings_accept_existing_local_tokenizer_file(tmp_path):
+    tokenizer_file = tmp_path / "tokenizer.json"
+    tokenizer_file.write_text("{}", encoding="utf-8")
+
+    settings = local_settings(context_tokenizer_path=str(tokenizer_file))
+
+    assert settings.context_tokenizer_path == str(tokenizer_file)
+
+
+def test_context_budget_settings_reject_nonexistent_repo_id_in_local_only():
+    with pytest.raises(ValidationError, match="CONTEXT_TOKENIZER_PATH"):
+        local_settings(context_tokenizer_path="Qwen/Qwen3-32B")
 
 
 @pytest.mark.parametrize(
