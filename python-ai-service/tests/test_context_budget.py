@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import warnings
 
 import pytest
 from pydantic import ValidationError
@@ -298,16 +299,80 @@ def test_history_system_messages_are_retained_with_their_complete_turn():
     assert contents.index("history policy") < contents.index("question") < contents.index("answer")
 
 
-def test_history_candidate_limit_only_considers_first_one_hundred_messages():
+def test_history_candidate_limit_uses_the_latest_messages():
     history = [msg("user", f"u-{index}") if index % 2 == 0 else msg("assistant", f"a-{index}") for index in range(102)]
     result = ContextBudgetPlanner(FixedTokenCounter()).plan(
         budget_request(history_messages=history, history_candidate_limit=100, model_context_limit=2048)
     )
 
     contents = [item.content for item in result.context_messages]
-    assert "u-100" not in contents
-    assert "a-101" not in contents
+    assert "u-0" not in contents
+    assert "a-1" not in contents
+    assert "u-100" in contents
+    assert "a-101" in contents
 
+
+def test_history_candidate_slice_discards_partial_old_turn_but_keeps_complete_latest_turn():
+    history = [
+        msg("user", "old-user"), msg("assistant", "old-answer"),
+        msg("user", "middle-user"), msg("assistant", "middle-answer"),
+        msg("user", "latest-user"), msg("assistant", "latest-answer"),
+    ]
+    result = ContextBudgetPlanner(FixedTokenCounter()).plan(
+        budget_request(history_messages=history, history_candidate_limit=3, model_context_limit=512)
+    )
+
+    contents = [item.content for item in result.context_messages]
+    assert "middle-answer" not in contents
+    assert contents[-3:-1] == ["latest-user", "latest-answer"]
+    assert result.context_usage["selectedHistoryTurns"] == 1
+
+
+def test_history_selection_is_newest_first_and_contiguous_when_newest_turn_does_not_fit():
+    history = [
+        msg("user", "old-user"), msg("assistant", "old-answer"),
+        msg("user", "new-user"), msg("assistant", "new-answer"),
+    ]
+    counter = FixedTokenCounter({"old-user": 5, "old-answer": 5, "new-user": 80, "new-answer": 80})
+    base = budget_request(history_messages=history, history_budget_ratio=1.0, evidence_budget_ratio=0.0)
+    probe = ContextBudgetPlanner(counter).plan(base)
+    fixed = probe.context_usage["systemTokens"] + probe.context_usage["questionTokens"] + base.template_overhead_tokens + base.requested_output_tokens + base.safety_reserve_tokens
+    old_turn_cost = counter.count_chat(history[:2]).tokens
+
+    result = ContextBudgetPlanner(counter).plan(replace(base, model_context_limit=fixed + old_turn_cost))
+
+    contents = [item.content for item in result.context_messages]
+    assert "new-user" not in contents
+    assert "new-answer" not in contents
+    assert "old-user" not in contents
+    assert "old-answer" not in contents
+    assert result.context_usage["selectedHistoryTurns"] == 0
+    assert result.context_usage["droppedHistoryTurns"] == 2
+    assert result.context_usage["selectedHistoryMessages"] == 0
+    assert result.context_usage["droppedHistoryMessages"] == 4
+
+
+def test_history_usage_reports_complete_turns_after_candidate_limit_and_invalid_entries():
+    history = [
+        msg("assistant", "orphan"),
+        msg("system", "policy"), msg("user", "first-user"), msg("assistant", "first-answer"),
+        msg("user", "unfinished"), msg("tool", "invalid"),
+        msg("user", "second-user"), msg("assistant", "second-answer"),
+    ]
+    counter = FixedTokenCounter({"first-user": 5, "first-answer": 5, "second-user": 5, "second-answer": 5})
+    base = budget_request(
+        history_messages=history,
+        history_candidate_limit=6,
+        history_budget_ratio=1.0,
+        evidence_budget_ratio=0.0,
+    )
+    result = ContextBudgetPlanner(counter).plan(base)
+
+    usage = result.context_usage
+    assert usage["selectedHistoryTurns"] == 2
+    assert usage["droppedHistoryTurns"] == 0
+    assert usage["selectedHistoryMessages"] == 4
+    assert usage["droppedHistoryMessages"] == 0
 
 def test_history_exact_boundary_fit_keeps_the_complete_turn():
     history = [msg("user", "fit-user"), msg("assistant", "fit-answer")]
@@ -335,6 +400,21 @@ def test_history_system_message_between_user_and_assistant_does_not_break_comple
 
     contents = [item.content for item in result.context_messages]
     assert contents[1:4] == ["turn-user", "turn-policy", "turn-answer"]
+
+def test_system_between_complete_turns_belongs_to_the_next_turn():
+    history = [
+        msg("user", "first-user"), msg("assistant", "first-answer"),
+        msg("system", "next-policy"),
+        msg("user", "second-user"), msg("assistant", "second-answer"),
+    ]
+    result = ContextBudgetPlanner(FixedTokenCounter()).plan(
+        budget_request(history_messages=history, model_context_limit=512)
+    )
+
+    contents = [item.content for item in result.context_messages]
+    assert contents[1:6] == ["first-user", "first-answer", "next-policy", "second-user", "second-answer"]
+    assert result.context_usage["selectedHistoryTurns"] == 2
+
 
 # Task 3 evidence and final validation tests
 
@@ -383,6 +463,24 @@ def test_evidence_skips_unreadably_short_remainder_instead_of_filling_budget_wit
     assert result.evidence_items == []
     assert result.context_usage["droppedEvidenceItems"] == 1
 
+
+def test_evidence_skips_unreadable_truncation_and_tries_later_shorter_item():
+    too_long = EvidenceItem("A single oversized source sentence that cannot be kept as a readable fragment.", chunk_id="long", relevance=0.9)
+    shorter = EvidenceItem("Short useful evidence.", chunk_id="short", relevance=0.8)
+    planner = ContextBudgetPlanner(FixedTokenCounter({too_long.content: 100}))
+    request = budget_request(evidence_items=[too_long, shorter], evidence_budget_ratio=1.0, history_budget_ratio=0.0)
+    fixed = (
+        planner._count([msg("system", request.system_prompt)])
+        + planner._count([msg("user", request.current_question)])
+        + request.template_overhead_tokens + request.requested_output_tokens + request.safety_reserve_tokens
+    )
+    shorter_cost = planner._count([shorter.as_message()])
+
+    result = planner.plan(replace(request, model_context_limit=fixed + shorter_cost + 2))
+
+    # Evidence arrives in upstream relevance order; the planner preserves that order while selecting items that fit.
+    assert [item.chunk_id for item in result.evidence_items] == ["short"]
+    assert result.context_usage["droppedEvidenceItems"] == 1
 
 def test_unused_history_capacity_flows_to_evidence_after_first_allocation():
     item = EvidenceItem("Evidence with enough useful detail.", chunk_id="evidence")
@@ -462,3 +560,209 @@ def test_aplan_supports_the_async_token_counter_contract():
 
     result = asyncio.run(ContextBudgetPlanner(AsyncCounter()).aplan(budget_request()))
     assert result.context_usage["modelContextLimit"] == 2048
+
+
+def test_final_exact_recheck_removes_a_whole_turn_with_system_orphans_and_incomplete_user():
+    class Counter(FixedTokenCounter):
+        def count_chat(self, messages):
+            base = super().count_chat(messages).tokens
+            contents = {message.content for message in messages}
+            drift = 100 if {"old-user", "current question"}.issubset(contents) else 0
+            return type("Count", (), {"tokens": base + drift, "mode": "EXACT", "tokenizer": "local-test"})()
+
+    history = [
+        msg("assistant", "orphan-before"),
+        msg("system", "old-policy"), msg("user", "old-user"), msg("assistant", "old-answer"),
+        msg("user", "new-user"), msg("assistant", "new-answer"),
+        msg("user", "incomplete"),
+    ]
+    result = ContextBudgetPlanner(Counter()).plan(
+        budget_request(history_messages=history, model_context_limit=400, history_budget_ratio=1.0, evidence_budget_ratio=0.0)
+    )
+
+    contents = [message.content for message in result.context_messages]
+    assert all(value not in contents for value in ["orphan-before", "old-policy", "old-user", "old-answer", "incomplete"])
+    assert contents[-3:-1] == ["new-user", "new-answer"]
+
+
+def test_chinese_sentence_boundary_without_spaces_keeps_the_first_sentence():
+    planner = ContextBudgetPlanner(FixedTokenCounter())
+    first = EvidenceItem("第一条安全要求。", chunk_id="zh")
+    item = EvidenceItem("第一条安全要求。第二条安全要求。", chunk_id="zh")
+    request = budget_request(evidence_items=[item], evidence_budget_ratio=1.0, history_budget_ratio=0.0)
+    fixed = (
+        planner._count([msg("system", request.system_prompt)])
+        + planner._count([msg("user", request.current_question)])
+        + request.template_overhead_tokens + request.requested_output_tokens + request.safety_reserve_tokens
+    )
+    first_cost = planner._count([first.as_message()])
+    result = planner.plan(replace(request, model_context_limit=fixed + first_cost + 2))
+
+    assert result.evidence_items[0].content == first.content
+    assert result.evidence_items[0].truncated is True
+
+
+def test_aplan_awaits_async_counter_on_the_callers_running_event_loop():
+    expected_loop = None
+
+    class AsyncCounter(FixedTokenCounter):
+        async def count_chat(self, messages):
+            assert asyncio.get_running_loop() is expected_loop
+            return super().count_chat(messages)
+
+    async def run():
+        nonlocal expected_loop
+        expected_loop = asyncio.get_running_loop()
+        return await ContextBudgetPlanner(AsyncCounter()).aplan(budget_request())
+
+    result = asyncio.run(run())
+    assert result.context_usage["modelContextLimit"] == 2048
+
+
+def test_english_sentence_boundaries_preserve_abbreviations_files_and_urls():
+    text = (
+        "Use e.g. barriers, i.e. acoustic screens; see No. 5, Fig. 1, "
+        "report.v2.pdf, or https://example.com/report.v2.pdf. Second complete sentence."
+    )
+
+    assert ContextBudgetPlanner(FixedTokenCounter())._natural_segments(text) == [
+        (
+            "Use e.g. barriers, i.e. acoustic screens; see No. 5, Fig. 1, "
+            "report.v2.pdf, or https://example.com/report.v2.pdf. "
+        ),
+        "Second complete sentence.",
+    ]
+
+
+def test_plain_english_sentences_still_split_at_clear_boundaries():
+    assert ContextBudgetPlanner(FixedTokenCounter())._natural_segments(
+        "First complete sentence. Second complete sentence."
+    ) == ["First complete sentence. ", "Second complete sentence."]
+
+def test_decimal_and_unit_period_is_not_treated_as_a_sentence_boundary():
+    planner = ContextBudgetPlanner(FixedTokenCounter())
+    assert planner._natural_segments("执行3.1.2条，噪声限值为70.5dB。夜间应进一步降噪。") == [
+        "执行3.1.2条，噪声限值为70.5dB。",
+        "夜间应进一步降噪。",
+    ]
+    first = EvidenceItem("噪声限值为70.5dB。", chunk_id="decimal")
+    item = EvidenceItem("噪声限值为70.5dB。夜间应进一步降噪。", chunk_id="decimal")
+    request = budget_request(evidence_items=[item], evidence_budget_ratio=1.0, history_budget_ratio=0.0)
+    fixed = (
+        planner._count([msg("system", request.system_prompt)])
+        + planner._count([msg("user", request.current_question)])
+        + request.template_overhead_tokens + request.requested_output_tokens + request.safety_reserve_tokens
+    )
+    first_cost = planner._count([first.as_message()])
+
+    result = planner.plan(replace(request, model_context_limit=fixed + first_cost + 2))
+
+    assert result.evidence_items[0].content == first.content
+
+
+@pytest.mark.parametrize(
+    ("overrides", "parameter_name"),
+    [
+        ({"history_budget_ratio": -0.1}, "history_budget_ratio"),
+        ({"history_budget_ratio": 1.1}, "history_budget_ratio"),
+        ({"evidence_budget_ratio": -0.1}, "evidence_budget_ratio"),
+        ({"evidence_budget_ratio": 1.1}, "evidence_budget_ratio"),
+        ({"history_budget_ratio": 0.6, "evidence_budget_ratio": 0.5}, "history_budget_ratio/evidence_budget_ratio"),
+        ({"history_candidate_limit": 0}, "history_candidate_limit"),
+    ],
+)
+def test_planner_validates_budget_ratios_and_history_limit_without_leaking_content(overrides, parameter_name):
+    secret = "SECRET_CONTEXT_BODY"
+    request = budget_request(
+        system_prompt=secret,
+        current_question=secret,
+        evidence_items=[EvidenceItem(secret)],
+        **overrides,
+    )
+
+    with pytest.raises(ContextBudgetExceeded) as exc_info:
+        ContextBudgetPlanner(FixedTokenCounter()).plan(request)
+
+    assert parameter_name in str(exc_info.value)
+    assert secret not in str(exc_info.value)
+
+
+def test_plan_cleanly_rejects_a_counter_returning_an_awaitable_without_runtime_warning():
+    class AwaitableCounter:
+        def __init__(self):
+            self.awaitable = None
+
+        def count_chat(self, messages):
+            async def count():
+                return FixedTokenCounter().count_chat(messages)
+
+            self.awaitable = count()
+            return self.awaitable
+
+    counter = AwaitableCounter()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(TypeError, match="aplan"):
+            ContextBudgetPlanner(counter).plan(budget_request())
+
+    assert counter.awaitable.cr_frame is None
+    assert not any("was never awaited" in str(item.message) for item in caught)
+
+
+def _count_key(messages):
+    return tuple((message.role, message.content) for message in messages)
+
+
+def _cache_request():
+    history = [
+        message
+        for index in range(3)
+        for message in (msg("user", f"history-user-{index}"), msg("assistant", f"history-answer-{index}"))
+    ]
+    evidence = [
+        EvidenceItem(f"Evidence sentence {index} with enough production detail.", chunk_id=f"e-{index}")
+        for index in range(4)
+    ]
+    return budget_request(
+        history_messages=history,
+        evidence_items=evidence,
+        model_context_limit=4096,
+    )
+
+
+def test_plan_caches_identical_message_counts_within_one_request():
+    class CountingCounter(FixedTokenCounter):
+        def __init__(self):
+            super().__init__()
+            self.calls = {}
+
+        def count_chat(self, messages):
+            messages = list(messages)
+            key = _count_key(messages)
+            self.calls[key] = self.calls.get(key, 0) + 1
+            return super().count_chat(messages)
+
+    counter = CountingCounter()
+    ContextBudgetPlanner(counter).plan(_cache_request())
+
+    assert max(counter.calls.values()) == 1
+    assert sum(counter.calls.values()) <= 14
+
+
+def test_aplan_shares_the_same_request_level_count_cache_semantics():
+    class AsyncCountingCounter(FixedTokenCounter):
+        def __init__(self):
+            super().__init__()
+            self.calls = {}
+
+        async def count_chat(self, messages):
+            messages = list(messages)
+            key = _count_key(messages)
+            self.calls[key] = self.calls.get(key, 0) + 1
+            return FixedTokenCounter.count_chat(self, messages)
+
+    counter = AsyncCountingCounter()
+    asyncio.run(ContextBudgetPlanner(counter).aplan(_cache_request()))
+
+    assert max(counter.calls.values()) == 1
+    assert sum(counter.calls.values()) <= 14

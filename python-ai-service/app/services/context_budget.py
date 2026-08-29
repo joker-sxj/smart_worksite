@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import inspect
 import re
@@ -82,6 +81,49 @@ class ContextBudgetPlanner:
         self.token_counter = token_counter
 
     def plan(self, request: ContextBudgetRequest) -> ContextBudgetResult:
+        self._validate_request(request)
+        if inspect.iscoroutinefunction(getattr(self.token_counter, "count_chat", None)):
+            raise TypeError("use aplan with an asynchronous token counter")
+        return self._drive_sync(self._plan_steps(request), {})
+
+    async def aplan(self, request: ContextBudgetRequest) -> ContextBudgetResult:
+        self._validate_request(request)
+        return await self._drive_async(self._plan_steps(request), {})
+
+    @staticmethod
+    def _message_key(messages: Iterable[Message]) -> tuple[tuple[str, str], ...]:
+        return tuple((message.role, message.content) for message in messages)
+
+    def _drive_sync(self, operation, cache: dict | None = None):
+        cache = {} if cache is None else cache
+        try:
+            messages = next(operation)
+            while True:
+                key = self._message_key(messages)
+                result = cache.get(key)
+                if result is None:
+                    result = self._count_result(messages)
+                    cache[key] = result
+                messages = operation.send(result)
+        except StopIteration as completed:
+            return completed.value
+
+    async def _drive_async(self, operation, cache: dict):
+        try:
+            messages = next(operation)
+            while True:
+                key = self._message_key(messages)
+                result = cache.get(key)
+                if result is None:
+                    result = self.token_counter.count_chat(messages)
+                    if inspect.isawaitable(result):
+                        result = await result
+                    cache[key] = result
+                messages = operation.send(result)
+        except StopIteration as completed:
+            return completed.value
+
+    def _plan_steps(self, request: ContextBudgetRequest):
         if request.model_context_limit <= 0:
             raise ContextBudgetExceeded("model context limit is invalid")
         if request.requested_output_tokens < 0 or request.template_overhead_tokens < 0 or request.safety_reserve_tokens < 0:
@@ -89,8 +131,8 @@ class ContextBudgetPlanner:
 
         system = Message(role="system", content=request.system_prompt)
         question = Message(role="user", content=request.current_question)
-        system_tokens = self._count([system])
-        question_tokens = self._count([question])
+        system_tokens = (yield [system]).tokens
+        question_tokens = (yield [question]).tokens
         fixed = system_tokens + question_tokens + request.template_overhead_tokens + request.requested_output_tokens + request.safety_reserve_tokens
         if fixed > request.model_context_limit:
             raise ContextBudgetExceeded("system or question mandatory context exceeds model window")
@@ -98,103 +140,125 @@ class ContextBudgetPlanner:
         optional = request.model_context_limit - fixed
         history_cap = int(optional * request.history_budget_ratio)
         evidence_cap = int(optional * request.evidence_budget_ratio)
-        history = self._select_history(request.history_messages, history_cap, request.history_candidate_limit)
-        history_tokens = self._count(history)
-        evidence, evidence_tokens = self._select_evidence(request.evidence_items, evidence_cap)
+        history = yield from self._select_history_steps(
+            request.history_messages, history_cap, request.history_candidate_limit
+        )
+        history_tokens = (yield history).tokens
+        evidence, evidence_tokens = yield from self._select_evidence_steps(
+            request.evidence_items, evidence_cap
+        )
 
         # Let unused capacity flow to the other optional section.
         unused_history = max(0, history_cap - history_tokens)
-        evidence, evidence_tokens = self._select_evidence(request.evidence_items, evidence_cap + unused_history)
+        evidence, evidence_tokens = yield from self._select_evidence_steps(
+            request.evidence_items, evidence_cap + unused_history
+        )
         unused_evidence = max(0, evidence_cap + unused_history - evidence_tokens)
-        history = self._select_history(request.history_messages, history_cap + unused_evidence, request.history_candidate_limit)
-        history_tokens = self._count(history)
+        history = yield from self._select_history_steps(
+            request.history_messages,
+            history_cap + unused_evidence,
+            request.history_candidate_limit,
+        )
 
         selected_messages = [system, *history, *(item.as_message() for item in evidence), question]
-        while self._count(selected_messages) + request.template_overhead_tokens + request.requested_output_tokens + request.safety_reserve_tokens > request.model_context_limit:
+        final_result = yield selected_messages
+        reserved = request.template_overhead_tokens + request.requested_output_tokens + request.safety_reserve_tokens
+        while final_result.tokens + reserved > request.model_context_limit:
             if evidence:
                 evidence = evidence[:-1]
                 selected_messages = [system, *history, *(item.as_message() for item in evidence), question]
-                continue
-            if history:
+            elif history:
                 history = self._drop_oldest_turn(history)
                 selected_messages = [system, *history, question]
-                continue
-            raise ContextBudgetExceeded("assembled context exceeds model window")
+            else:
+                raise ContextBudgetExceeded("assembled context exceeds model window")
+            final_result = yield selected_messages
 
-        final_count = self._count(selected_messages)
-        selected_history_messages = len(history)
-        original_history = [message for message in request.history_messages if message.role in {"user", "assistant", "system"}]
-        selected_evidence_ids = {id(item) for item in evidence}
+        history_tokens = (yield history).tokens
+        evidence_tokens = (yield [item.as_message() for item in evidence]).tokens
+        candidate_turns = self._complete_history_turns(
+            request.history_messages[-request.history_candidate_limit:]
+        )
+        selected_turns = self._complete_history_turns(history)
+        candidate_history_messages = sum(len(turn) for turn in candidate_turns)
+        selected_history_messages = sum(len(turn) for turn in selected_turns)
+        selected_keys = {
+            item.chunk_id or hashlib.sha256(item.normalized_content.encode("utf-8")).hexdigest()
+            for item in evidence
+        }
         usage = {
             "modelContextLimit": request.model_context_limit,
-            "estimatedInputTokens": final_count,
+            "estimatedInputTokens": final_result.tokens,
             "systemTokens": system_tokens,
             "questionTokens": question_tokens,
-            "historyTokens": self._count(history),
-            "evidenceTokens": self._count([item.as_message() for item in evidence]),
+            "historyTokens": history_tokens,
+            "evidenceTokens": evidence_tokens,
             "templateOverheadTokens": request.template_overhead_tokens,
             "outputReserveTokens": request.requested_output_tokens,
             "safetyReserveTokens": request.safety_reserve_tokens,
             "availableOptionalTokens": optional,
             "selectedHistoryMessages": selected_history_messages,
-            "droppedHistoryMessages": max(0, len(original_history) - selected_history_messages),
+            "droppedHistoryMessages": max(0, candidate_history_messages - selected_history_messages),
+            "selectedHistoryTurns": len(selected_turns),
+            "droppedHistoryTurns": max(0, len(candidate_turns) - len(selected_turns)),
             "selectedEvidenceItems": len(evidence),
-            "droppedEvidenceItems": max(0, len(request.evidence_items) - len(selected_evidence_ids)),
+            "droppedEvidenceItems": max(0, len(request.evidence_items) - len(selected_keys)),
             "truncatedEvidenceItems": sum(item.truncated for item in evidence),
-            "countMode": self._count_result(selected_messages).mode,
-            "tokenizer": self._count_result(selected_messages).tokenizer,
+            "countMode": final_result.mode,
+            "tokenizer": final_result.tokenizer,
         }
-        return ContextBudgetResult(selected_messages, evidence, {"max_tokens": request.requested_output_tokens}, usage)
+        return ContextBudgetResult(
+            selected_messages,
+            evidence,
+            {"max_tokens": request.requested_output_tokens},
+            usage,
+        )
 
-    async def aplan(self, request: ContextBudgetRequest) -> ContextBudgetResult:
-        if inspect.iscoroutinefunction(getattr(self.token_counter, "count_chat", None)):
-            return await self._async_plan(request)
-        return self.plan(request)
+    @staticmethod
+    def _validate_request(request: ContextBudgetRequest) -> None:
+        if not 0 <= request.history_budget_ratio <= 1:
+            raise ContextBudgetExceeded("history_budget_ratio must be in [0, 1]")
+        if not 0 <= request.evidence_budget_ratio <= 1:
+            raise ContextBudgetExceeded("evidence_budget_ratio must be in [0, 1]")
+        if request.history_budget_ratio + request.evidence_budget_ratio > 1:
+            raise ContextBudgetExceeded("history_budget_ratio/evidence_budget_ratio sum must be <= 1")
+        if request.history_candidate_limit <= 0:
+            raise ContextBudgetExceeded("history_candidate_limit must be > 0")
 
     def _count(self, messages: Iterable[Message]) -> int:
-        result = self._count_result(list(messages))
-        return result.tokens
+        return self._count_result(list(messages)).tokens
 
     def _count_result(self, messages: list[Message]):
         result = self.token_counter.count_chat(messages)
         if inspect.isawaitable(result):
+            close = getattr(result, "close", None)
+            if close is not None:
+                close()
             raise TypeError("use aplan with an asynchronous token counter")
         return result
 
-    async def _async_plan(self, request):
-        original = self.token_counter
-        class SyncAdapter:
-            def count_chat(_, messages):
-                return asyncio.run(original.count_chat(messages))
-        planner = ContextBudgetPlanner(SyncAdapter())
-        return await asyncio.to_thread(planner.plan, request)
-
     @staticmethod
     def _drop_oldest_turn(messages: list[Message]) -> list[Message]:
-        user_index = next((index for index, message in enumerate(messages) if message.role == "user"), None)
-        if user_index is None:
-            return []
-        assistant_index = next(
-            (index for index in range(user_index + 1, len(messages)) if messages[index].role == "assistant"),
-            None,
-        )
-        if assistant_index is None:
-            return []
-        return messages[assistant_index + 1 :]
+        turns = ContextBudgetPlanner._complete_history_turns(messages)
+        return [message for turn in turns[1:] for message in turn]
 
-    def _select_history(self, messages: list[Message], budget: int, limit: int) -> list[Message]:
-        valid = messages[:limit]
+    @staticmethod
+    def _complete_history_turns(messages: list[Message]) -> list[list[Message]]:
         turns: list[list[Message]] = []
         pending_system: list[Message] = []
         current: list[Message] | None = None
-        for message in valid:
+        for message in messages:
             if message.role == "system":
-                if current is None:
+                if current is not None and current[-1].role == "assistant":
+                    turns.append(current)
+                    current = None
                     pending_system.append(message)
-                else:
+                elif current is not None:
                     current.append(message)
+                else:
+                    pending_system.append(message)
             elif message.role == "user":
-                if current and len(current) >= 2 and current[-1].role == "assistant":
+                if current and current[-1].role == "assistant":
                     turns.append(current)
                 current = [*pending_system, message]
                 pending_system = []
@@ -205,19 +269,31 @@ class ContextBudgetPlanner:
                 and not any(item.role == "assistant" for item in current)
             ):
                 current.append(message)
-        if current and len(current) >= 2 and current[-1].role == "assistant":
+        if current and current[-1].role == "assistant":
             turns.append(current)
+        return turns
+
+    def _select_history(self, messages: list[Message], budget: int, limit: int) -> list[Message]:
+        return self._drive_sync(self._select_history_steps(messages, budget, limit))
+
+    def _select_history_steps(self, messages: list[Message], budget: int, limit: int):
+        # Take the newest candidate messages, then discard any partial first turn.
+        turns = self._complete_history_turns(messages[-limit:])
         selected: list[list[Message]] = []
         used = 0
         for turn in reversed(turns):
-            cost = self._count(turn)
+            cost = (yield turn).tokens
             if used + cost > budget:
-                continue
+                break
             selected.append(turn)
             used += cost
         return [message for turn in reversed(selected) for message in turn]
 
     def _select_evidence(self, items: list[EvidenceItem], budget: int) -> tuple[list[EvidenceItem], int]:
+        return self._drive_sync(self._select_evidence_steps(items, budget))
+
+    def _select_evidence_steps(self, items: list[EvidenceItem], budget: int):
+        # Items are already ranked by the caller; preserve that order rather than re-sorting relevance here.
         selected: list[EvidenceItem] = []
         used = 0
         seen_ids: set[str] = set()
@@ -228,32 +304,80 @@ class ContextBudgetPlanner:
                 continue
             seen_ids.add(key)
             seen_content.add(item.normalized_content)
-            full_cost = self._count([item.as_message()])
+            full_cost = (yield [item.as_message()]).tokens
             if used + full_cost <= budget:
                 selected.append(item)
                 used += full_cost
                 continue
-            remaining = budget - used
-            truncated = self._truncate(item, remaining)
-            if truncated is not None:
-                selected.append(truncated)
-                used += self._count([truncated.as_message()])
+            truncated = yield from self._truncate_steps(item, budget - used)
+            if truncated is None:
+                continue
+            selected.append(truncated)
+            used += (yield [truncated.as_message()]).tokens
             break
         return selected, used
 
     def _truncate(self, item: EvidenceItem, budget: int) -> EvidenceItem | None:
+        return self._drive_sync(self._truncate_steps(item, budget))
+
+    def _truncate_steps(self, item: EvidenceItem, budget: int):
         if budget <= 0:
             return None
-        words = re.split(r"(?<=[???.!?])\s+|\n+", item.content)
         kept: list[str] = []
-        for part in words:
-            candidate = " ".join([*kept, part]).strip()
+        for part in self._natural_segments(item.content):
+            candidate = "".join([*kept, part]).strip()
             trial = replace(item, content=candidate, truncated=True)
-            if self._count([trial.as_message()]) <= budget:
+            if (yield [trial.as_message()]).tokens <= budget:
                 kept.append(part)
             else:
                 break
-        content = " ".join(kept).strip()
-        if len(content) < 12:
+        content = "".join(kept).strip()
+        if self._readable_length(content) < 12:
             return None
         return replace(item, content=content, truncated=True)
+
+    @staticmethod
+    def _natural_segments(content: str) -> list[str]:
+        segments: list[str] = []
+        start = 0
+        for index, char in enumerate(content):
+            if char == "." and not ContextBudgetPlanner._is_english_period_boundary(content, index):
+                continue
+            if char not in "。！？.!?\n":
+                continue
+            end = index + 1
+            while end < len(content) and content[end].isspace() and content[end] != "\n":
+                end += 1
+            segment = content[start:end]
+            if segment:
+                segments.append(segment)
+            start = end
+        if start < len(content):
+            segments.append(content[start:])
+        return segments
+
+    @staticmethod
+    def _is_english_period_boundary(content: str, index: int) -> bool:
+        if index > 0 and index + 1 < len(content):
+            if content[index - 1].isdigit() and content[index + 1].isdigit():
+                return False
+        if index + 1 < len(content) and not content[index + 1].isspace():
+            return False
+
+        next_index = index + 1
+        while next_index < len(content) and content[next_index].isspace():
+            next_index += 1
+        if next_index < len(content) and not content[next_index].isupper():
+            return False
+
+        prefix = content[: index + 1].casefold()
+        if any(prefix.endswith(abbreviation) for abbreviation in ("e.g.", "i.e.", "no.", "fig.")):
+            return False
+        token_match = re.search(r"([a-z]+)\.$", prefix)
+        if token_match and len(token_match.group(1)) == 1:
+            return False
+        return True
+
+    @staticmethod
+    def _readable_length(content: str) -> int:
+        return sum(2 if "\u4e00" <= char <= "\u9fff" else 1 for char in content if not char.isspace())
