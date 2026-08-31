@@ -1149,6 +1149,39 @@ def test_qwen_embedding_truncates_oversized_query_before_calling_local_provider(
     assert vectors == [[0.1]]
     assert len(payloads[0]["input"][0]) == 32
 
+
+def test_qwen_rerank_truncates_oversized_query_before_calling_local_provider(monkeypatch):
+    from app.services import qwen_client as qwen_module
+
+    settings = Settings(
+        qwen_api_key="test-key",
+        qwen_embedding_max_input_chars=32,
+        qwen_rerank_api_style="QWEN3",
+    )
+    client = QwenClient(settings)
+    payloads = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": [], "usage": {}}
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, exc_type, exc, tb): return None
+        async def post(self, url, headers=None, json=None):
+            payloads.append(json)
+            return FakeResponse()
+
+    monkeypatch.setattr(qwen_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    asyncio.run(client.rerank("巡检问题" * 20, ["document"], 1))
+
+    assert len(payloads[0]["query"]) == 32
+
 def test_ocr_accepts_inline_images_for_all_supported_types_without_downloading(monkeypatch):
     from app.models.schemas import OcrFilePayload, OcrRecognizeRequest
     from app.services.ocr_service import OcrService

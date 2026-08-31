@@ -454,7 +454,7 @@ class OpenAICompatibleProvider:
             return [], {}
         self._require_api_key(self.settings.qwen_api_key, "QWEN_API_KEY")
         url_base = (self.settings.qwen_rerank_base_url or self.settings.qwen_base_url).rstrip("/")
-        payload = self._build_rerank_payload(query, documents, top_n)
+        payload = self._build_rerank_payload(self._bounded_embedding_text(query), documents, top_n)
         url = url_base if "/services/rerank/" in url_base or url_base.endswith("/rerank") else url_base + "/rerank"
         headers = self._json_headers(self.settings.qwen_api_key)
         async with httpx.AsyncClient(timeout=self.settings.qwen_timeout_seconds) as client:
