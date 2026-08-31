@@ -22,6 +22,7 @@
         <result property="answer" column="answer"/>
         <result property="routeMode" column="route_mode"/>
         <result property="referencesJson" column="references_json"/>
+        <result property="usageJson" column="usage_json"/>
         <result property="feedbackJson" column="feedback_json"/>
         <result property="status" column="status"/>
         <result property="taskId" column="task_id"/>
@@ -38,7 +39,7 @@
     </sql>
 
     <sql id="MessageColumns">
-        id, project_id, session_id, role, question, answer, route_mode, references_json,
+        id, project_id, session_id, role, question, answer, route_mode, references_json, usage_json,
         feedback_json, status, task_id, request_json, error_message, created_at, updated_at, created_by, updated_by
     </sql>
 
@@ -95,10 +96,10 @@
 
     <insert id="insertMessage" useGeneratedKeys="true" keyProperty="id">
         insert into qa_message (
-            project_id, session_id, role, question, answer, route_mode, references_json,
+            project_id, session_id, role, question, answer, route_mode, references_json, usage_json,
             feedback_json, status, task_id, request_json, error_message, created_by, updated_by
         ) values (
-            #{projectId}, #{sessionId}, #{role}, #{question}, #{answer}, #{routeMode}, #{referencesJson},
+            #{projectId}, #{sessionId}, #{role}, #{question}, #{answer}, #{routeMode}, #{referencesJson}, #{usageJson},
             #{feedbackJson}, #{status}, #{taskId}, #{requestJson}, #{errorMessage}, #{createdBy}, #{updatedBy}
         )
     </insert>
@@ -108,6 +109,7 @@
         set answer = #{answer},
             route_mode = #{routeMode},
             references_json = #{referencesJson},
+            usage_json = #{usageJson},
             status = #{status},
             error_message = #{errorMessage},
             updated_by = #{updatedBy}
@@ -141,6 +143,7 @@
         set answer = #{answer},
             route_mode = #{routeMode},
             references_json = #{referencesJson},
+            usage_json = #{usageJson},
             status = 'SUCCESS',
             error_message = null,
             updated_by = #{updatedBy}
@@ -173,6 +176,21 @@
         from qa_message
         where session_id = #{sessionId}
           and deleted = 0
+        order by created_at asc, id asc
+    </select>
+
+    <select id="selectLatestSuccessfulMessages" resultMap="QaMessageResultMap">
+        select <include refid="MessageColumns"/>
+        from (
+            select <include refid="MessageColumns"/>
+            from qa_message
+            where session_id = #{sessionId}
+              and id &lt; #{beforeMessageId}
+              and status = 'SUCCESS'
+              and deleted = 0
+            order by created_at desc, id desc
+            limit #{limit}
+        ) latest
         order by created_at asc, id asc
     </select>
 

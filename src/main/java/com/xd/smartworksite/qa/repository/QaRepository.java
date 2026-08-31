@@ -26,13 +26,22 @@ public interface QaRepository {
     default int markMessageProcessing(Long messageId, Long taskId, Long updatedBy) { return 0; }
 
     default int markMessageCompleted(Long messageId, Long taskId, String answer, String routeMode,
-                                     String referencesJson, Long updatedBy) { return 0; }
+                                     String referencesJson, String usageJson, Long updatedBy) { return 0; }
 
     default int markMessageFailed(Long messageId, Long taskId, String errorMessage, Long updatedBy) { return 0; }
 
     Optional<QaMessage> findMessageById(Long messageId);
 
     List<QaMessage> findMessagesBySessionId(Long sessionId);
+
+    default List<QaMessage> findLatestSuccessfulMessages(Long sessionId, Long beforeMessageId, int limit) {
+        List<QaMessage> completed = findMessagesBySessionId(sessionId).stream()
+                .filter(message -> "SUCCESS".equals(message.getStatus()))
+                .filter(message -> message.getId() != null && message.getId() < beforeMessageId)
+                .toList();
+        int fromIndex = Math.max(0, completed.size() - limit);
+        return completed.subList(fromIndex, completed.size());
+    }
 
     int updateMessageFeedback(Long messageId, String feedbackJson, Long updatedBy);
 }

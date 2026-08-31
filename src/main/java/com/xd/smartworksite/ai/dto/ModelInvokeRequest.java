@@ -18,6 +18,8 @@ public class ModelInvokeRequest {
     private Map<String, Object> parameters = new LinkedHashMap<>();
     @Valid
     private List<AiMessage> contextMessages = new ArrayList<>();
+    @Valid
+    private List<ModelEvidenceItem> evidenceItems = new ArrayList<>();
     public Long getProjectId() { return projectId; }
     public void setProjectId(Long projectId) { this.projectId = projectId; }
     public String getPrompt() { return prompt; }
@@ -30,4 +32,6 @@ public class ModelInvokeRequest {
     public void setParameters(Map<String, Object> parameters) { this.parameters = parameters; }
     public List<AiMessage> getContextMessages() { return contextMessages; }
     public void setContextMessages(List<AiMessage> contextMessages) { this.contextMessages = contextMessages; }
+    public List<ModelEvidenceItem> getEvidenceItems() { return evidenceItems; }
+    public void setEvidenceItems(List<ModelEvidenceItem> evidenceItems) { this.evidenceItems = evidenceItems; }
 }

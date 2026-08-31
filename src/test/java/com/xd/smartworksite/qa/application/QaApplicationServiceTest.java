@@ -110,6 +110,7 @@ class QaApplicationServiceTest {
         assertThat(message.getAnswer()).isEqualTo("\u6a21\u578b\u56de\u7b54");
         assertThat(message.getRouteMode()).isEqualTo("MODEL");
         assertThat(message.getStatus()).isEqualTo("SUCCESS");
+        assertThat(message.getUsage()).containsKey("contextUsage");
         assertThat(qaRepository.findMessagesBySessionId(session.getSessionId())).hasSize(1);
     }
 
@@ -142,6 +143,94 @@ class QaApplicationServiceTest {
             assertThat(reference.get("title")).isEqualTo("\u5b89\u5168\u89c4\u8303");
         });
         assertThat(aiGateway.lastRagRequest.getKnowledgeBaseIds()).containsExactly(10L);
+        assertThat(aiGateway.lastModelRequest.getPrompt()).isEqualTo("塔吊安全要求是什么");
+        assertThat(aiGateway.lastModelRequest.getEvidenceItems()).singleElement().satisfies(evidence -> {
+            assertThat(evidence.getContent()).isEqualTo("塔吊作业需按规范检查");
+            assertThat(evidence.getTitle()).isEqualTo("安全规范");
+            assertThat(evidence.getSourceId()).isEqualTo("doc-1");
+            assertThat(evidence.getChunkId()).isEqualTo("chunk-1");
+            assertThat(evidence.getPageNumber()).isEqualTo(3);
+            assertThat(evidence.getScore()).isEqualTo(0.91);
+        });
+    }
+
+    @Test
+    void forwardsAtMostLatestHundredSuccessfulMessagesFromCurrentSession() {
+        var session = service.createSession(createSessionRequest(1L, "history"));
+        for (int i = 0; i < 110; i++) {
+            QaMessage old = completedMessage(session.getSessionId(), "old-question-" + i, "old-answer-" + i);
+            qaRepository.insertMessage(old);
+        }
+        QaMessage failed = completedMessage(session.getSessionId(), "failed-question", "failed-answer");
+        failed.setStatus("FAILED");
+        qaRepository.insertMessage(failed);
+        QaMessage pending = completedMessage(session.getSessionId(), "pending-question", "pending-answer");
+        pending.setStatus("PENDING");
+        qaRepository.insertMessage(pending);
+
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("latest-question");
+        request.setRouteMode("MODEL");
+        service.sendMessage(session.getSessionId(), request);
+
+        assertThat(aiGateway.lastModelRequest.getContextMessages())
+                .extracting(message -> message.getContent())
+                .hasSize(100)
+                .contains("old-question-60", "old-answer-60", "old-question-109", "old-answer-109")
+                .doesNotContain("old-question-59", "old-answer-59")
+                .doesNotContain("failed-question", "pending-question");
+    }
+
+    @Test
+    void doesNotForwardHistoryFromAnotherSession() {
+        var oldSession = service.createSession(createSessionRequest(1L, "old"));
+        qaRepository.insertMessage(completedMessage(oldSession.getSessionId(), "old-question", "old-answer"));
+        var currentSession = service.createSession(createSessionRequest(1L, "current"));
+
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("current-question");
+        request.setRouteMode("MODEL");
+        service.sendMessage(currentSession.getSessionId(), request);
+
+        assertThat(aiGateway.lastModelRequest.getContextMessages()).isEmpty();
+    }
+
+    @Test
+    void historyCandidateQueryExcludesMessagesCreatedAfterCurrentMessage() {
+        var session = service.createSession(createSessionRequest(1L, "ordered"));
+        QaMessage previous = completedMessage(session.getSessionId(), "previous", "previous-answer");
+        qaRepository.insertMessage(previous);
+        QaMessage current = completedMessage(session.getSessionId(), "current", "current-answer");
+        qaRepository.insertMessage(current);
+        QaMessage future = completedMessage(session.getSessionId(), "future", "future-answer");
+        qaRepository.insertMessage(future);
+
+        assertThat(qaRepository.findLatestSuccessfulMessages(session.getSessionId(), current.getId(), 50))
+                .extracting(QaMessage::getQuestion)
+                .containsExactly("previous");
+    }
+
+    @Test
+    void databaseRouteDoesNotForwardKnowledgeEvidenceToModel() {
+        var session = service.createSession(createSessionRequest(1L, "database"));
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("数据库有多少风险事件");
+        request.setRouteMode("DATABASE");
+        request.setDataSourceIds(List.of(100L));
+
+        service.sendMessage(session.getSessionId(), request);
+
+        assertThat(aiGateway.lastModelRequest).isNull();
+    }
+
+    private QaMessage completedMessage(Long sessionId, String question, String answer) {
+        QaMessage message = new QaMessage();
+        message.setProjectId(1L);
+        message.setSessionId(sessionId);
+        message.setQuestion(question);
+        message.setAnswer(answer);
+        message.setStatus("SUCCESS");
+        return message;
     }
 
     @Test
@@ -381,6 +470,7 @@ class QaApplicationServiceTest {
         private List<String> nextFollowUpQuestions = List.of();
         private RagSearchRequest lastRagRequest;
         private DatabaseQueryRequest lastDatabaseRequest;
+        private ModelInvokeRequest lastModelRequest;
 
         @Override
         public RouteResponse route(RouteRequest request) {
@@ -393,9 +483,11 @@ class QaApplicationServiceTest {
 
         @Override
         public ModelInvokeResponse invokeModel(ModelInvokeRequest request) {
+            lastModelRequest = request;
             ModelInvokeResponse response = new ModelInvokeResponse();
             response.setAnswer("\u6a21\u578b\u56de\u7b54");
             response.setProviderTraceId("model-trace");
+            response.setUsage(java.util.Map.of("contextUsage", java.util.Map.of("selectedHistoryMessages", 2)));
             return response;
         }
 
@@ -414,6 +506,7 @@ class QaApplicationServiceTest {
             record.setSourceType("DOCUMENT");
             record.setSourceId("doc-1");
             record.setScore(0.91);
+            record.setMetadata(java.util.Map.of("chunkId", "chunk-1", "pageNumber", 3));
             response.setRecords(List.of(record));
             response.setProviderTraceId("rag-trace");
             return response;
@@ -526,6 +619,7 @@ class QaApplicationServiceTest {
             current.setAnswer(message.getAnswer());
             current.setRouteMode(message.getRouteMode());
             current.setReferencesJson(message.getReferencesJson());
+            current.setUsageJson(message.getUsageJson());
             current.setStatus(message.getStatus());
             current.setUpdatedBy(message.getUpdatedBy());
             return 1;

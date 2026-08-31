@@ -14,6 +14,7 @@ public class QaMessageResponse {
     private String answer;
     private String routeMode;
     private List<Map<String, Object>> references = new ArrayList<>();
+    private Map<String, Object> usage = new LinkedHashMap<>();
     private Map<String, Object> feedback = new LinkedHashMap<>();
     private String status;
     private Long taskId;
@@ -38,6 +39,8 @@ public class QaMessageResponse {
     public void setRouteMode(String routeMode) { this.routeMode = routeMode; }
     public List<Map<String, Object>> getReferences() { return references; }
     public void setReferences(List<Map<String, Object>> references) { this.references = references; }
+    public Map<String, Object> getUsage() { return usage; }
+    public void setUsage(Map<String, Object> usage) { this.usage = usage; }
     public Map<String, Object> getFeedback() { return feedback; }
     public void setFeedback(Map<String, Object> feedback) { this.feedback = feedback; }
     public String getStatus() { return status; }

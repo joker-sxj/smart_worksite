@@ -40,6 +40,7 @@ public interface QaMapper {
                              @Param("answer") String answer,
                              @Param("routeMode") String routeMode,
                              @Param("referencesJson") String referencesJson,
+                             @Param("usageJson") String usageJson,
                              @Param("updatedBy") Long updatedBy);
 
     int markMessageFailed(@Param("messageId") Long messageId,
@@ -50,6 +51,10 @@ public interface QaMapper {
     QaMessage selectMessageById(@Param("messageId") Long messageId);
 
     List<QaMessage> selectMessagesBySessionId(@Param("sessionId") Long sessionId);
+
+    List<QaMessage> selectLatestSuccessfulMessages(@Param("sessionId") Long sessionId,
+                                                   @Param("beforeMessageId") Long beforeMessageId,
+                                                   @Param("limit") int limit);
 
     int updateMessageFeedback(@Param("messageId") Long messageId,
                               @Param("feedbackJson") String feedbackJson,

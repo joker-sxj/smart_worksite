@@ -5,6 +5,7 @@ import com.xd.smartworksite.ai.dto.DatabaseQueryRequest;
 import com.xd.smartworksite.ai.dto.DatabaseQueryResponse;
 import com.xd.smartworksite.ai.dto.ModelInvokeRequest;
 import com.xd.smartworksite.ai.dto.ModelInvokeResponse;
+import com.xd.smartworksite.ai.dto.ModelEvidenceItem;
 import com.xd.smartworksite.ai.dto.RagSearchRequest;
 import com.xd.smartworksite.ai.dto.RagSearchResponse;
 import com.xd.smartworksite.ai.dto.RouteRequest;
@@ -30,11 +31,17 @@ public interface QaAiGateway {
     default DatabaseQueryResponse queryDatabaseForSystem(DatabaseQueryRequest request) { return queryDatabase(request); }
 
     static ModelInvokeRequest modelRequest(Long projectId, String question, List<AiMessage> contextMessages) {
+        return modelRequest(projectId, question, contextMessages, List.of());
+    }
+
+    static ModelInvokeRequest modelRequest(Long projectId, String question, List<AiMessage> contextMessages,
+                                           List<ModelEvidenceItem> evidenceItems) {
         ModelInvokeRequest request = new ModelInvokeRequest();
         request.setProjectId(projectId);
         request.setPrompt(question);
         request.setSystemPrompt("\u4f60\u662f\u667a\u6167\u5de5\u5730\u9879\u76ee\u77e5\u8bc6\u95ee\u7b54\u52a9\u624b\uff0c\u8bf7\u57fa\u4e8e\u9879\u76ee\u8d44\u6599\u3001\u77e5\u8bc6\u5e93\u548c\u4e1a\u52a1\u6570\u636e\u56de\u7b54\u95ee\u9898\uff1b\u4fe1\u606f\u4e0d\u8db3\u65f6\u660e\u786e\u8bf4\u660e\uff0c\u4e0d\u8981\u7f16\u9020\u3002");
         request.setContextMessages(contextMessages);
+        request.setEvidenceItems(evidenceItems);
         return request;
     }
 }

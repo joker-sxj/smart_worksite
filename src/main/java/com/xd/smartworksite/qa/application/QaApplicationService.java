@@ -9,6 +9,7 @@ import com.xd.smartworksite.ai.dto.AiMessage;
 import com.xd.smartworksite.ai.dto.DatabaseQueryRequest;
 import com.xd.smartworksite.ai.dto.DatabaseQueryResponse;
 import com.xd.smartworksite.ai.dto.ModelInvokeResponse;
+import com.xd.smartworksite.ai.dto.ModelEvidenceItem;
 import com.xd.smartworksite.ai.dto.RagSearchRequest;
 import com.xd.smartworksite.ai.dto.RagSearchResponse;
 import com.xd.smartworksite.ai.dto.RouteRequest;
@@ -54,7 +55,7 @@ import java.util.Map;
 
 @Service
 public class QaApplicationService {
-    private static final int CONTEXT_MESSAGE_LIMIT = 10;
+    private static final int CONTEXT_RECORD_LIMIT = 50;
     private static final String TASK_TYPE_QA_GENERATION = "QA_GENERATION";
     private static final String BIZ_TYPE_QA_MESSAGE = "QA_MESSAGE";
 
@@ -178,6 +179,7 @@ public class QaApplicationService {
         message.setQuestion(question);
         message.setRouteMode(requestedRoute.name());
         message.setReferencesJson("[]");
+        message.setUsageJson("{}");
         message.setFeedbackJson("{}");
         message.setStatus(QaMessageStatus.PENDING.name());
         message.setRequestJson(writeJson(Map.of(
@@ -217,7 +219,8 @@ public class QaApplicationService {
 
     private QaMessageResponse executeSynchronously(QaSession session, QaMessage message, QaRouteMode route,
                                                    List<Long> knowledgeBaseIds, List<Long> dataSourceIds, Long userId) {
-        QaMessageResponse aiResult = answerQuestion(session, message, route, knowledgeBaseIds, dataSourceIds, buildContextMessages(session.getId()), false);
+        QaMessageResponse aiResult = answerQuestion(session, message, route, knowledgeBaseIds, dataSourceIds,
+                buildContextMessages(session.getId(), message.getId()), false);
         String answer = answerSanitizer.sanitize(aiResult.getAnswer());
         if (answer == null || answer.isBlank()) {
             throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "qa answer was empty after sanitization");
@@ -225,6 +228,7 @@ public class QaApplicationService {
         message.setAnswer(answer);
         message.setRouteMode(aiResult.getRouteMode());
         message.setReferencesJson(writeJson(aiResult.getReferences()));
+        message.setUsageJson(writeJson(aiResult.getUsage()));
         message.setStatus(QaMessageStatus.SUCCESS.name());
         message.setUpdatedBy(userId);
         if (qaRepository.updateMessage(message) == 0) {
@@ -252,10 +256,12 @@ public class QaApplicationService {
             QaRouteMode route = normalizeRouteMode(String.valueOf(request.getOrDefault("routeMode", message.getRouteMode())));
             List<Long> knowledgeBaseIds = readIds(request.get("knowledgeBaseIds"));
             List<Long> dataSourceIds = readIds(request.get("dataSourceIds"));
-            QaMessageResponse result = answerQuestion(session, message, route, knowledgeBaseIds, dataSourceIds, buildContextMessages(session.getId()), true);
+            QaMessageResponse result = answerQuestion(session, message, route, knowledgeBaseIds, dataSourceIds,
+                    buildContextMessages(session.getId(), message.getId()), true);
             String answer = answerSanitizer.sanitize(result.getAnswer());
             if (answer == null || answer.isBlank()) throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "qa answer was empty after sanitization");
-            if (qaRepository.markMessageCompleted(messageId, taskId, answer, result.getRouteMode(), writeJson(result.getReferences()), 1L) == 0) {
+            if (qaRepository.markMessageCompleted(messageId, taskId, answer, result.getRouteMode(),
+                    writeJson(result.getReferences()), writeJson(result.getUsage()), 1L) == 0) {
                 throw new BusinessException(ErrorCode.CONFLICT, "qa message completion state changed");
             }
         } catch (RuntimeException ex) {
@@ -369,8 +375,9 @@ public class QaApplicationService {
         searchRequest.setKnowledgeBaseIds(knowledgeBaseIds);
         RagSearchResponse searchResponse = systemCall ? aiGateway.searchKnowledgeForSystem(searchRequest) : aiGateway.searchKnowledge(searchRequest);
         List<Map<String, Object>> references = searchResponse.getRecords().stream().map(this::referenceFromRag).toList();
-        String prompt = buildKnowledgePrompt(message.getQuestion(), searchResponse.getRecords());
-        return answerWithModel(session, message, contextMessages, references, prompt, QaRouteMode.KNOWLEDGE.name(), searchResponse.getProviderTraceId(), systemCall);
+        return answerWithModel(session, message, contextMessages, references, message.getQuestion(),
+                evidenceFromRag(searchResponse.getRecords()), QaRouteMode.KNOWLEDGE.name(),
+                searchResponse.getProviderTraceId(), systemCall);
     }
 
     private QaMessageResponse answerWithDatabase(QaSession session, QaMessage message, List<Long> dataSourceIds,
@@ -402,7 +409,7 @@ public class QaApplicationService {
         searchRequest.setKnowledgeBaseIds(knowledgeBaseIds);
         RagSearchResponse searchResponse = systemCall ? aiGateway.searchKnowledgeForSystem(searchRequest) : aiGateway.searchKnowledge(searchRequest);
         List<Map<String, Object>> references = new ArrayList<>(searchResponse.getRecords().stream().map(this::referenceFromRag).toList());
-        String prompt = buildKnowledgePrompt(message.getQuestion(), searchResponse.getRecords());
+        String prompt = message.getQuestion();
         if (dataSourceIds.size() == 1) {
             DatabaseQueryRequest queryRequest = new DatabaseQueryRequest();
             queryRequest.setProjectId(session.getProjectId());
@@ -412,7 +419,9 @@ public class QaApplicationService {
             references.add(databaseReference(databaseResponse));
             prompt = prompt + "\n\n\u6570\u636e\u5e93\u67e5\u8be2\u7ed3\u679c\n" + databaseResponse.getSummary();
         }
-        return answerWithModel(session, message, contextMessages, references, prompt, QaRouteMode.MIXED.name(), searchResponse.getProviderTraceId(), systemCall);
+        return answerWithModel(session, message, contextMessages, references, prompt,
+                evidenceFromRag(searchResponse.getRecords()), QaRouteMode.MIXED.name(),
+                searchResponse.getProviderTraceId(), systemCall);
     }
 
     private QaMessageResponse answerWithModel(QaSession session, QaMessage message, List<AiMessage> contextMessages,
@@ -424,8 +433,15 @@ public class QaApplicationService {
     private QaMessageResponse answerWithModel(QaSession session, QaMessage message, List<AiMessage> contextMessages,
                                               List<Map<String, Object>> references, String prompt,
                                               String routeMode, String priorTraceId, boolean systemCall) {
+        return answerWithModel(session, message, contextMessages, references, prompt, List.of(), routeMode, priorTraceId, systemCall);
+    }
+
+    private QaMessageResponse answerWithModel(QaSession session, QaMessage message, List<AiMessage> contextMessages,
+                                              List<Map<String, Object>> references, String prompt,
+                                              List<ModelEvidenceItem> evidenceItems,
+                                              String routeMode, String priorTraceId, boolean systemCall) {
         var modelRequest = QaAiGateway.modelRequest(
-                session.getProjectId(), prompt == null ? message.getQuestion() : prompt, contextMessages);
+                session.getProjectId(), prompt == null ? message.getQuestion() : prompt, contextMessages, evidenceItems);
         ModelInvokeResponse modelResponse = systemCall
                 ? aiGateway.invokeModelForSystem(modelRequest)
                 : aiGateway.invokeModel(modelRequest);
@@ -433,6 +449,7 @@ public class QaApplicationService {
         response.setAnswer(modelResponse.getAnswer());
         response.setReferences(references);
         response.setProviderTraceId(modelResponse.getProviderTraceId() == null ? priorTraceId : modelResponse.getProviderTraceId());
+        response.setUsage(modelResponse.getUsage());
         return response;
     }
 
@@ -448,12 +465,8 @@ public class QaApplicationService {
         return response;
     }
 
-    private List<AiMessage> buildContextMessages(Long sessionId) {
-        List<QaMessage> completedMessages = qaRepository.findMessagesBySessionId(sessionId).stream()
-                .filter(message -> QaMessageStatus.SUCCESS.name().equals(message.getStatus()))
-                .toList();
-        int fromIndex = Math.max(0, completedMessages.size() - CONTEXT_MESSAGE_LIMIT);
-        return completedMessages.subList(fromIndex, completedMessages.size()).stream()
+    private List<AiMessage> buildContextMessages(Long sessionId, Long beforeMessageId) {
+        return qaRepository.findLatestSuccessfulMessages(sessionId, beforeMessageId, CONTEXT_RECORD_LIMIT).stream()
                 .flatMap(message -> {
                     List<AiMessage> items = new ArrayList<>();
                     if (message.getQuestion() != null && !message.getQuestion().isBlank()) {
@@ -474,20 +487,6 @@ public class QaApplicationService {
         return message;
     }
 
-    private String buildKnowledgePrompt(String question, List<RagSearchResponse.Record> records) {
-        StringBuilder builder = new StringBuilder();
-        builder.append("\u8bf7\u57fa\u4e8e\u4ee5\u4e0b\u77e5\u8bc6\u5e93\u8d44\u6599\u56de\u7b54\u95ee\u9898\uff0c\u4e0d\u8981\u7f16\u9020\u8d44\u6599\u4e2d\u4e0d\u5b58\u5728\u7684\u4fe1\u606f\u3002\n\u95ee\u9898\uff1a")
-                .append(question)
-                .append("\n\u53c2\u8003\u8d44\u6599\uff1a\n");
-        for (int i = 0; i < records.size(); i++) {
-            RagSearchResponse.Record record = records.get(i);
-            builder.append(i + 1).append(". ")
-                    .append(nullToEmpty(record.getTitle())).append(" - ")
-                    .append(nullToEmpty(record.getContentSnippet())).append('\n');
-        }
-        return builder.toString();
-    }
-
     private Map<String, Object> referenceFromRag(RagSearchResponse.Record record) {
         Map<String, Object> reference = new LinkedHashMap<>();
         reference.put("type", "KNOWLEDGE");
@@ -499,6 +498,26 @@ public class QaApplicationService {
         reference.put("rerankScore", record.getRerankScore());
         reference.put("metadata", record.getMetadata());
         return reference;
+    }
+
+    private List<ModelEvidenceItem> evidenceFromRag(List<RagSearchResponse.Record> records) {
+        return records.stream().map(record -> {
+            ModelEvidenceItem item = new ModelEvidenceItem();
+            item.setContent(nullToEmpty(record.getContentSnippet()));
+            item.setTitle(record.getTitle());
+            item.setSourceId(record.getSourceId());
+            item.setScore(record.getRerankScore() == null ? record.getScore() : record.getRerankScore());
+            item.setMetadata(record.getMetadata() == null ? Map.of() : record.getMetadata());
+            Object documentId = item.getMetadata().get("documentId");
+            Object chunkId = item.getMetadata().get("chunkId");
+            Object pageNumber = item.getMetadata().get("pageNumber");
+            Object tableLocation = item.getMetadata().get("tableLocation");
+            if (documentId != null) item.setDocumentId(String.valueOf(documentId));
+            if (chunkId != null) item.setChunkId(String.valueOf(chunkId));
+            if (pageNumber instanceof Number number) item.setPageNumber(number.intValue());
+            if (tableLocation != null) item.setTableLocation(String.valueOf(tableLocation));
+            return item;
+        }).toList();
     }
 
     private Map<String, Object> databaseReference(DatabaseQueryResponse response) {
@@ -664,6 +683,7 @@ public class QaApplicationService {
         response.setTaskId(message.getTaskId());
         response.setErrorMessage(message.getErrorMessage());
         response.setReferences(readList(message.getReferencesJson()));
+        response.setUsage(readMap(message.getUsageJson()));
         response.setFeedback(readMap(message.getFeedbackJson()));
         response.setStatus(message.getStatus());
         response.setCreatedAt(message.getCreatedAt());
@@ -681,6 +701,7 @@ public class QaApplicationService {
         target.setErrorMessage(source.getErrorMessage());
         target.setRouteMode(source.getRouteMode());
         target.setReferences(source.getReferences());
+        target.setUsage(source.getUsage());
         target.setFeedback(source.getFeedback());
         target.setStatus(source.getStatus());
         target.setNeedClarification(source.getNeedClarification());

@@ -65,8 +65,8 @@ public class MyBatisQaRepository implements QaRepository {
 
     @Override
     public int markMessageCompleted(Long messageId, Long taskId, String answer, String routeMode,
-                                    String referencesJson, Long updatedBy) {
-        return qaMapper.markMessageCompleted(messageId, taskId, answer, routeMode, referencesJson, updatedBy);
+                                    String referencesJson, String usageJson, Long updatedBy) {
+        return qaMapper.markMessageCompleted(messageId, taskId, answer, routeMode, referencesJson, usageJson, updatedBy);
     }
 
     @Override
@@ -82,6 +82,11 @@ public class MyBatisQaRepository implements QaRepository {
     @Override
     public List<QaMessage> findMessagesBySessionId(Long sessionId) {
         return qaMapper.selectMessagesBySessionId(sessionId);
+    }
+
+    @Override
+    public List<QaMessage> findLatestSuccessfulMessages(Long sessionId, Long beforeMessageId, int limit) {
+        return qaMapper.selectLatestSuccessfulMessages(sessionId, beforeMessageId, limit);
     }
 
     @Override
