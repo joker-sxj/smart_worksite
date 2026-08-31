@@ -37,6 +37,9 @@ class EvidenceItem:
         return " ".join(self.content.split()).casefold()
 
     def as_message(self) -> Message:
+        return Message(role="user", content=self.as_block())
+
+    def as_block(self) -> str:
         metadata = []
         if self.document_title:
             metadata.append(f"标题: {self.document_title}")
@@ -49,7 +52,7 @@ class EvidenceItem:
         if self.chunk_id:
             metadata.append(f"chunkId: {self.chunk_id}")
         prefix = "[知识库证据] " + " | ".join(metadata)
-        return Message(role="system", content=f"{prefix}\n{self.content}")
+        return f"{prefix}\n{self.content}"
 
 
 @dataclass(frozen=True)
@@ -134,9 +137,10 @@ class ContextBudgetPlanner:
 
         system = Message(role="system", content=request.system_prompt)
         question = Message(role="user", content=request.current_question)
-        system_tokens = (yield [system]).tokens
+        mandatory_tokens = (yield [system, question]).tokens
         question_tokens = (yield [question]).tokens
-        fixed = system_tokens + question_tokens + request.template_overhead_tokens + request.requested_output_tokens + request.safety_reserve_tokens
+        system_tokens = max(0, mandatory_tokens - question_tokens)
+        fixed = mandatory_tokens + request.template_overhead_tokens + request.requested_output_tokens + request.safety_reserve_tokens
         if fixed > request.model_context_limit:
             raise ContextBudgetExceeded("system or question mandatory context exceeds model window")
 
@@ -146,7 +150,7 @@ class ContextBudgetPlanner:
         history = yield from self._select_history_steps(
             request.history_messages, history_cap, request.history_candidate_limit
         )
-        history_tokens = (yield history).tokens
+        history_tokens = (yield history).tokens if history else 0
         evidence, evidence_tokens = yield from self._select_evidence_steps(
             request.evidence_items, evidence_cap
         )
@@ -163,13 +167,13 @@ class ContextBudgetPlanner:
             request.history_candidate_limit,
         )
 
-        selected_messages = [system, *history, *(item.as_message() for item in evidence), question]
+        selected_messages = [system, *history, self._current_user_message(evidence, request.current_question)]
         final_result = yield selected_messages
         reserved = request.template_overhead_tokens + request.requested_output_tokens + request.safety_reserve_tokens
         while final_result.tokens + reserved > request.model_context_limit:
             if evidence:
                 evidence = evidence[:-1]
-                selected_messages = [system, *history, *(item.as_message() for item in evidence), question]
+                selected_messages = [system, *history, self._current_user_message(evidence, request.current_question)]
             elif history:
                 history = self._drop_oldest_turn(history)
                 selected_messages = [system, *history, question]
@@ -177,8 +181,8 @@ class ContextBudgetPlanner:
                 raise ContextBudgetExceeded("assembled context exceeds model window")
             final_result = yield selected_messages
 
-        history_tokens = (yield history).tokens
-        evidence_tokens = (yield [item.as_message() for item in evidence]).tokens
+        history_tokens = (yield history).tokens if history else 0
+        evidence_tokens = (yield [self._evidence_message(evidence)]).tokens if evidence else 0
         candidate_turns = self._complete_history_turns(
             request.history_messages[-request.history_candidate_limit:]
         )
@@ -248,23 +252,16 @@ class ContextBudgetPlanner:
     @staticmethod
     def _complete_history_turns(messages: list[Message]) -> list[list[Message]]:
         turns: list[list[Message]] = []
-        pending_system: list[Message] = []
         current: list[Message] | None = None
         for message in messages:
             if message.role == "system":
-                if current is not None and current[-1].role == "assistant":
-                    turns.append(current)
-                    current = None
-                    pending_system.append(message)
-                elif current is not None:
-                    current.append(message)
-                else:
-                    pending_system.append(message)
+                # Historical instructions are untrusted conversation data and Qwen only
+                # accepts a system message at the beginning of the whole request.
+                continue
             elif message.role == "user":
                 if current and current[-1].role == "assistant":
                     turns.append(current)
-                current = [*pending_system, message]
-                pending_system = []
+                current = [message]
             elif (
                 message.role == "assistant"
                 and current
@@ -275,6 +272,17 @@ class ContextBudgetPlanner:
         if current and current[-1].role == "assistant":
             turns.append(current)
         return turns
+
+    @staticmethod
+    def _evidence_message(items: list[EvidenceItem]) -> Message:
+        return Message(role="user", content="\n\n".join(item.as_block() for item in items))
+
+    @staticmethod
+    def _current_user_message(items: list[EvidenceItem], question: str) -> Message:
+        if not items:
+            return Message(role="user", content=question)
+        evidence = "\n\n".join(item.as_block() for item in items)
+        return Message(role="user", content=f"{evidence}\n\n[用户问题]\n{question}")
 
     def _select_history(self, messages: list[Message], budget: int, limit: int) -> list[Message]:
         return self._drive_sync(self._select_history_steps(messages, budget, limit))

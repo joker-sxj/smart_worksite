@@ -285,7 +285,7 @@ def test_history_discards_orphan_assistant_incomplete_user_and_invalid_roles():
     assert contents.count("answer") == 1
 
 
-def test_history_system_messages_are_retained_with_their_complete_turn():
+def test_history_system_messages_are_dropped_but_complete_turn_is_retained():
     history = [
         msg("system", "history policy"),
         msg("user", "question"), msg("assistant", "answer"),
@@ -295,8 +295,8 @@ def test_history_system_messages_are_retained_with_their_complete_turn():
     )
 
     contents = [item.content for item in result.context_messages]
-    assert "history policy" in contents
-    assert contents.index("history policy") < contents.index("question") < contents.index("answer")
+    assert "history policy" not in contents
+    assert contents.index("question") < contents.index("answer")
 
 
 def test_history_candidate_limit_uses_the_latest_messages():
@@ -388,7 +388,7 @@ def test_history_exact_boundary_fit_keeps_the_complete_turn():
     assert result.context_usage["estimatedInputTokens"] + exact.template_overhead_tokens + exact.requested_output_tokens + exact.safety_reserve_tokens <= exact.model_context_limit
 
 
-def test_history_system_message_between_user_and_assistant_does_not_break_complete_turn():
+def test_history_system_message_between_user_and_assistant_is_dropped_without_breaking_turn():
     history = [
         msg("user", "turn-user"),
         msg("system", "turn-policy"),
@@ -399,9 +399,72 @@ def test_history_system_message_between_user_and_assistant_does_not_break_comple
     )
 
     contents = [item.content for item in result.context_messages]
-    assert contents[1:4] == ["turn-user", "turn-policy", "turn-answer"]
+    assert contents[1:3] == ["turn-user", "turn-answer"]
+    assert "turn-policy" not in contents
 
-def test_system_between_complete_turns_belongs_to_the_next_turn():
+
+class QwenChatTemplateCounter(FixedTokenCounter):
+    """Mirror the role-order constraints enforced by the deployed Qwen template."""
+
+    def count_chat(self, messages):
+        roles = [message.role for message in messages]
+        if "system" in roles[1:]:
+            raise ValueError("System message must be at the beginning")
+        non_system = roles[1:] if roles and roles[0] == "system" else roles
+        if not non_system or non_system[0] != "user":
+            raise ValueError("No user query found in messages")
+        if any(role not in {"user", "assistant"} for role in non_system):
+            raise ValueError("Unsupported role")
+        return super().count_chat(messages)
+
+
+def test_planner_emits_qwen_compatible_roles_with_evidence_in_current_user_message():
+    history = [msg("user", "earlier question"), msg("assistant", "earlier answer")]
+    evidence = EvidenceItem(
+        "昼间不得超过70 dB(A)，夜间不得超过55 dB(A)。",
+        source_id="noise-standard",
+        chunk_id="gb12523-4.1",
+        document_title="GB 12523-2025",
+        page_number=4,
+    )
+
+    result = ContextBudgetPlanner(QwenChatTemplateCounter()).plan(
+        budget_request(history_messages=history, evidence_items=[evidence])
+    )
+
+    assert [message.role for message in result.context_messages] == [
+        "system", "user", "assistant", "user"
+    ]
+    current = result.context_messages[-1].content
+    assert "[知识库证据]" in current
+    assert "sourceId: noise-standard" in current
+    assert "chunkId: gb12523-4.1" in current
+    assert "[用户问题]\ncurrent question" in current
+
+
+def test_planner_drops_historical_system_messages_instead_of_emitting_mid_conversation_system():
+    history = [
+        msg("system", "stale historical instruction"),
+        msg("user", "earlier question"),
+        msg("assistant", "earlier answer"),
+    ]
+
+    result = ContextBudgetPlanner(QwenChatTemplateCounter()).plan(
+        budget_request(history_messages=history)
+    )
+
+    assert [message.role for message in result.context_messages] == [
+        "system", "user", "assistant", "user"
+    ]
+    assert all("stale historical instruction" not in message.content for message in result.context_messages)
+
+
+def test_planner_never_sends_empty_message_lists_to_strict_tokenizer():
+    result = ContextBudgetPlanner(QwenChatTemplateCounter()).plan(budget_request())
+
+    assert [message.role for message in result.context_messages] == ["system", "user"]
+
+def test_system_between_complete_turns_is_dropped_and_both_turns_remain_complete():
     history = [
         msg("user", "first-user"), msg("assistant", "first-answer"),
         msg("system", "next-policy"),
@@ -412,7 +475,8 @@ def test_system_between_complete_turns_belongs_to_the_next_turn():
     )
 
     contents = [item.content for item in result.context_messages]
-    assert contents[1:6] == ["first-user", "first-answer", "next-policy", "second-user", "second-answer"]
+    assert contents[1:5] == ["first-user", "first-answer", "second-user", "second-answer"]
+    assert "next-policy" not in contents
     assert result.context_usage["selectedHistoryTurns"] == 2
 
 
@@ -500,7 +564,7 @@ class ExactOverflowCounter(FixedTokenCounter):
 
     def count_chat(self, messages):
         base = super().count_chat(messages).tokens
-        optional_count = sum(message.content.startswith("[") and "chunkId:" in message.content for message in messages)
+        optional_count = sum(message.content.count("chunkId:") for message in messages)
         drift = 100 if optional_count > 1 else 0
         return type("Count", (), {"tokens": base + drift, "mode": "EXACT", "tokenizer": "local-test"})()
 
@@ -535,7 +599,7 @@ class FinalHistoryOverflowCounter(FixedTokenCounter):
     def count_chat(self, messages):
         base = super().count_chat(messages).tokens
         contents = {message.content for message in messages}
-        drift = 100 if {"old-user", "current question"}.issubset(contents) else 0
+        drift = 200 if {"old-user", "current question"}.issubset(contents) else 0
         return type("Count", (), {"tokens": base + drift, "mode": "EXACT", "tokenizer": "local-test"})()
 
 
@@ -567,7 +631,7 @@ def test_final_exact_recheck_removes_a_whole_turn_with_system_orphans_and_incomp
         def count_chat(self, messages):
             base = super().count_chat(messages).tokens
             contents = {message.content for message in messages}
-            drift = 100 if {"old-user", "current question"}.issubset(contents) else 0
+            drift = 200 if {"old-user", "current question"}.issubset(contents) else 0
             return type("Count", (), {"tokens": base + drift, "mode": "EXACT", "tokenizer": "local-test"})()
 
     history = [
