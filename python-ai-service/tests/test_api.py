@@ -1106,6 +1106,49 @@ def test_qwen_embedding_error_includes_provider_body(monkeypatch):
     assert "inputCount=3" in message
     assert "api_key" not in message.lower()
 
+
+def test_qwen_embedding_truncates_oversized_query_before_calling_local_provider(monkeypatch):
+    from app.services import qwen_client as qwen_module
+
+    settings = Settings(
+        qwen_api_key="test-key",
+        qwen_embedding_dimensions=0,
+        qwen_embedding_max_input_chars=32,
+    )
+    client = QwenClient(settings)
+    payloads = []
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"index": 0, "embedding": [0.1]}], "usage": {}}
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers=None, json=None):
+            payloads.append(json)
+            return FakeResponse()
+
+    monkeypatch.setattr(qwen_module.httpx, "AsyncClient", FakeAsyncClient)
+
+    vectors, _ = asyncio.run(client.embed(["安全巡检记录" * 20]))
+
+    assert vectors == [[0.1]]
+    assert len(payloads[0]["input"][0]) == 32
+
 def test_ocr_accepts_inline_images_for_all_supported_types_without_downloading(monkeypatch):
     from app.models.schemas import OcrFilePayload, OcrRecognizeRequest
     from app.services.ocr_service import OcrService

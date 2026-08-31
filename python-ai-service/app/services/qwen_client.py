@@ -400,6 +400,7 @@ class OpenAICompatibleProvider:
         if not texts:
             return [], {}
         self._require_api_key(self.settings.qwen_api_key, "QWEN_API_KEY")
+        texts = [self._bounded_embedding_text(text) for text in texts]
         payload: dict[str, Any] = {
             "model": model or self.settings.qwen_embedding_model,
             "input": texts,
@@ -431,6 +432,13 @@ class OpenAICompatibleProvider:
             for item in sorted(body.get("data", []), key=lambda item: item.get("index", 0))
         ]
         return vectors, body.get("usage") or {}
+
+    def _bounded_embedding_text(self, text: str) -> str:
+        limit = self.settings.qwen_embedding_max_input_chars
+        if len(text) <= limit:
+            return text
+        head = limit // 2
+        return text[:head] + text[-(limit - head):]
 
     def _format_embedding_http_error(self, ex: httpx.HTTPStatusError, payload: dict[str, Any], input_count: int) -> str:
         model = payload.get("model") or "unknown"

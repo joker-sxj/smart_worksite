@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     qwen_embedding_model: str = "text-embedding-v4"
     qwen_embedding_dimensions: int = 1024
     qwen_embedding_batch_size: int = 10
+    qwen_embedding_max_input_chars: int = Field(default=6000, gt=0)
     qwen_rerank_base_url: str = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
     qwen_rerank_model: str = "qwen3-rerank"
     qwen_rerank_api_style: str = "LEGACY"
