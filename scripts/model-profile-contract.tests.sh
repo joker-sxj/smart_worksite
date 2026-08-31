@@ -187,9 +187,21 @@ for profile in a6000x2-production-32k a6000x2-stable-16k; do
   [[ "$(load_profile_value "$file" VLLM_IMAGE)" =~ ^vllm/vllm-openai:v0\.27\.1-cu129@sha256:[0-9a-f]{64}$ ]] || fail "$profile must pin the vLLM image by digest."
   [[ "$(load_profile_value "$file" NVIDIA_RUNTIME_TEST_IMAGE)" =~ ^nvidia/cuda:12\.2\.2-base-ubuntu22\.04@sha256:[0-9a-f]{64}$ ]] || fail "$profile must pin the NVIDIA runtime test image by digest."
   case "$profile" in
-    a6000x2-production-32k) [[ "$(load_profile_value "$file" CHAT_MAX_NUM_SEQS)" == 2 ]] || fail "$profile must set chat max sequences to 2." ;;
-    a6000x2-stable-16k) [[ "$(load_profile_value "$file" CHAT_MAX_NUM_SEQS)" == 1 ]] || fail "$profile must set chat max sequences to 1." ;;
+    a6000x2-production-32k)
+      [[ "$(load_profile_value "$file" CHAT_MAX_NUM_SEQS)" == 2 ]] || fail "$profile must set chat max sequences to 2."
+      expected_reserves="4096 1024 256"
+      ;;
+    a6000x2-stable-16k)
+      [[ "$(load_profile_value "$file" CHAT_MAX_NUM_SEQS)" == 1 ]] || fail "$profile must set chat max sequences to 1."
+      expected_reserves="3072 512 256"
+      ;;
   esac
+  read -r expected_output expected_safety expected_template <<< "$expected_reserves"
+  output="$(load_profile_value "$file" CONTEXT_OUTPUT_RESERVE_TOKENS)"
+  safety="$(load_profile_value "$file" CONTEXT_SAFETY_RESERVE_TOKENS)"
+  template="$(load_profile_value "$file" CONTEXT_TEMPLATE_OVERHEAD_TOKENS)"
+  [[ "$output $safety $template" == "$expected_reserves" ]] || fail "$profile must define approved output/safety/template reserves."
+  (( output + safety + template < $(load_profile_value "$file" CHAT_MAX_MODEL_LEN) )) || fail "$profile fixed reserves must fit the model window."
   [[ "$(load_profile_value "$file" EMBEDDING_MAX_NUM_SEQS)" -le 4 ]] || fail "$profile must keep embedding concurrency conservative."
   [[ "$(load_profile_value "$file" RERANK_MAX_NUM_SEQS)" -le 8 ]] || fail "$profile must keep rerank concurrency conservative."
 done

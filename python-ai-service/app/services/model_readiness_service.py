@@ -34,8 +34,22 @@ class ModelReadinessService:
             "status": status,
             "profile": self.settings.model_profile_name,
             "maxContextTokens": self.settings.chat_max_model_len,
+            "contextBudget": {
+                "outputReserveTokens": self.settings.resolved_context_output_reserve_tokens(),
+                "safetyReserveTokens": self.settings.resolved_context_safety_reserve_tokens(),
+                "templateOverheadTokens": self.settings.context_template_overhead_tokens,
+                "countMode": self._count_mode(),
+            },
             "dependencies": dependencies,
         }
+
+    def _count_mode(self) -> str:
+        if self.settings.context_tokenizer_path:
+            return "LOCAL_TOKENIZER"
+        if self.settings.context_tokenizer_endpoint_enabled:
+            suffix = "REQUIRED" if self.settings.context_require_exact_tokenizer else "WITH_ESTIMATED_FALLBACK"
+            return f"LOCAL_ENDPOINT_{suffix}"
+        return "ESTIMATED"
 
     async def _probe(self, client: httpx.AsyncClient, descriptor: dict[str, Any]) -> dict[str, Any]:
         endpoint = str(descriptor["endpoint"])

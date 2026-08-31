@@ -19,6 +19,8 @@ def local_settings(**overrides):
         "qwen_rerank_model": "smart-worksite-reranker",
         "model_profile_name": "a6000x2-stable-16k",
         "chat_max_model_len": 16384,
+        "context_output_reserve_tokens": 3072,
+        "context_safety_reserve_tokens": 512,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -39,6 +41,12 @@ def test_model_readiness_reports_reachable_models_without_endpoint_or_secrets():
     assert result["status"] == "READY"
     assert result["profile"] == "a6000x2-stable-16k"
     assert result["maxContextTokens"] == 16384
+    assert result["contextBudget"] == {
+        "outputReserveTokens": 3072,
+        "safetyReserveTokens": 512,
+        "templateOverheadTokens": 256,
+        "countMode": "LOCAL_ENDPOINT_WITH_ESTIMATED_FALLBACK",
+    }
     assert all(item["configured"] and item["reachable"] for item in result["dependencies"].values())
     assert all(item["endpointScope"] == "LOCAL" for item in result["dependencies"].values())
     assert "http://" not in str(result)
