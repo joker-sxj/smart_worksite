@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from app.api.routes import router
 from app.core.settings import get_settings
+from app.services.context_budget import ContextBudgetExceeded
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("python-ai-service")
@@ -31,6 +32,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(router)
+
+
+@app.exception_handler(ContextBudgetExceeded)
+async def handle_context_budget_exceeded(request: Request, exc: ContextBudgetExceeded):
+    logger.warning("context budget exceeded path=%s reason=%s", request.url.path, exc.reason)
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": False,
+            "traceId": "",
+            "data": None,
+            "usage": {},
+            "errorCode": "VALIDATION_ERROR",
+            "errorMessage": "Model context budget exceeded",
+            "errorDetails": {"code": exc.code, "reason": exc.reason},
+        },
+    )
 
 
 @app.exception_handler(Exception)

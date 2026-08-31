@@ -19,12 +19,25 @@ class Message(BaseModel):
     messageId: str | None = None
 
 
+class ModelEvidenceItem(BaseModel):
+    content: str
+    title: str | None = None
+    sourceId: str | None = None
+    documentId: str | None = None
+    chunkId: str | None = None
+    pageNumber: int | None = None
+    tableLocation: str | None = None
+    score: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class ModelInvokeRequest(BaseModel):
     prompt: str
     systemPrompt: str | None = None
     modelName: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
     contextMessages: list[Message] = Field(default_factory=list)
+    evidenceItems: list[ModelEvidenceItem] = Field(default_factory=list)
 
 
 class ModelInvokeData(BaseModel):

@@ -39,6 +39,8 @@ from app.services.agent_tools import ToolRegistry, ToolSpec
 from app.services.ocr_service import OcrService
 from app.services.policy_crawler_service import PolicyCrawlerService
 from app.services.document_understanding_service import DocumentUnderstandingService
+from app.services.context_budget import ContextBudgetPlanner
+from app.services.token_counter import TokenCounter
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(verify_service_key)])
 
@@ -79,7 +81,7 @@ def services():
         func=database_query_plan_tool,
     ))
     return {
-        "model": ModelService(qwen),
+        "model": ModelService(qwen, ContextBudgetPlanner(TokenCounter(settings, qwen)), settings),
         "agent": AgentService(qwen, registry),
         "rag": rag,
         "route": RouteService(qwen),

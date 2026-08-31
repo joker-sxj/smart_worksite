@@ -1266,3 +1266,173 @@ def test_health_separates_liveness_configuration_and_model_readiness(monkeypatch
     assert body["modelReadiness"]["maxContextTokens"] == 32768
     assert "http://" not in response.text
     assert "api_key" not in response.text.lower()
+
+# Task 4: model API context-budget integration
+
+def _task4_settings(**overrides):
+    from types import SimpleNamespace
+
+    values = {
+        "chat_max_model_len": 640,
+        "context_output_reserve_tokens": 64,
+        "context_safety_reserve_tokens": 24,
+        "context_template_overhead_tokens": 16,
+        "context_history_budget_ratio": 0.30,
+        "context_evidence_budget_ratio": 0.70,
+        "context_history_candidate_limit": 100,
+    }
+    values.update(overrides)
+    settings = SimpleNamespace(**values)
+    settings.resolved_context_output_reserve_tokens = lambda: settings.context_output_reserve_tokens
+    settings.resolved_context_safety_reserve_tokens = lambda: settings.context_safety_reserve_tokens
+    return settings
+
+
+def test_context_budget_model_request_schema_keeps_old_callers_and_accepts_structured_evidence():
+    from app.models.schemas import ModelInvokeRequest
+
+    legacy = ModelInvokeRequest(prompt="本月安全情况如何？")
+    assert legacy.evidenceItems == []
+
+    request = ModelInvokeRequest.model_validate({
+        "prompt": "夜间施工噪声限值是多少？",
+        "evidenceItems": [{
+            "content": "夜间施工应遵守噪声排放限值。",
+            "title": "建筑施工噪声排放标准",
+            "sourceId": "82",
+            "chunkId": "noise-1",
+            "score": 0.93,
+            "metadata": {"pageNumber": 4, "tableLocation": "表1"},
+        }],
+    })
+
+    assert request.evidenceItems[0].title == "建筑施工噪声排放标准"
+    assert request.evidenceItems[0].sourceId == "82"
+    assert request.evidenceItems[0].score == 0.93
+
+
+def test_context_budget_model_api_plans_messages_and_merges_usage_without_overwriting_provider_tokens(monkeypatch):
+    from app.api import routes
+    from app.services.context_budget import ContextBudgetPlanner
+    from app.services.model_service import ModelService
+    from app.services.token_counter import ConservativeTokenCounter
+
+    class AsyncLocalCounter:
+        def __init__(self):
+            self.calls = 0
+            self.delegate = ConservativeTokenCounter()
+
+        async def count_chat(self, messages):
+            self.calls += 1
+            return self.delegate.count_chat(messages)
+
+    class RecordingProvider:
+        def __init__(self):
+            self.messages = None
+            self.parameters = None
+
+        async def chat(self, messages, model=None, parameters=None):
+            self.messages = messages
+            self.parameters = parameters
+            return "已按预算生成回答", {
+                "prompt_tokens": 111,
+                "completion_tokens": 22,
+                "providerMetric": 7,
+            }
+
+    counter = AsyncLocalCounter()
+    provider = RecordingProvider()
+    settings = _task4_settings()
+    service = ModelService(provider, ContextBudgetPlanner(counter), settings)
+    monkeypatch.setattr(routes, "services", lambda: {"model": service})
+    client = TestClient(app)
+
+    response = client.post("/v1/model/invoke", json={
+        "prompt": "夜间施工应满足什么要求？",
+        "systemPrompt": "只能依据给定证据回答。",
+        "parameters": {"temperature": 0.1, "max_tokens": 999},
+        "contextMessages": [
+            {"role": "user", "content": "OLD-QUESTION-" + "旧" * 180},
+            {"role": "assistant", "content": "OLD-ANSWER-" + "答" * 180},
+            {"role": "user", "content": "最近的问题"},
+            {"role": "assistant", "content": "最近的回答"},
+        ],
+        "evidenceItems": [
+            {
+                "content": "夜间施工应控制噪声并履行审批要求。",
+                "title": "噪声标准",
+                "sourceId": "82",
+                "chunkId": "noise-1",
+                "score": 0.98,
+                "metadata": {"pageNumber": 4},
+            },
+            {
+                "content": "DROP-EVIDENCE-" + "无关内容" * 180,
+                "title": "低优先级资料",
+                "sourceId": "83",
+                "chunkId": "noise-2",
+                "score": 0.10,
+            },
+        ],
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    sent_text = "\n".join(message.content for message in provider.messages)
+    assert "OLD-QUESTION" not in sent_text
+    assert "OLD-ANSWER" not in sent_text
+    assert "最近的问题" in sent_text
+    assert "noise-1" in sent_text
+    assert "DROP-EVIDENCE" not in sent_text
+    assert provider.parameters["temperature"] == 0.1
+    assert provider.parameters["max_tokens"] == 64
+    assert counter.calls > 0
+
+    usage = body["usage"]
+    assert usage["prompt_tokens"] == 111
+    assert usage["completion_tokens"] == 22
+    assert usage["providerMetric"] == 7
+    assert usage["contextUsage"]["outputReserveTokens"] == 64
+    assert usage["contextUsage"]["selectedEvidenceItems"] == 1
+    assert "夜间施工应控制噪声" not in json.dumps(usage, ensure_ascii=False)
+    assert body["data"]["usage"] == usage
+
+
+def test_context_budget_model_api_maps_overflow_to_sanitized_validation_error(monkeypatch):
+    from app.api import routes
+    from app.services.context_budget import ContextBudgetPlanner
+    from app.services.model_service import ModelService
+    from app.services.token_counter import ConservativeTokenCounter
+
+    class AsyncLocalCounter:
+        async def count_chat(self, messages):
+            return ConservativeTokenCounter().count_chat(messages)
+
+    class ProviderMustNotRun:
+        async def chat(self, messages, model=None, parameters=None):
+            raise AssertionError("provider must not be called for an oversized mandatory context")
+
+    settings = _task4_settings(
+        chat_max_model_len=96,
+        context_output_reserve_tokens=32,
+        context_safety_reserve_tokens=16,
+        context_template_overhead_tokens=8,
+    )
+    service = ModelService(ProviderMustNotRun(), ContextBudgetPlanner(AsyncLocalCounter()), settings)
+    monkeypatch.setattr(routes, "services", lambda: {"model": service})
+    client = TestClient(app, raise_server_exceptions=False)
+    secret_source = "SECRET-SOURCE-BODY-" + "超长问题" * 80
+
+    response = client.post("/v1/model/invoke", json={
+        "prompt": secret_source,
+        "systemPrompt": "安全规则",
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "VALIDATION_ERROR"
+    assert body["errorDetails"]["code"] == "CONTEXT_BUDGET_EXCEEDED"
+    assert secret_source not in response.text
+    assert "SECRET-SOURCE-BODY" not in response.text

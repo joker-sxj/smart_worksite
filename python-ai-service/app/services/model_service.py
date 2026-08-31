@@ -2,21 +2,56 @@ import json
 from typing import Any
 
 from app.models.schemas import Message, ModelInvokeRequest, AgentInvokeRequest, AgentInvokeData, AgentStep
+from .context_budget import ContextBudgetRequest, ContextBudgetPlanner, EvidenceItem
 from .agent_tools import ToolCallingAgent, ToolRegistry
 from .qwen_client import QwenClient
 
 
 class ModelService:
-    def __init__(self, qwen: QwenClient):
+    def __init__(self, qwen: QwenClient, planner: ContextBudgetPlanner | None = None, settings: Any | None = None):
         self.qwen = qwen
+        self.settings = settings
+        self.planner = planner
 
     async def invoke(self, request: ModelInvokeRequest):
-        messages: list[Message] = []
-        if request.systemPrompt:
-            messages.append(Message(role="system", content=request.systemPrompt))
-        messages.extend(request.contextMessages)
-        messages.append(Message(role="user", content=request.prompt))
-        return await self.qwen.chat(messages, request.modelName, request.parameters)
+        if self.planner is None or self.settings is None:
+            messages: list[Message] = []
+            if request.systemPrompt:
+                messages.append(Message(role="system", content=request.systemPrompt))
+            messages.extend(request.contextMessages)
+            messages.append(Message(role="user", content=request.prompt))
+            return await self.qwen.chat(messages, request.modelName, request.parameters)
+
+        settings = self.settings
+        budget = ContextBudgetRequest(
+            system_prompt=request.systemPrompt or "你是智慧工地智能问答助手。",
+            current_question=request.prompt,
+            history_messages=request.contextMessages,
+            evidence_items=[EvidenceItem(
+                content=item.content,
+                chunk_id=item.chunkId,
+                document_id=item.documentId,
+                document_title=item.title,
+                page_number=item.pageNumber,
+                table_location=item.tableLocation,
+                relevance=item.score,
+                metadata=item.metadata,
+            ) for item in request.evidenceItems],
+            model_context_limit=settings.chat_max_model_len,
+            requested_output_tokens=settings.resolved_context_output_reserve_tokens(),
+            template_overhead_tokens=settings.context_template_overhead_tokens,
+            safety_reserve_tokens=settings.resolved_context_safety_reserve_tokens(),
+            history_budget_ratio=settings.context_history_budget_ratio,
+            evidence_budget_ratio=settings.context_evidence_budget_ratio,
+            history_candidate_limit=settings.context_history_candidate_limit,
+        )
+        planned = await self.planner.aplan(budget)
+        parameters = dict(request.parameters or {})
+        parameters.update(planned.model_parameters)
+        answer, provider_usage = await self.qwen.chat(planned.context_messages, request.modelName, parameters)
+        usage = dict(provider_usage or {})
+        usage["contextUsage"] = planned.context_usage
+        return answer, usage
 
 
 class AgentService:
