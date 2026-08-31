@@ -22,6 +22,7 @@ class ContextBudgetExceeded(RuntimeError):
 @dataclass(frozen=True)
 class EvidenceItem:
     content: str
+    source_id: str | None = None
     chunk_id: str | None = None
     document_id: str | None = None
     document_title: str | None = None
@@ -39,6 +40,8 @@ class EvidenceItem:
         metadata = []
         if self.document_title:
             metadata.append(f"标题: {self.document_title}")
+        if self.source_id:
+            metadata.append(f"sourceId: {self.source_id}")
         if self.page_number is not None:
             metadata.append(f"页码: {self.page_number}")
         if self.table_location:

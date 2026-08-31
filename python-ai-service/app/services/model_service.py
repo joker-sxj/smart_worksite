@@ -14,7 +14,7 @@ class ModelService:
         self.planner = planner
 
     async def invoke(self, request: ModelInvokeRequest):
-        if self.planner is None or self.settings is None:
+        if self.planner is None or self.settings is None or self.settings.chat_max_model_len <= 0:
             messages: list[Message] = []
             if request.systemPrompt:
                 messages.append(Message(role="system", content=request.systemPrompt))
@@ -29,6 +29,7 @@ class ModelService:
             history_messages=request.contextMessages,
             evidence_items=[EvidenceItem(
                 content=item.content,
+                source_id=item.sourceId,
                 chunk_id=item.chunkId,
                 document_id=item.documentId,
                 document_title=item.title,

@@ -1311,6 +1311,66 @@ def test_context_budget_model_request_schema_keeps_old_callers_and_accepts_struc
     assert request.evidenceItems[0].score == 0.93
 
 
+def test_context_budget_model_service_preserves_legacy_calls_when_context_limit_is_unconfigured():
+    from app.models.schemas import ModelInvokeRequest
+    from app.services.context_budget import ContextBudgetPlanner
+    from app.services.model_service import ModelService
+    from app.services.token_counter import ConservativeTokenCounter
+
+    class RecordingProvider:
+        def __init__(self):
+            self.messages = None
+
+        async def chat(self, messages, model=None, parameters=None):
+            self.messages = messages
+            return "legacy response", {}
+
+    provider = RecordingProvider()
+    service = ModelService(
+        provider,
+        ContextBudgetPlanner(ConservativeTokenCounter()),
+        _task4_settings(chat_max_model_len=0),
+    )
+
+    answer, usage = asyncio.run(service.invoke(ModelInvokeRequest(prompt="旧调用仍应可用")))
+
+    assert answer == "legacy response"
+    assert usage == {}
+    assert provider.messages[-1].content == "旧调用仍应可用"
+
+
+def test_context_budget_model_api_keeps_source_id_as_stable_evidence_marker(monkeypatch):
+    from app.api import routes
+    from app.services.context_budget import ContextBudgetPlanner
+    from app.services.model_service import ModelService
+    from app.services.token_counter import ConservativeTokenCounter
+
+    class RecordingProvider:
+        def __init__(self):
+            self.messages = None
+
+        async def chat(self, messages, model=None, parameters=None):
+            self.messages = messages
+            return "source marker response", {}
+
+    provider = RecordingProvider()
+    service = ModelService(
+        provider,
+        ContextBudgetPlanner(ConservativeTokenCounter()),
+        _task4_settings(),
+    )
+    monkeypatch.setattr(routes, "services", lambda: {"model": service})
+
+    response = TestClient(app).post("/v1/model/invoke", json={
+        "prompt": "证据来源是什么？",
+        "evidenceItems": [{"content": "来源证据正文。", "sourceId": "source-82"}],
+    })
+
+    assert response.status_code == 200
+    sent_text = "\n".join(message.content for message in provider.messages)
+    assert "sourceId: source-82" in sent_text
+
+
 def test_context_budget_model_api_plans_messages_and_merges_usage_without_overwriting_provider_tokens(monkeypatch):
     from app.api import routes
     from app.services.context_budget import ContextBudgetPlanner
