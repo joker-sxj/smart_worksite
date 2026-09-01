@@ -119,6 +119,19 @@ class TaskApplicationServiceTest {
     }
 
     @Test
+    void retryDoesNotRequeueControlledNonRetryableTask() {
+        GenerateTask task = task(1L, 1L, TaskStatus.CANCELED.name());
+        task.setErrorMessage("user access revoked");
+        taskRepository.tasks.add(task);
+
+        assertThatThrownBy(() -> service.retryTask(1L))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(ErrorCode.CONFLICT.getCode()))
+                .hasMessageContaining("not retryable");
+        assertThat(outboxService.enqueuedTaskIds).isEmpty();
+    }
+
+    @Test
     void nonMemberCannotReadTask() {
         taskRepository.tasks.add(task(1L, 1L, TaskStatus.PENDING.name()));
         setCurrentUser(3L, List.of("PROJECT_USER"));

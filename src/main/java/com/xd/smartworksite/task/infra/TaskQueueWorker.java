@@ -9,6 +9,7 @@ import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.knowledge.application.KnowledgeBaseApplicationService;
 import com.xd.smartworksite.policy.application.PolicyApplicationService;
 import com.xd.smartworksite.qa.application.QaApplicationService;
+import com.xd.smartworksite.task.application.NonRetryableTaskException;
 import com.xd.smartworksite.review.application.ReviewApplicationService;
 import com.xd.smartworksite.report.application.ReportGenerationApplicationService;
 import com.xd.smartworksite.task.application.TaskOutboxApplicationService;
@@ -118,8 +119,13 @@ public class TaskQueueWorker {
             execute(message, claim);
             taskWorkerApplicationService.completeSuccess(message.getTaskId(), properties.getWorkerId(), STAGE_FINISH);
         } catch (RuntimeException ex) {
-            taskWorkerApplicationService.completeFailure(message.getTaskId(), properties.getWorkerId(),
-                    STAGE_WORKER_FAILED, ex.getMessage());
+            if (ex instanceof NonRetryableTaskException) {
+                taskWorkerApplicationService.completeNonRetryableFailure(message.getTaskId(), properties.getWorkerId(),
+                        "WORKER_CANCELED", ex.getMessage());
+            } else {
+                taskWorkerApplicationService.completeFailure(message.getTaskId(), properties.getWorkerId(),
+                        STAGE_WORKER_FAILED, ex.getMessage());
+            }
             log.error("task worker execution failed, eventId={}, taskId={}, taskType={}",
                     message.getEventId(), message.getTaskId(), claim.getTask().getTaskType(), ex);
         }

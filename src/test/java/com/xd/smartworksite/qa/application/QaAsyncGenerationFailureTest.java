@@ -6,6 +6,7 @@ import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.datasource.repository.DataSourceRepository;
 import com.xd.smartworksite.knowledge.repository.KnowledgeBaseRepository;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
+import com.xd.smartworksite.task.application.NonRetryableTaskException;
 import com.xd.smartworksite.qa.domain.QaMessage;
 import com.xd.smartworksite.qa.domain.QaSession;
 import com.xd.smartworksite.qa.repository.QaRepository;
@@ -69,8 +70,10 @@ class QaAsyncGenerationFailureTest {
                 null, null, new QaAnswerSanitizer());
 
         assertThatThrownBy(() -> service.executeGenerationTask(11L, 19L))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        ex -> assertThat(ex.getCode()).isEqualTo(ErrorCode.FORBIDDEN.getCode()));
+                .isInstanceOfSatisfying(NonRetryableTaskException.class, ex ->
+                        assertThat(ex.getCause()).isInstanceOfSatisfying(BusinessException.class,
+                                cause -> assertThat(cause.getCode()).isEqualTo(ErrorCode.FORBIDDEN.getCode())));
+        verify(repository).markMessageFailed(11L, 19L, "revoked", 1L);
         verify(aiGateway, never()).searchKnowledgeDynamicForSystem(any());
         verify(aiGateway, never()).invokeModelForSystem(any());
     }
@@ -96,8 +99,9 @@ class QaAsyncGenerationFailureTest {
                 null, null, new QaAnswerSanitizer());
 
         assertThatThrownBy(() -> service.executeGenerationTask(11L, 19L))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        ex -> assertThat(ex.getCode()).isEqualTo(ErrorCode.CONFLICT.getCode()));
+                .isInstanceOfSatisfying(NonRetryableTaskException.class, ex ->
+                        assertThat(ex.getCause()).isInstanceOfSatisfying(BusinessException.class,
+                                cause -> assertThat(cause.getCode()).isEqualTo(ErrorCode.CONFLICT.getCode())));
         verify(aiGateway, never()).searchKnowledgeDynamicForSystem(any());
     }
 

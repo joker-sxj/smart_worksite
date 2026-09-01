@@ -37,6 +37,10 @@ public interface TaskRepository {
 
     int completeFailure(Long taskId, String workerId, String currentStage, String errorMessage);
 
+    default int completeNonRetryableFailure(Long taskId, String workerId, String currentStage, String errorMessage) {
+        return completeCanceled(taskId, workerId, currentStage, errorMessage);
+    }
+
     int completeCanceled(Long taskId, String workerId, String currentStage, String errorMessage);
 
     int insertStage(TaskStageLog log);

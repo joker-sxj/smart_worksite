@@ -279,6 +279,23 @@ class QaApplicationServiceTest {
                 .containsExactly("selected-second");
     }
 
+    @Test
+    void selectedChunkIdsDoNotExposeOtherChunksFromTheSameSource() {
+        RagSearchResponse.Record selected = ragRecord("实际入模", "same-source");
+        selected.setMetadata(java.util.Map.of("chunkId", "selected-chunk"));
+        RagSearchResponse.Record dropped = ragRecord("同源未入模", "same-source");
+        dropped.setMetadata(java.util.Map.of("chunkId", "dropped-chunk"));
+        aiGateway.nextDynamicResponse = dynamicResponse("SUFFICIENT", List.of(selected, dropped));
+        aiGateway.selectedEvidenceItems = 1;
+        aiGateway.selectedEvidenceSourceIds = List.of("same-source");
+        aiGateway.selectedEvidenceChunkIds = List.of("selected-chunk");
+
+        var message = sendKnowledgeQuestion("同源多分块证据");
+
+        assertThat(message.getReferences()).singleElement().satisfies(reference ->
+                assertThat(((java.util.Map<?, ?>) reference.get("metadata")).get("chunkId")).isEqualTo("selected-chunk"));
+    }
+
     private com.xd.smartworksite.qa.dto.QaMessageResponse sendKnowledgeQuestion(String question) {
         var session = service.createSession(createSessionRequest(1L, "动态问答"));
         QaMessageSendRequest request = new QaMessageSendRequest();
@@ -626,6 +643,7 @@ class QaApplicationServiceTest {
         private int dynamicCallCount;
         private Integer selectedEvidenceItems;
         private List<String> selectedEvidenceSourceIds;
+        private List<String> selectedEvidenceChunkIds;
 
         @Override
         public RouteResponse route(RouteRequest request) {
@@ -646,6 +664,7 @@ class QaApplicationServiceTest {
             contextUsage.put("selectedHistoryMessages", 2);
             if (selectedEvidenceItems != null) contextUsage.put("selectedEvidenceItems", selectedEvidenceItems);
             if (selectedEvidenceSourceIds != null) contextUsage.put("selectedEvidenceSourceIds", selectedEvidenceSourceIds);
+            if (selectedEvidenceChunkIds != null) contextUsage.put("selectedEvidenceChunkIds", selectedEvidenceChunkIds);
             response.setUsage(java.util.Map.of("contextUsage", contextUsage));
             return response;
         }

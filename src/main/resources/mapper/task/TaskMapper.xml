@@ -265,6 +265,23 @@
           and deleted = 0
     </update>
 
+    <update id="completeNonRetryableFailure">
+        update generate_task
+        set status = 'CANCELED',
+            current_stage = #{currentStage},
+            error_message = #{errorMessage},
+            worker_id = null,
+            lease_until = null,
+            last_heartbeat_at = current_timestamp,
+            finished_at = current_timestamp,
+            updated_by = 1
+        where id = #{taskId}
+          and status = 'RUNNING'
+          and worker_id = #{workerId}
+          and cancel_requested = 0
+          and deleted = 0
+    </update>
+
     <insert id="insertStage" useGeneratedKeys="true" keyProperty="id">
         insert into task_stage_log (
             project_id, task_id, attempt_no, stage_code, status, input_summary,

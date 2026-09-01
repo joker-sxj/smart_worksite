@@ -110,6 +110,21 @@ public class TaskWorkerApplicationService {
         return task;
     }
 
+    @Transactional
+    public GenerateTask completeNonRetryableFailure(Long taskId, String workerId, String currentStage, String errorMessage) {
+        requireTaskId(taskId);
+        String normalizedWorkerId = requireWorkerId(workerId);
+        String stage = normalizeStage(currentStage, STAGE_WORKER_CANCELED);
+        String error = normalizeError(errorMessage);
+        int updated = taskRepository.completeNonRetryableFailure(taskId, normalizedWorkerId, stage, error);
+        if (updated == 0) {
+            throw new BusinessException(ErrorCode.CONFLICT, "task non-retryable failure completion rejected");
+        }
+        GenerateTask task = requireTask(taskId);
+        insertStage(task, stage, TaskStatus.CANCELED.name(), "task canceled because failure is not retryable", error);
+        return task;
+    }
+
     private GenerateTask completeCanceled(Long taskId, String workerId, String currentStage, String errorMessage) {
         String stage = normalizeStage(currentStage, STAGE_WORKER_CANCELED);
         int updated = taskRepository.completeCanceled(taskId, workerId, stage, errorMessage);

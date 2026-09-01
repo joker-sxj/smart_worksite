@@ -131,6 +131,21 @@ class TaskWorkerApplicationServiceTest {
     }
 
     @Test
+    void completeNonRetryableFailureMarksTaskCanceledWithoutCancelRequest() {
+        GenerateTask task = task(1L, TaskStatus.RUNNING.name());
+        task.setWorkerId("worker-a");
+        taskRepository.tasks.add(task);
+
+        GenerateTask canceled = service.completeNonRetryableFailure(
+                1L, "worker-a", "WORKER_CANCELED", "user access revoked");
+
+        assertThat(canceled.getStatus()).isEqualTo(TaskStatus.CANCELED.name());
+        assertThat(canceled.getErrorMessage()).isEqualTo("user access revoked");
+        assertThat(taskRepository.stages).extracting(TaskStageLog::getStatus)
+                .containsExactly(TaskStatus.CANCELED.name());
+    }
+
+    @Test
     void completeFailureFailsFastWhenStageLogCannotBePersisted() {
         GenerateTask task = task(1L, TaskStatus.RUNNING.name());
         task.setWorkerId("worker-a");
@@ -272,6 +287,22 @@ class TaskWorkerApplicationServiceTest {
                 return 0;
             }
             task.setStatus(TaskStatus.FAILED.name());
+            task.setCurrentStage(currentStage);
+            task.setErrorMessage(errorMessage);
+            task.setWorkerId(null);
+            task.setLeaseUntil(null);
+            task.setFinishedAt(LocalDateTime.now());
+            return 1;
+        }
+
+        @Override
+        public int completeNonRetryableFailure(Long taskId, String workerId, String currentStage, String errorMessage) {
+            GenerateTask task = findById(taskId).orElseThrow();
+            if (!TaskStatus.RUNNING.name().equals(task.getStatus()) || !workerId.equals(task.getWorkerId())
+                    || Boolean.TRUE.equals(task.getCancelRequested())) {
+                return 0;
+            }
+            task.setStatus(TaskStatus.CANCELED.name());
             task.setCurrentStage(currentStage);
             task.setErrorMessage(errorMessage);
             task.setWorkerId(null);

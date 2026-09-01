@@ -87,6 +87,11 @@ public class MyBatisTaskRepository implements TaskRepository {
     }
 
     @Override
+    public int completeNonRetryableFailure(Long taskId, String workerId, String currentStage, String errorMessage) {
+        return taskMapper.completeNonRetryableFailure(taskId, workerId, currentStage, errorMessage);
+    }
+
+    @Override
     public int completeCanceled(Long taskId, String workerId, String currentStage, String errorMessage) {
         return taskMapper.completeCanceled(taskId, workerId, currentStage, errorMessage);
     }

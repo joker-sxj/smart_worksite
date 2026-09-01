@@ -18,6 +18,10 @@ import java.time.Duration;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.anyString;
+import com.xd.smartworksite.task.application.NonRetryableTaskException;
 
 class TaskQueueWorkerAiDispatchTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -40,6 +44,20 @@ class TaskQueueWorkerAiDispatchTest {
 
         verify(fixture.reviewService).executeReviewTask(202L, 42L, "worker-test", 60);
         verify(fixture.workerService).completeSuccess(42L, "worker-test", "FINISH");
+    }
+
+    @Test
+    void controlledQaAuthorizationFailureCompletesCanceledInsteadOfRetryableFailure() throws Exception {
+        TestFixture fixture = fixture(43L, 303L, "QA_GENERATION");
+        doThrow(new NonRetryableTaskException("user access revoked"))
+                .when(fixture.qaService).executeGenerationTask(303L, 43L);
+
+        fixture.worker.pollOnce();
+
+        verify(fixture.workerService).completeNonRetryableFailure(
+                43L, "worker-test", "WORKER_CANCELED", "user access revoked");
+        verify(fixture.workerService, never()).completeFailure(
+                org.mockito.ArgumentMatchers.eq(43L), anyString(), anyString(), anyString());
     }
 
     private TestFixture fixture(Long taskId, Long bizId, String taskType) throws Exception {

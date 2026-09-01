@@ -60,6 +60,11 @@ public interface TaskMapper {
                         @Param("currentStage") String currentStage,
                         @Param("errorMessage") String errorMessage);
 
+    int completeNonRetryableFailure(@Param("taskId") Long taskId,
+                                    @Param("workerId") String workerId,
+                                    @Param("currentStage") String currentStage,
+                                    @Param("errorMessage") String errorMessage);
+
     int completeCanceled(@Param("taskId") Long taskId,
                          @Param("workerId") String workerId,
                          @Param("currentStage") String currentStage,

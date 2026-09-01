@@ -40,6 +40,7 @@ import com.xd.smartworksite.qa.dto.QaSessionResponse;
 import com.xd.smartworksite.qa.dto.QaSessionUpdateRequest;
 import com.xd.smartworksite.qa.repository.QaRepository;
 import com.xd.smartworksite.task.domain.GenerateTask;
+import com.xd.smartworksite.task.application.NonRetryableTaskException;
 import com.xd.smartworksite.task.domain.TaskStatus;
 import com.xd.smartworksite.task.repository.TaskRepository;
 import com.xd.smartworksite.task.application.TaskOutboxApplicationService;
@@ -256,9 +257,13 @@ public class QaApplicationService {
             QaRouteMode route = normalizeRouteMode(String.valueOf(request.getOrDefault("routeMode", message.getRouteMode())));
             List<Long> knowledgeBaseIds = readIds(request.get("knowledgeBaseIds"));
             List<Long> dataSourceIds = readIds(request.get("dataSourceIds"));
-            projectAccessApplicationService.requireUserProjectWritableAccess(session.getProjectId(), message.getCreatedBy());
-            validateKnowledgeBaseIds(session.getProjectId(), knowledgeBaseIds);
-            validateDataSourceIds(session.getProjectId(), dataSourceIds);
+            try {
+                projectAccessApplicationService.requireUserProjectWritableAccess(session.getProjectId(), message.getCreatedBy());
+                validateKnowledgeBaseIds(session.getProjectId(), knowledgeBaseIds);
+                validateDataSourceIds(session.getProjectId(), dataSourceIds);
+            } catch (BusinessException ex) {
+                throw new NonRetryableTaskException(ex.getMessage(), ex);
+            }
             QaMessageResponse result = answerQuestion(session, message, route, knowledgeBaseIds, dataSourceIds,
                     buildContextMessages(session.getId(), message.getId()), true);
             String answer = answerSanitizer.sanitize(result.getAnswer());
@@ -533,10 +538,13 @@ public class QaApplicationService {
             var allowedChunks = selectedChunks instanceof List<?> chunkIds
                     ? chunkIds.stream().filter(java.util.Objects::nonNull).map(String::valueOf).collect(java.util.stream.Collectors.toSet())
                     : java.util.Set.<String>of();
-            return references.stream().filter(reference -> !"KNOWLEDGE".equals(reference.get("type"))
-                    || allowed.contains(String.valueOf(reference.get("sourceId")))
-                    || (reference.get("metadata") instanceof Map<?, ?> metadata
-                    && allowedChunks.contains(String.valueOf(metadata.get("chunkId"))))).toList();
+            return references.stream().filter(reference -> {
+                if (!"KNOWLEDGE".equals(reference.get("type"))) return true;
+                Object chunkId = reference.get("metadata") instanceof Map<?, ?> metadata
+                        ? metadata.get("chunkId") : null;
+                if (chunkId != null) return allowedChunks.contains(String.valueOf(chunkId));
+                return !allowed.isEmpty() && allowed.contains(String.valueOf(reference.get("sourceId")));
+            }).toList();
         }
         Object selected = contextUsage instanceof Map<?, ?> map ? map.get("selectedEvidenceItems") : null;
         if (!(selected instanceof Number number)) return references;
