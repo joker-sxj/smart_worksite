@@ -365,6 +365,40 @@ class AiApplicationServiceTest {
     }
 
     @Test
+    void repairsQueryWhenModelReturnsParametersWithoutPlaceholders() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        DataSourceRecord dataSource = dataSource();
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource);
+        when(sqlExecutor.describeSchema(dataSource)).thenReturn("qa_message(project_id, status)");
+        String mismatchedSql = "SELECT COUNT(*) AS total FROM qa_message";
+        String correctedSql = "SELECT COUNT(*) AS total FROM qa_message WHERE project_id = ?";
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(
+                        provider("generate-1", Map.of("sql", mismatchedSql, "parameters", Map.of("p1", 1))),
+                        provider("generate-2", Map.of("sql", correctedSql, "parameters", Map.of("p1", 1)))
+                );
+        when(sqlExecutor.execute(dataSource, correctedSql, Map.of("p1", 1))).thenReturn(
+                new SafeSqlExecutor.QueryResult(List.of("total"), List.of(Map.of("total", 0))));
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseSummarizeResult()),
+                eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), any()))
+                .thenReturn(provider("summary", Map.of("summary", "查询成功", "warnings", List.of())));
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getSql()).isEqualTo(correctedSql);
+        verify(sqlExecutor, never()).execute(dataSource, mismatchedSql, Map.of("p1", 1));
+        verify(pythonClient).post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), argThat(payload ->
+                        String.valueOf(((Map<?, ?>) payload).get("databaseError")).contains("占位符数量")));
+    }
+
+    @Test
     void returnsExplicitEmptyEvidenceWithoutCallingSummaryModel() {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);

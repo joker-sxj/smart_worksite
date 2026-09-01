@@ -246,6 +246,16 @@ public class AiApplicationService {
                 }
                 continue;
             }
+            int placeholderCount = countSqlPlaceholders(generatedQuery.sql());
+            if (placeholderCount != generatedQuery.parameters().size()) {
+                failedSql = generatedQuery.sql();
+                databaseError = "SQL占位符数量与参数数量不一致: placeholders=" + placeholderCount
+                        + ", parameters=" + generatedQuery.parameters().size();
+                if (attempt == maxAttempts) {
+                    throw repairedDatabaseQueryFailure(databaseError);
+                }
+                continue;
+            }
             try {
                 queryResult = safeSqlExecutor.execute(
                         dataSource, generatedQuery.sql(), generatedQuery.parameters());
@@ -366,6 +376,28 @@ public class AiApplicationService {
             return "";
         }
         return sql.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+    }
+
+    private int countSqlPlaceholders(String sql) {
+        if (sql == null || sql.isEmpty()) return 0;
+        int count = 0;
+        boolean singleQuoted = false;
+        boolean doubleQuoted = false;
+        for (int index = 0; index < sql.length(); index++) {
+            char current = sql.charAt(index);
+            if (current == '\'' && !doubleQuoted) {
+                if (singleQuoted && index + 1 < sql.length() && sql.charAt(index + 1) == '\'') {
+                    index++;
+                    continue;
+                }
+                singleQuoted = !singleQuoted;
+            } else if (current == '"' && !singleQuoted) {
+                doubleQuoted = !doubleQuoted;
+            } else if (current == '?' && !singleQuoted && !doubleQuoted) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private record GeneratedQuery(String sql, Map<String, Object> parameters, List<String> expectedColumns) {
