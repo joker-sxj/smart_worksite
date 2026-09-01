@@ -14,9 +14,11 @@ from app.models.schemas import (
     DynamicRetrievalData,
     DynamicRetrievalRequest,
     EvidenceStatus,
+    EvidenceAssessment,
     RagRecord,
     RagSearchData,
     RetrievalDiagnostics,
+    RetrievalAttempt,
 )
 from app.services.vector_store import compact_search_text, extract_clause_numbers, iter_bigrams
 
@@ -105,6 +107,36 @@ QUESTION_RULES = (
 
 
 def analyze_question(query: str) -> QuestionAnalysis:
+    compound = []
+    for keyword in ("宽度", "高度", "长度", "深度", "距离"):
+        if keyword in query:
+            compound.append(keyword)
+    if len(compound) > 1:
+        return QuestionAnalysis("NUMERIC", tuple(["TOPIC", *compound]))
+    if re.search(r"谁|负责|责任|主体", query):
+        actors = re.search(
+            r"([\u4e00-\u9fff]{2,10}(?:单位|部门|机构|负责人|人员|方))(?:和|与|、)"
+            r"([\u4e00-\u9fff]{2,10}(?:单位|部门|机构|负责人|人员|方))",
+            query,
+        )
+        if actors:
+            return QuestionAnalysis(
+                "RESPONSIBILITY", ("TOPIC", f"ENTITY:{actors.group(1)}", f"ENTITY:{actors.group(2)}")
+            )
+    if "步骤" in query or "流程" in query:
+        steps = re.findall(r"([\u4e00-\u9fff]{1,10})(?:和|与|、)([\u4e00-\u9fff]{1,8})步骤", query)
+        if steps:
+            first, second = steps[0]
+            first = first.rsplit("的", 1)[-1]
+            return QuestionAnalysis("PROCESS", ("TOPIC", first, second))
+    generic_entities = re.search(
+        r"的([\u4e00-\u9fff]{1,10})(?:和|与|、)([\u4e00-\u9fff]{1,10})分别",
+        query,
+    )
+    if generic_entities:
+        first = generic_entities.group(1).removesuffix("要求")
+        second = generic_entities.group(2).removesuffix("要求")
+        return QuestionAnalysis("COMPOUND", ("TOPIC", f"ENTITY:{first}", f"ENTITY:{second}"))
     for kind, pattern, aspects in QUESTION_RULES:
         if re.search(pattern, query):
             return QuestionAnalysis(kind, aspects)
@@ -127,7 +159,7 @@ def evaluate_evidence(records: list[RagRecord], degraded: list[str], query: str)
     if degraded:
         return EvidenceStatus.RETRIEVAL_DEGRADED, missing
     required = set(analysis.required_aspects)
-    if any(required.issubset(item_coverage) for item_coverage in coverage):
+    if required.issubset(covered):
         return EvidenceStatus.SUFFICIENT, []
     if partial or (covered and covered != {"TOPIC"}):
         return EvidenceStatus.PARTIAL, missing
@@ -154,6 +186,29 @@ def _evidence_aspects(query: str, content: str, analysis: QuestionAnalysis) -> s
         "MODALITY": r"可以|允许|应当|应|必须|不得|禁止|严禁|不允许",
         "ASSERTION": r"是|为|有|采用|执行|实施|要求|规定",
     }
+    if analysis.kind == "NUMERIC" and len(analysis.required_aspects) > 2:
+        for aspect in analysis.required_aspects[1:]:
+            if aspect in content and re.search(patterns["NUMBER"], content):
+                aspects.add(aspect)
+        return aspects
+    if analysis.kind == "PROCESS" and len(analysis.required_aspects) > 2:
+        for step in analysis.required_aspects[1:]:
+            if step in content:
+                aspects.add(step)
+        return aspects
+    if analysis.kind == "RESPONSIBILITY" and any(
+        aspect.startswith("ENTITY:") for aspect in analysis.required_aspects
+    ):
+        for aspect in analysis.required_aspects[1:]:
+            entity = aspect.removeprefix("ENTITY:")
+            if entity in content and re.search(patterns["RESPONSIBILITY"], content):
+                aspects.add(aspect)
+        return aspects
+    if analysis.kind == "COMPOUND":
+        for aspect in analysis.required_aspects[1:]:
+            if aspect.removeprefix("ENTITY:") in content:
+                aspects.add(aspect)
+        return aspects
     if re.search(patterns.get(analysis.required_aspects[-1], r"$^"), content):
         aspects.add(analysis.required_aspects[-1])
     for aspect in analysis.required_aspects[1:-1]:
@@ -185,6 +240,32 @@ def _safe_components(usage: dict[str, Any]) -> list[str]:
     return [value for value in values if value in allowed]
 
 
+def resolve_validity(records: list[RagRecord]) -> str:
+    values = {
+        str(item.metadata.get("documentValidity")).upper()
+        for item in records if item.metadata.get("documentValidity") is not None
+    }
+    if not values or "UNKNOWN" in values:
+        return "UNKNOWN"
+    if values.intersection({"REPEALED", "EXPIRED", "FUTURE"}):
+        return "RESTRICTED"
+    return "CURRENT"
+
+
+def build_assessment(query: str, records: list[RagRecord], status: EvidenceStatus) -> EvidenceAssessment:
+    analysis = analyze_question(query)
+    covered_set = set().union(
+        *(_evidence_aspects(query, item.contentSnippet, analysis) for item in records)
+    ) if records else set()
+    required = list(analysis.required_aspects)
+    return EvidenceAssessment(
+        status=status,
+        requiredAspects=required,
+        coveredAspects=[aspect for aspect in required if aspect in covered_set],
+        missingAspects=[aspect for aspect in required if aspect not in covered_set],
+    )
+
+
 class RetrievalOrchestrator:
     def __init__(
         self,
@@ -201,6 +282,7 @@ class RetrievalOrchestrator:
     async def retrieve(self, request: DynamicRetrievalRequest) -> tuple[DynamicRetrievalData, dict[str, Any]]:
         fingerprints = [query_fingerprint(request)]
         deadline = asyncio.get_running_loop().time() + self.total_timeout_seconds
+        started = asyncio.get_running_loop().time()
         try:
             first, first_usage = await self._search_with_deadline(
                 request.as_rag_search_request(), deadline
@@ -210,6 +292,8 @@ class RetrievalOrchestrator:
                 questionType=analyze_question(request.query).kind,
                 queryFingerprints=fingerprints,
                 stopReason="TIMEOUT",
+                attempts=[self._attempt(1, fingerprints[0], [], EvidenceStatus.TIMEOUT,
+                                       int((asyncio.get_running_loop().time() - started) * 1000), "TIMEOUT")],
             )
             return DynamicRetrievalData(
                 evidenceStatus=EvidenceStatus.TIMEOUT,
@@ -224,12 +308,13 @@ class RetrievalOrchestrator:
         stop_reason: str | None = None
         records = first.records[:request.topK]
         rounds = 1
+        attempts = [self._attempt(1, fingerprints[0], records, status,
+                                  int((asyncio.get_running_loop().time() - started) * 1000))]
 
         if status == EvidenceStatus.INSUFFICIENT:
             try:
                 async with asyncio.timeout(self._remaining(deadline)):
-                    rewritten = self.rewrite(request, records)
-                    rewritten_query = await rewritten if inspect.isawaitable(rewritten) else rewritten
+                    rewritten_query = await self._rewrite_with_deadline(request, records, deadline)
                 rewritten_query = rewritten_query.strip()
             except TimeoutError:
                 status = EvidenceStatus.TIMEOUT
@@ -245,6 +330,7 @@ class RetrievalOrchestrator:
                 else:
                     fingerprints.append(second_fingerprint)
                     second_timed_out = False
+                    second_started = asyncio.get_running_loop().time()
                     try:
                         second, second_usage = await self._search_with_deadline(
                             request.as_rag_search_request(rewritten_query), deadline
@@ -264,14 +350,24 @@ class RetrievalOrchestrator:
                     if not second_timed_out:
                         # Rewriting improves recall; it must not change the question's evidence obligations.
                         status, missing = evaluate_evidence(records, degraded, request.query)
+                    attempts.append(self._attempt(2, fingerprints[-1], records, status,
+                                                  first_elapsed=int((asyncio.get_running_loop().time() - second_started) * 1000),
+                                                  stop_reason=stop_reason))
+
+        if stop_reason and len(attempts) == 1:
+            attempts[0].status = status
+            attempts[0].stopReason = stop_reason
 
         diagnostics = RetrievalDiagnostics(
             candidateCount=len(records),
             questionType=analyze_question(request.query).kind,
+            validityStatus=resolve_validity(records),
             queryFingerprints=fingerprints,
             degradedComponents=degraded,
             missingAspects=missing,
             stopReason=stop_reason,
+            attempts=attempts,
+            assessment=build_assessment(request.query, records, status),
         )
         data = DynamicRetrievalData(
             records=records,
@@ -292,6 +388,23 @@ class RetrievalOrchestrator:
         timeout_seconds = min(self.round_timeout_seconds, self._remaining(deadline))
         async with asyncio.timeout(timeout_seconds):
             return await self.search(search_request)
+
+    async def _rewrite_with_deadline(self, request, records, deadline):
+        async with asyncio.timeout(self._remaining(deadline)):
+            if inspect.iscoroutinefunction(self.rewrite):
+                return (await self.rewrite(request, records)).strip()
+            value = await asyncio.to_thread(self.rewrite, request, records)
+            if inspect.isawaitable(value):
+                value = await value
+            return value.strip()
+
+    @staticmethod
+    def _attempt(attempt_no, fingerprint, records, status, first_elapsed=0, stop_reason=None):
+        return RetrievalAttempt(
+            attemptNo=attempt_no, queryFingerprint=fingerprint, strategy="HYBRID",
+            candidateCount=len(records), status=status, elapsedMs=first_elapsed,
+            stopReason=stop_reason,
+        )
 
     @staticmethod
     def _remaining(deadline: float) -> float:

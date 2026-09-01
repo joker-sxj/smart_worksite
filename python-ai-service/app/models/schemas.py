@@ -73,7 +73,7 @@ class RagSearchRequest(BaseModel):
     scoreThreshold: float | None = None
     rerankEnabled: bool = True
     documentScope: list[str] = Field(default_factory=list)
-    enforceTopK: bool = False
+    enforceTopK: bool = True
 
     @model_validator(mode="after")
     def normalize_scope(self):
@@ -110,10 +110,30 @@ class EvidenceStatus(str, Enum):
 class RetrievalDiagnostics(BaseModel):
     candidateCount: int = 0
     questionType: str | None = None
+    validityStatus: str = "UNKNOWN"
+    attempts: list["RetrievalAttempt"] = Field(default_factory=list)
+    assessment: "EvidenceAssessment | None" = None
     queryFingerprints: list[str] = Field(default_factory=list)
     degradedComponents: list[str] = Field(default_factory=list)
     missingAspects: list[str] = Field(default_factory=list)
     stopReason: str | None = None
+
+
+class RetrievalAttempt(BaseModel):
+    attemptNo: int = Field(ge=1, le=2)
+    queryFingerprint: str
+    strategy: str
+    candidateCount: int = Field(ge=0)
+    status: EvidenceStatus
+    elapsedMs: int = Field(ge=0)
+    stopReason: str | None = None
+
+
+class EvidenceAssessment(BaseModel):
+    status: EvidenceStatus
+    requiredAspects: list[str] = Field(default_factory=list)
+    coveredAspects: list[str] = Field(default_factory=list)
+    missingAspects: list[str] = Field(default_factory=list)
 
 
 class DynamicRetrievalRequest(RagSearchRequest):

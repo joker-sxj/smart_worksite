@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +13,8 @@ from app.models.schemas import (
     RagRecord,
     RagSearchData,
     RetrievalDiagnostics,
+    RetrievalAttempt,
+    EvidenceAssessment,
 )
 from app.services.rag_service import RagService
 from app.services.rag_service import MAX_MERGED_CANDIDATES, hash_embedding, merge_candidates
@@ -98,6 +101,20 @@ def test_top_k_has_a_hard_limit_and_legacy_search_defaults_remain_compatible():
         })
 
 
+def test_retrieval_attempt_and_evidence_assessment_models_are_safe_structured_data():
+    attempt = RetrievalAttempt(
+        attemptNo=1, queryFingerprint="abc", strategy="HYBRID", candidateCount=2,
+        status=EvidenceStatus.PARTIAL, elapsedMs=12, stopReason=None,
+    )
+    assessment = EvidenceAssessment(
+        status=EvidenceStatus.PARTIAL, requiredAspects=["WIDTH", "HEIGHT"],
+        coveredAspects=["WIDTH"], missingAspects=["HEIGHT"],
+    )
+
+    assert "query" not in attempt.model_dump()
+    assert assessment.missingAspects == ["HEIGHT"]
+
+
 def test_permission_scope_rejects_claims_python_cannot_enforce():
     with pytest.raises(ValidationError, match="permissionScope"):
         request(permissionScope={"roleIds": [1, 3]})
@@ -135,6 +152,105 @@ def test_cross_round_record_merge_has_a_hard_limit():
 
     assert len(merged) == MAX_DYNAMIC_CANDIDATES
     assert all(item.score == 0.8 for item in merged)
+
+
+def test_compound_numeric_question_requires_each_dimension_and_reports_height_missing():
+    async def search(_search_request):
+        return RagSearchData(records=[record(
+            "width", content="通道宽度不得小于1.5米。",
+        )]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="安全通道的宽度和高度分别是多少？",
+    )))
+
+    assert result.evidenceStatus in {EvidenceStatus.PARTIAL, EvidenceStatus.INSUFFICIENT}
+    assert "高度" in result.diagnostics.missingAspects
+    assert result.diagnostics.assessment.requiredAspects == ["TOPIC", "宽度", "高度"]
+    assert "宽度" in result.diagnostics.assessment.coveredAspects
+
+
+def test_compound_process_question_requires_each_requested_step():
+    async def search(_search_request):
+        return RagSearchData(records=[record(
+            "steps", content="隐患排查按照登记、评估、整改、复查四个步骤实施。",
+        )]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="隐患排查的登记和复查步骤分别是什么？",
+    )))
+
+    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
+    assert "登记" not in result.diagnostics.missingAspects
+    assert "复查" not in result.diagnostics.missingAspects
+
+
+def test_compound_process_question_reports_missing_step_when_only_one_step_is_evidenced():
+    async def search(_search_request):
+        return RagSearchData(records=[record("steps", content="复查确认整改结果。")]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="隐患排查的登记和复查步骤分别是什么？",
+    )))
+
+    assert result.evidenceStatus in {EvidenceStatus.PARTIAL, EvidenceStatus.INSUFFICIENT}
+    assert "登记" in result.diagnostics.missingAspects
+
+
+def test_compound_responsibility_question_requires_each_actor_across_evidence_records():
+    async def search(_search_request):
+        return RagSearchData(records=[
+            record("builder", content="建设单位负责提供施工现场基础资料。"),
+            record("contractor", content="施工单位负责落实安全生产措施。"),
+        ]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="建设单位和施工单位分别负责什么？",
+    )))
+
+    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
+
+
+def test_compound_responsibility_question_reports_the_missing_actor():
+    async def search(_search_request):
+        return RagSearchData(records=[
+            record("builder", content="建设单位负责提供施工现场基础资料。"),
+        ]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="建设单位和施工单位分别负责什么？",
+    )))
+
+    assert result.evidenceStatus in {EvidenceStatus.PARTIAL, EvidenceStatus.INSUFFICIENT}
+    assert "ENTITY:施工单位" in result.diagnostics.missingAspects
+
+
+def test_generic_compound_entities_are_assessed_individually_without_phrase_specific_rules():
+    async def search(_search_request):
+        return RagSearchData(records=[record(
+            "strength", content="保温材料强度不得低于0.10MPa。",
+        )]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="保温材料的强度和耐火等级要求分别是什么？",
+    )))
+
+    assert result.evidenceStatus in {EvidenceStatus.PARTIAL, EvidenceStatus.INSUFFICIENT}
+    assert "ENTITY:耐火等级" in result.diagnostics.missingAspects
+
+
+def test_validity_missing_metadata_is_unknown_but_does_not_permanently_reject_legacy_evidence():
+    async def search(_search_request):
+        return RagSearchData(records=[record(
+            "definition", content="临边作业是指工作面边沿无围护设施的高处作业。",
+        )]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="什么是临边作业？",
+    )))
+
+    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
+    assert result.diagnostics.validityStatus == "UNKNOWN"
 
 
 def test_sufficient_first_round_stops_without_rewrite():
@@ -234,6 +350,9 @@ def test_insufficient_evidence_uses_one_effective_rewrite_and_merges_candidates(
     assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
     assert [item.metadata["chunkId"] for item in result.records] == ["a", "b"]
     assert result.records[0].score == 0.8
+    assert [attempt.attemptNo for attempt in result.diagnostics.attempts] == [1, 2]
+    assert all(attempt.queryFingerprint for attempt in result.diagnostics.attempts)
+    assert result.diagnostics.attempts[1].candidateCount == 2
 
 
 def test_format_only_rewrite_is_skipped_without_second_search():
@@ -306,6 +425,8 @@ def test_retrieval_timeout_returns_completed_timeout_state_without_rewrite():
     assert rewrite_calls == 0
     assert "internal host" not in result.model_dump_json()
     assert usage["retrievalRounds"] == 0
+    assert result.diagnostics.attempts[0].status == EvidenceStatus.TIMEOUT
+    assert result.diagnostics.attempts[0].stopReason == "TIMEOUT"
 
 
 def test_hanging_search_is_cancelled_by_injected_round_timeout():
@@ -513,6 +634,22 @@ def test_vector_store_embedding_failure_falls_back_to_text_search(tmp_path):
 
     assert len(result.records) == 1
     assert usage["degradedComponents"] == ["EMBEDDING"]
+
+
+def test_synchronous_rewrite_runs_off_loop_and_times_out():
+    def blocking_rewrite(_request, _records):
+        time.sleep(0.1)
+        return "rewritten"
+
+    async def search(_search_request):
+        return RagSearchData(records=[]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(
+        search, blocking_rewrite, round_timeout_seconds=0.01, total_timeout_seconds=0.01,
+    ).retrieve(request()))
+
+    assert result.evidenceStatus == EvidenceStatus.TIMEOUT
+    assert result.diagnostics.stopReason == "TIMEOUT"
 
 
 def test_rag_service_pushes_document_scope_to_vector_text_and_adjacency_store_calls(tmp_path):
