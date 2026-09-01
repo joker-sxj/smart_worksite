@@ -16,6 +16,7 @@ public class QaMessageResponse {
     private List<Map<String, Object>> references = new ArrayList<>();
     private Map<String, Object> usage = new LinkedHashMap<>();
     private Map<String, Object> feedback = new LinkedHashMap<>();
+    private Map<String, Object> retrievalDiagnostics = new LinkedHashMap<>();
     private String status;
     private Long taskId;
     private String errorMessage;
@@ -43,6 +44,8 @@ public class QaMessageResponse {
     public void setUsage(Map<String, Object> usage) { this.usage = usage; }
     public Map<String, Object> getFeedback() { return feedback; }
     public void setFeedback(Map<String, Object> feedback) { this.feedback = feedback; }
+    public Map<String, Object> getRetrievalDiagnostics() { return retrievalDiagnostics; }
+    public void setRetrievalDiagnostics(Map<String, Object> retrievalDiagnostics) { this.retrievalDiagnostics = retrievalDiagnostics; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public Long getTaskId() { return taskId; }

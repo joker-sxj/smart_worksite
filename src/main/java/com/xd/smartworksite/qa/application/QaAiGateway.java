@@ -26,6 +26,10 @@ public interface QaAiGateway {
 
     RagSearchResponse searchKnowledgeForSystem(RagSearchRequest request);
 
+    default RagSearchResponse searchKnowledgeDynamic(RagSearchRequest request) { return searchKnowledge(request); }
+
+    default RagSearchResponse searchKnowledgeDynamicForSystem(RagSearchRequest request) { return searchKnowledgeForSystem(request); }
+
     DatabaseQueryResponse queryDatabase(DatabaseQueryRequest request);
 
     default DatabaseQueryResponse queryDatabaseForSystem(DatabaseQueryRequest request) { return queryDatabase(request); }

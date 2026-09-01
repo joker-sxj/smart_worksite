@@ -155,6 +155,156 @@ class QaApplicationServiceTest {
     }
 
     @Test
+    void insufficientDynamicKnowledgeReturnsDeterministicAnswerWithoutCallingModel() {
+        aiGateway.nextDynamicResponse = dynamicResponse("INSUFFICIENT", List.of());
+        var session = service.createSession(createSessionRequest(1L, "动态知识问答"));
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("缺少地区和时间的规范要求是什么");
+        request.setRouteMode("KNOWLEDGE");
+        request.setKnowledgeBaseIds(List.of(10L));
+
+        var message = service.sendMessage(session.getSessionId(), request);
+
+        assertThat(message.getAnswer()).contains("证据不足");
+        assertThat(message.getReferences()).isEmpty();
+        assertThat(message.getRetrievalDiagnostics()).containsEntry("evidenceStatus", "INSUFFICIENT");
+        assertThat(aiGateway.dynamicCalled).isTrue();
+        assertThat(aiGateway.lastModelRequest).isNull();
+    }
+
+    @Test
+    void dynamicSearchReferencesContainOnlyReturnedEvidenceAndPreserveDiagnostics() {
+        RagSearchResponse.Record selected = new RagSearchResponse.Record();
+        selected.setTitle("实际入模证据");
+        selected.setContentSnippet("可引用正文");
+        selected.setSourceId("selected-source");
+        RagSearchResponse response = dynamicResponse("PARTIAL", List.of(selected));
+        response.setRetrievalRounds(2);
+        response.setNormalizedQuery("规范要求");
+        response.setRewrittenQuery("施工规范要求");
+        response.setDiagnostics(java.util.Map.of("selectedCount", 1, "attempts", List.of(java.util.Map.of("attemptNo", 1))));
+        aiGateway.nextDynamicResponse = response;
+        var session = service.createSession(createSessionRequest(1L, "动态知识问答"));
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("施工规范要求");
+        request.setRouteMode("KNOWLEDGE");
+        request.setKnowledgeBaseIds(List.of(10L));
+
+        var message = service.sendMessage(session.getSessionId(), request);
+
+        assertThat(message.getReferences()).singleElement().extracting(reference -> reference.get("sourceId"))
+                .isEqualTo("selected-source");
+        assertThat(message.getRetrievalDiagnostics())
+                .containsEntry("evidenceStatus", "PARTIAL")
+                .containsEntry("retrievalRounds", 2)
+                .containsEntry("normalizedQuery", "规范要求")
+                .containsEntry("rewrittenQuery", "施工规范要求");
+        assertThat(aiGateway.lastModelRequest.getSystemPrompt()).contains("可以确认", "无法确认");
+        assertThat(aiGateway.lastModelRequest.getEvidenceItems()).hasSize(1);
+    }
+
+    @Test
+    void validityUnknownAllowsCautiousAnswerAndRequestsScopeInExistingTextBox() {
+        aiGateway.nextDynamicResponse = dynamicResponse("VALIDITY_UNKNOWN", List.of(ragRecord("待确认资料", "source-1")));
+        var message = sendKnowledgeQuestion("现行要求是什么");
+
+        assertThat(message.getAnswer()).isEqualTo("模型回答");
+        assertThat(aiGateway.lastModelRequest.getSystemPrompt())
+                .contains("有效性未确认", "现有文本框", "地区", "时间", "对象", "标准名");
+    }
+
+    @Test
+    void conflictAndDegradedStatusesGenerateWithoutChoosingSidesOrHidingDegradation() {
+        aiGateway.nextDynamicResponse = dynamicResponse("CONFLICT", List.of(ragRecord("来源甲", "a"), ragRecord("来源乙", "b")));
+        sendKnowledgeQuestion("两个来源为何不一致");
+        assertThat(aiGateway.lastModelRequest.getSystemPrompt()).contains("不选边", "冲突来源");
+
+        aiGateway.lastModelRequest = null;
+        aiGateway.nextDynamicResponse = dynamicResponse("RETRIEVAL_DEGRADED", List.of(ragRecord("已有资料", "c")));
+        sendKnowledgeQuestion("降级时能确认什么");
+        assertThat(aiGateway.lastModelRequest.getSystemPrompt()).contains("检索能力已降级", "谨慎回答");
+    }
+
+    @Test
+    void timeoutNeverCallsAnswerModelOrRunsAnotherRetrieval() {
+        aiGateway.nextDynamicResponse = dynamicResponse("TIMEOUT", List.of());
+        var message = sendKnowledgeQuestion("查询复杂规范");
+
+        assertThat(message.getAnswer()).contains("检索超时");
+        assertThat(aiGateway.lastModelRequest).isNull();
+        assertThat(aiGateway.dynamicCallCount).isEqualTo(1);
+    }
+
+    @Test
+    void mixedRouteKeepsDatabaseEvidenceWhenKnowledgeIsInsufficient() {
+        aiGateway.nextDynamicResponse = dynamicResponse("INSUFFICIENT", List.of());
+        var session = service.createSession(createSessionRequest(1L, "混合问答"));
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("风险数量及对应规范");
+        request.setRouteMode("MIXED");
+        request.setKnowledgeBaseIds(List.of(10L));
+        request.setDataSourceIds(List.of(100L));
+
+        var message = service.sendMessage(session.getSessionId(), request);
+
+        assertThat(message.getReferences()).singleElement().extracting(reference -> reference.get("type"))
+                .isEqualTo("DATABASE");
+        assertThat(aiGateway.lastModelRequest.getPrompt()).contains("共 3 条记录");
+        assertThat(aiGateway.lastModelRequest.getSystemPrompt()).contains("区分知识库证据与数据库查询结果", "不得丢弃");
+    }
+
+    @Test
+    void referencesExcludeRankedCandidatesDroppedByContextBudget() {
+        aiGateway.nextDynamicResponse = dynamicResponse("SUFFICIENT", List.of(
+                ragRecord("入模来源", "selected"), ragRecord("预算外候选", "dropped")));
+        aiGateway.selectedEvidenceItems = 1;
+
+        var message = sendKnowledgeQuestion("预算证据测试");
+
+        assertThat(message.getReferences()).extracting(reference -> reference.get("sourceId"))
+                .containsExactly("selected");
+        assertThat(message.getUsage()).extractingByKey("contextUsage").isNotNull();
+    }
+
+    @Test
+    void referencesUseExactEvidenceIdsWhenBudgetSkipsAnEarlierCandidate() {
+        aiGateway.nextDynamicResponse = dynamicResponse("SUFFICIENT", List.of(
+                ragRecord("过长未入模", "dropped-first"), ragRecord("实际入模", "selected-second")));
+        aiGateway.selectedEvidenceItems = 1;
+        aiGateway.selectedEvidenceSourceIds = List.of("selected-second");
+
+        var message = sendKnowledgeQuestion("精确证据映射");
+
+        assertThat(message.getReferences()).extracting(reference -> reference.get("sourceId"))
+                .containsExactly("selected-second");
+    }
+
+    private com.xd.smartworksite.qa.dto.QaMessageResponse sendKnowledgeQuestion(String question) {
+        var session = service.createSession(createSessionRequest(1L, "动态问答"));
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion(question);
+        request.setRouteMode("KNOWLEDGE");
+        request.setKnowledgeBaseIds(List.of(10L));
+        return service.sendMessage(session.getSessionId(), request);
+    }
+
+    private RagSearchResponse.Record ragRecord(String title, String sourceId) {
+        RagSearchResponse.Record record = new RagSearchResponse.Record();
+        record.setTitle(title);
+        record.setSourceId(sourceId);
+        record.setContentSnippet(title + "正文");
+        return record;
+    }
+
+    private RagSearchResponse dynamicResponse(String status, List<RagSearchResponse.Record> records) {
+        RagSearchResponse response = new RagSearchResponse();
+        response.setEvidenceStatus(status);
+        response.setRecords(records);
+        response.setProviderTraceId("dynamic-trace");
+        return response;
+    }
+
+    @Test
     void forwardsAtMostLatestHundredSuccessfulMessagesFromCurrentSession() {
         var session = service.createSession(createSessionRequest(1L, "history"));
         for (int i = 0; i < 110; i++) {
@@ -471,6 +621,11 @@ class QaApplicationServiceTest {
         private RagSearchRequest lastRagRequest;
         private DatabaseQueryRequest lastDatabaseRequest;
         private ModelInvokeRequest lastModelRequest;
+        private RagSearchResponse nextDynamicResponse;
+        private boolean dynamicCalled;
+        private int dynamicCallCount;
+        private Integer selectedEvidenceItems;
+        private List<String> selectedEvidenceSourceIds;
 
         @Override
         public RouteResponse route(RouteRequest request) {
@@ -487,7 +642,11 @@ class QaApplicationServiceTest {
             ModelInvokeResponse response = new ModelInvokeResponse();
             response.setAnswer("\u6a21\u578b\u56de\u7b54");
             response.setProviderTraceId("model-trace");
-            response.setUsage(java.util.Map.of("contextUsage", java.util.Map.of("selectedHistoryMessages", 2)));
+            java.util.Map<String, Object> contextUsage = new java.util.LinkedHashMap<>();
+            contextUsage.put("selectedHistoryMessages", 2);
+            if (selectedEvidenceItems != null) contextUsage.put("selectedEvidenceItems", selectedEvidenceItems);
+            if (selectedEvidenceSourceIds != null) contextUsage.put("selectedEvidenceSourceIds", selectedEvidenceSourceIds);
+            response.setUsage(java.util.Map.of("contextUsage", contextUsage));
             return response;
         }
 
@@ -515,6 +674,18 @@ class QaApplicationServiceTest {
         @Override
         public RagSearchResponse searchKnowledgeForSystem(RagSearchRequest request) {
             return searchKnowledge(request);
+        }
+
+        @Override
+        public RagSearchResponse searchKnowledgeDynamic(RagSearchRequest request) {
+            dynamicCalled = true;
+            dynamicCallCount++;
+            return nextDynamicResponse == null ? searchKnowledge(request) : nextDynamicResponse;
+        }
+
+        @Override
+        public RagSearchResponse searchKnowledgeDynamicForSystem(RagSearchRequest request) {
+            return searchKnowledgeDynamic(request);
         }
 
         @Override

@@ -516,6 +516,8 @@ def test_evidence_keeps_source_and_table_metadata_and_marks_natural_boundary_tru
     assert selected.content.endswith("sentence.")
     assert "Third sentence" not in selected.content
     assert result.context_usage["truncatedEvidenceItems"] == 1
+    assert result.context_usage["selectedEvidenceSourceIds"] == [selected.source_id]
+    assert result.context_usage["selectedEvidenceChunkIds"] == ["table-1"]
 
 
 def test_evidence_skips_unreadably_short_remainder_instead_of_filling_budget_with_fragment():

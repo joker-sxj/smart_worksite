@@ -43,6 +43,15 @@ public class AiPythonServiceClient {
     }
 
     public AiProviderResponse post(String path, String callType, Long projectId, Object payload) {
+        return post(path, callType, projectId, payload, properties.getReadTimeoutMs(), properties.getRetryCount());
+    }
+
+    public AiProviderResponse postNoRetry(String path, String callType, Long projectId, Object payload, int timeoutMs) {
+        return post(path, callType, projectId, payload, Math.min(50_000, timeoutMs), 0);
+    }
+
+    private AiProviderResponse post(String path, String callType, Long projectId, Object payload,
+                                    int timeoutMs, int retryCount) {
         long started = System.currentTimeMillis();
         String requestSummary = summarize(payload);
         try {
@@ -50,7 +59,7 @@ public class AiPythonServiceClient {
             HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create(properties.getBaseUrl().replaceAll("/+$", "") + path))
                     .version(HttpClient.Version.HTTP_1_1)
-                    .timeout(Duration.ofMillis(properties.getReadTimeoutMs()))
+                    .timeout(Duration.ofMillis(timeoutMs))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body));
@@ -58,7 +67,7 @@ public class AiPythonServiceClient {
                 builder.header("X-AI-Service-Key", properties.getApiKey());
             }
             Exception lastError = null;
-            for (int attempt = 0; attempt <= Math.max(0, properties.getRetryCount()); attempt++) {
+            for (int attempt = 0; attempt <= Math.max(0, retryCount); attempt++) {
                 try {
                     HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
                     if (response.statusCode() < 200 || response.statusCode() >= 300) {

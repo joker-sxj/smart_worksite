@@ -8,10 +8,25 @@ import java.util.Map;
 public class RagSearchResponse {
     private List<Record> records = new ArrayList<>();
     private String providerTraceId;
+    private String evidenceStatus;
+    private Integer retrievalRounds;
+    private String normalizedQuery;
+    private String rewrittenQuery;
+    private Map<String, Object> diagnostics = new LinkedHashMap<>();
     public List<Record> getRecords() { return records; }
     public void setRecords(List<Record> records) { this.records = records; }
     public String getProviderTraceId() { return providerTraceId; }
     public void setProviderTraceId(String providerTraceId) { this.providerTraceId = providerTraceId; }
+    public String getEvidenceStatus() { return evidenceStatus; }
+    public void setEvidenceStatus(String evidenceStatus) { this.evidenceStatus = evidenceStatus; }
+    public Integer getRetrievalRounds() { return retrievalRounds; }
+    public void setRetrievalRounds(Integer retrievalRounds) { this.retrievalRounds = retrievalRounds; }
+    public String getNormalizedQuery() { return normalizedQuery; }
+    public void setNormalizedQuery(String normalizedQuery) { this.normalizedQuery = normalizedQuery; }
+    public String getRewrittenQuery() { return rewrittenQuery; }
+    public void setRewrittenQuery(String rewrittenQuery) { this.rewrittenQuery = rewrittenQuery; }
+    public Map<String, Object> getDiagnostics() { return diagnostics; }
+    public void setDiagnostics(Map<String, Object> diagnostics) { this.diagnostics = diagnostics; }
     public static class Record {
         private String title;
         private String contentSnippet;

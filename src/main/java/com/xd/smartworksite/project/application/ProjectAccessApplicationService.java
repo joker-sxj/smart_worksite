@@ -79,6 +79,15 @@ public class ProjectAccessApplicationService {
         return project;
     }
 
+    public Project requireUserProjectWritableAccess(Long projectId, Long userId) {
+        Project project = requireProject(projectId);
+        if (userId == null || projectMemberMapper.countActiveMember(projectId, userId) == 0) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "user no longer has access to this project");
+        }
+        ensureProjectWritable(project);
+        return project;
+    }
+
     public List<Project> findAccessibleProjects(String keyword) {
         if (SecurityUtils.isPlatformAdmin()) {
             return projectRepository.findPage(keyword, null);

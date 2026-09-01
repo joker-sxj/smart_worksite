@@ -209,6 +209,8 @@ class ContextBudgetPlanner:
             "selectedHistoryTurns": len(selected_turns),
             "droppedHistoryTurns": max(0, len(candidate_turns) - len(selected_turns)),
             "selectedEvidenceItems": len(evidence),
+            "selectedEvidenceSourceIds": [item.source_id for item in evidence],
+            "selectedEvidenceChunkIds": [item.chunk_id for item in evidence],
             "droppedEvidenceItems": max(0, len(request.evidence_items) - len(selected_keys)),
             "truncatedEvidenceItems": sum(item.truncated for item in evidence),
             "countMode": final_result.mode,

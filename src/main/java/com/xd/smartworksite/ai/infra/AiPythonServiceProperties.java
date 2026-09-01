@@ -54,6 +54,7 @@ public class AiPythonServiceProperties {
         private String modelInvoke = "/v1/model/invoke";
         private String agentInvoke = "/v1/agent/invoke";
         private String ragSearch = "/v1/rag/search";
+        private String ragDynamicSearch = "/v1/rag/dynamic-search";
         private String ragIndex = "/v1/rag/index";
         private String ragDelete = "/v1/rag/delete";
         private String route = "/v1/route";
@@ -69,6 +70,8 @@ public class AiPythonServiceProperties {
         public void setAgentInvoke(String agentInvoke) { this.agentInvoke = agentInvoke; }
         public String getRagSearch() { return ragSearch; }
         public void setRagSearch(String ragSearch) { this.ragSearch = ragSearch; }
+        public String getRagDynamicSearch() { return ragDynamicSearch; }
+        public void setRagDynamicSearch(String ragDynamicSearch) { this.ragDynamicSearch = ragDynamicSearch; }
         public String getRagIndex() { return ragIndex; }
         public void setRagIndex(String ragIndex) { this.ragIndex = ragIndex; }
         public String getRagDelete() { return ragDelete; }

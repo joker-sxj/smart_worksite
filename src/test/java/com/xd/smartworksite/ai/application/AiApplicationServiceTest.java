@@ -107,6 +107,41 @@ class AiApplicationServiceTest {
     }
 
     @Test
+    void dynamicKnowledgeSearchUsesDedicatedNoRetryFiftySecondClientPath() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
+        AiApplicationService service = new AiApplicationService(properties, pythonClient, mock(AiRepository.class),
+                mock(SafeSqlExecutor.class), projectAccess);
+        AiProviderResponse providerResponse = new AiProviderResponse();
+        providerResponse.setTraceId("dynamic-trace");
+        RagSearchResponse converted = new RagSearchResponse();
+        converted.setEvidenceStatus("PARTIAL");
+        when(pythonClient.toMap(any())).thenReturn(new LinkedHashMap<>(Map.of(
+                "projectId", 1L, "knowledgeBaseIds", List.of(10L))));
+        when(pythonClient.postNoRetry(eq("/v1/rag/dynamic-search"), eq("RAG_DYNAMIC_SEARCH"),
+                eq(1L), any(), eq(50_000))).thenReturn(providerResponse);
+        when(pythonClient.convertData(providerResponse, RagSearchResponse.class)).thenReturn(converted);
+        RagSearchRequest request = new RagSearchRequest();
+        request.setProjectId(1L);
+        request.setKnowledgeBaseIds(List.of(10L));
+
+        RagSearchResponse result = service.searchKnowledgeDynamicForSystem(request);
+
+        assertThat(result.getEvidenceStatus()).isEqualTo("PARTIAL");
+        assertThat(result.getProviderTraceId()).isEqualTo("dynamic-trace");
+        verify(pythonClient).postNoRetry(eq("/v1/rag/dynamic-search"), eq("RAG_DYNAMIC_SEARCH"), eq(1L),
+                argThat(payload -> {
+                    Map<?, ?> scope = (Map<?, ?>) ((Map<?, ?>) payload).get("permissionScope");
+                    return "HYBRID".equals(((Map<?, ?>) payload).get("strategy"))
+                            && "PROJECT_KNOWLEDGE_BASES".equals(scope.get("enforcement"))
+                            && Long.valueOf(1L).equals(scope.get("projectId"))
+                            && List.of(10L).equals(scope.get("knowledgeBaseIds"));
+                }), eq(50_000));
+        verify(pythonClient, never()).post(eq("/v1/rag/dynamic-search"), any(), any(), any());
+    }
+
+    @Test
     void repairsDatabaseSqlOnceAfterGrammarErrorAndUsesCorrectedSql() {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);

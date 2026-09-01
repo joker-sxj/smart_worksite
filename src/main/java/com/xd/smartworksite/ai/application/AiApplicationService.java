@@ -98,6 +98,30 @@ public class AiApplicationService {
         return result;
     }
 
+    public RagSearchResponse searchKnowledgeDynamic(RagSearchRequest request) {
+        projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
+        return doSearchKnowledgeDynamic(request);
+    }
+
+    public RagSearchResponse searchKnowledgeDynamicForSystem(RagSearchRequest request) {
+        projectAccessApplicationService.requireProjectWritableForSystem(request.getProjectId());
+        return doSearchKnowledgeDynamic(request);
+    }
+
+    private RagSearchResponse doSearchKnowledgeDynamic(RagSearchRequest request) {
+        Map<String, Object> payload = pythonClient.toMap(request);
+        payload.put("strategy", "HYBRID");
+        payload.put("permissionScope", Map.of(
+                "enforcement", "PROJECT_KNOWLEDGE_BASES",
+                "projectId", request.getProjectId(),
+                "knowledgeBaseIds", request.getKnowledgeBaseIds()));
+        AiProviderResponse response = pythonClient.postNoRetry(properties.getPaths().getRagDynamicSearch(),
+                "RAG_DYNAMIC_SEARCH", request.getProjectId(), payload, 50_000);
+        RagSearchResponse result = pythonClient.convertData(response, RagSearchResponse.class);
+        result.setProviderTraceId(response.getTraceId());
+        return result;
+    }
+
     public RagIndexResponse indexKnowledge(RagIndexRequest request) {
         projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
         return indexKnowledgeForSystem(request);

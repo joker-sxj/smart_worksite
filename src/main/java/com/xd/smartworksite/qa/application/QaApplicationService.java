@@ -256,6 +256,9 @@ public class QaApplicationService {
             QaRouteMode route = normalizeRouteMode(String.valueOf(request.getOrDefault("routeMode", message.getRouteMode())));
             List<Long> knowledgeBaseIds = readIds(request.get("knowledgeBaseIds"));
             List<Long> dataSourceIds = readIds(request.get("dataSourceIds"));
+            projectAccessApplicationService.requireUserProjectWritableAccess(session.getProjectId(), message.getCreatedBy());
+            validateKnowledgeBaseIds(session.getProjectId(), knowledgeBaseIds);
+            validateDataSourceIds(session.getProjectId(), dataSourceIds);
             QaMessageResponse result = answerQuestion(session, message, route, knowledgeBaseIds, dataSourceIds,
                     buildContextMessages(session.getId(), message.getId()), true);
             String answer = answerSanitizer.sanitize(result.getAnswer());
@@ -373,11 +376,15 @@ public class QaApplicationService {
         searchRequest.setProjectId(session.getProjectId());
         searchRequest.setQuery(message.getQuestion());
         searchRequest.setKnowledgeBaseIds(knowledgeBaseIds);
-        RagSearchResponse searchResponse = systemCall ? aiGateway.searchKnowledgeForSystem(searchRequest) : aiGateway.searchKnowledge(searchRequest);
+        RagSearchResponse searchResponse = systemCall ? aiGateway.searchKnowledgeDynamicForSystem(searchRequest) : aiGateway.searchKnowledgeDynamic(searchRequest);
         List<Map<String, Object>> references = searchResponse.getRecords().stream().map(this::referenceFromRag).toList();
+        String status = evidenceStatus(searchResponse);
+        if (mustStopWithoutModel(status, searchResponse.getRecords())) {
+            return deterministicRetrievalResponse(message, searchResponse, references);
+        }
         return answerWithModel(session, message, contextMessages, references, message.getQuestion(),
                 evidenceFromRag(searchResponse.getRecords()), QaRouteMode.KNOWLEDGE.name(),
-                searchResponse.getProviderTraceId(), systemCall);
+                searchResponse.getProviderTraceId(), systemCall, retrievalSystemPrompt(status, false), searchResponse);
     }
 
     private QaMessageResponse answerWithDatabase(QaSession session, QaMessage message, List<Long> dataSourceIds,
@@ -407,9 +414,10 @@ public class QaApplicationService {
         searchRequest.setProjectId(session.getProjectId());
         searchRequest.setQuery(message.getQuestion());
         searchRequest.setKnowledgeBaseIds(knowledgeBaseIds);
-        RagSearchResponse searchResponse = systemCall ? aiGateway.searchKnowledgeForSystem(searchRequest) : aiGateway.searchKnowledge(searchRequest);
+        RagSearchResponse searchResponse = systemCall ? aiGateway.searchKnowledgeDynamicForSystem(searchRequest) : aiGateway.searchKnowledgeDynamic(searchRequest);
         List<Map<String, Object>> references = new ArrayList<>(searchResponse.getRecords().stream().map(this::referenceFromRag).toList());
         String prompt = message.getQuestion();
+        boolean hasDatabase = false;
         if (dataSourceIds.size() == 1) {
             DatabaseQueryRequest queryRequest = new DatabaseQueryRequest();
             queryRequest.setProjectId(session.getProjectId());
@@ -418,10 +426,15 @@ public class QaApplicationService {
             DatabaseQueryResponse databaseResponse = systemCall ? aiGateway.queryDatabaseForSystem(queryRequest) : aiGateway.queryDatabase(queryRequest);
             references.add(databaseReference(databaseResponse));
             prompt = prompt + "\n\n\u6570\u636e\u5e93\u67e5\u8be2\u7ed3\u679c\n" + databaseResponse.getSummary();
+            hasDatabase = true;
+        }
+        String status = evidenceStatus(searchResponse);
+        if (!hasDatabase && mustStopWithoutModel(status, searchResponse.getRecords())) {
+            return deterministicRetrievalResponse(message, searchResponse, references);
         }
         return answerWithModel(session, message, contextMessages, references, prompt,
                 evidenceFromRag(searchResponse.getRecords()), QaRouteMode.MIXED.name(),
-                searchResponse.getProviderTraceId(), systemCall);
+                searchResponse.getProviderTraceId(), systemCall, retrievalSystemPrompt(status, hasDatabase), searchResponse);
     }
 
     private QaMessageResponse answerWithModel(QaSession session, QaMessage message, List<AiMessage> contextMessages,
@@ -440,17 +453,99 @@ public class QaApplicationService {
                                               List<Map<String, Object>> references, String prompt,
                                               List<ModelEvidenceItem> evidenceItems,
                                               String routeMode, String priorTraceId, boolean systemCall) {
+        return answerWithModel(session, message, contextMessages, references, prompt, evidenceItems,
+                routeMode, priorTraceId, systemCall, null, null);
+    }
+
+    private QaMessageResponse answerWithModel(QaSession session, QaMessage message, List<AiMessage> contextMessages,
+                                              List<Map<String, Object>> references, String prompt,
+                                              List<ModelEvidenceItem> evidenceItems, String routeMode,
+                                              String priorTraceId, boolean systemCall, String systemPrompt,
+                                              RagSearchResponse retrieval) {
         var modelRequest = QaAiGateway.modelRequest(
                 session.getProjectId(), prompt == null ? message.getQuestion() : prompt, contextMessages, evidenceItems);
+        if (systemPrompt != null) modelRequest.setSystemPrompt(systemPrompt);
         ModelInvokeResponse modelResponse = systemCall
                 ? aiGateway.invokeModelForSystem(modelRequest)
                 : aiGateway.invokeModel(modelRequest);
         QaMessageResponse response = baseMessageResponse(message, routeMode);
         response.setAnswer(modelResponse.getAnswer());
-        response.setReferences(references);
+        response.setReferences(limitKnowledgeReferencesToModeledEvidence(references, modelResponse.getUsage()));
         response.setProviderTraceId(modelResponse.getProviderTraceId() == null ? priorTraceId : modelResponse.getProviderTraceId());
         response.setUsage(modelResponse.getUsage());
+        if (retrieval != null) response.setRetrievalDiagnostics(retrievalDiagnostics(retrieval));
         return response;
+    }
+
+    private String evidenceStatus(RagSearchResponse response) {
+        return response.getEvidenceStatus() == null ? "SUFFICIENT" : response.getEvidenceStatus().toUpperCase(Locale.ROOT);
+    }
+
+    private boolean mustStopWithoutModel(String status, List<RagSearchResponse.Record> records) {
+        return "TIMEOUT".equals(status) || "INSUFFICIENT".equals(status)
+                || ("RETRIEVAL_DEGRADED".equals(status) && records.isEmpty());
+    }
+
+    private QaMessageResponse deterministicRetrievalResponse(QaMessage message, RagSearchResponse retrieval,
+                                                              List<Map<String, Object>> references) {
+        QaMessageResponse response = baseMessageResponse(message, QaRouteMode.KNOWLEDGE.name());
+        response.setAnswer("TIMEOUT".equals(evidenceStatus(retrieval))
+                ? "知识检索超时，当前无法形成有证据支持的回答，请稍后重试。"
+                : "当前检索到的证据不足，无法形成可靠回答。请补充更具体的条件后再试。");
+        response.setReferences(references);
+        response.setProviderTraceId(retrieval.getProviderTraceId());
+        response.setRetrievalDiagnostics(retrievalDiagnostics(retrieval));
+        return response;
+    }
+
+    private String retrievalSystemPrompt(String status, boolean mixedWithDatabase) {
+        String boundary = mixedWithDatabase
+                ? "必须明确区分知识库证据与数据库查询结果；知识库不足不得丢弃或否定独立且充分的数据库证据。"
+                : "只能依据实际提供的证据回答，不得使用常识补齐。";
+        return switch (status) {
+            case "PARTIAL" -> boundary + "回答必须分为‘可以确认’和‘无法确认’两部分，不得补齐缺失事实。";
+            case "VALIDITY_UNKNOWN" -> boundary + "必须提示资料有效性未确认，并建议用户在现有文本框补充地区、时间、对象或标准名；可以谨慎回答，不得永久拒答。";
+            case "CONFLICT" -> boundary + "只总结冲突，不选边，并列出各冲突来源。";
+            case "RETRIEVAL_DEGRADED" -> boundary + "必须提示检索能力已降级，基于现有资料谨慎回答。";
+            default -> boundary;
+        };
+    }
+
+    private Map<String, Object> retrievalDiagnostics(RagSearchResponse response) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("evidenceStatus", evidenceStatus(response));
+        result.put("retrievalRounds", response.getRetrievalRounds());
+        result.put("normalizedQuery", response.getNormalizedQuery());
+        result.put("rewrittenQuery", response.getRewrittenQuery());
+        result.put("diagnostics", response.getDiagnostics() == null ? Map.of() : response.getDiagnostics());
+        return result;
+    }
+
+    private List<Map<String, Object>> limitKnowledgeReferencesToModeledEvidence(
+            List<Map<String, Object>> references, Map<String, Object> usage) {
+        Object contextUsage = usage == null ? null : usage.get("contextUsage");
+        Object selectedIds = contextUsage instanceof Map<?, ?> map ? map.get("selectedEvidenceSourceIds") : null;
+        Object selectedChunks = contextUsage instanceof Map<?, ?> map ? map.get("selectedEvidenceChunkIds") : null;
+        if (selectedIds instanceof List<?> ids || selectedChunks instanceof List<?>) {
+            var allowed = selectedIds instanceof List<?> sourceIds
+                    ? sourceIds.stream().filter(java.util.Objects::nonNull).map(String::valueOf).collect(java.util.stream.Collectors.toSet())
+                    : java.util.Set.<String>of();
+            var allowedChunks = selectedChunks instanceof List<?> chunkIds
+                    ? chunkIds.stream().filter(java.util.Objects::nonNull).map(String::valueOf).collect(java.util.stream.Collectors.toSet())
+                    : java.util.Set.<String>of();
+            return references.stream().filter(reference -> !"KNOWLEDGE".equals(reference.get("type"))
+                    || allowed.contains(String.valueOf(reference.get("sourceId")))
+                    || (reference.get("metadata") instanceof Map<?, ?> metadata
+                    && allowedChunks.contains(String.valueOf(metadata.get("chunkId"))))).toList();
+        }
+        Object selected = contextUsage instanceof Map<?, ?> map ? map.get("selectedEvidenceItems") : null;
+        if (!(selected instanceof Number number)) return references;
+        int remaining = Math.max(0, number.intValue());
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map<String, Object> reference : references) {
+            if (!"KNOWLEDGE".equals(reference.get("type")) || remaining-- > 0) result.add(reference);
+        }
+        return result;
     }
 
     private QaMessageResponse clarificationResponse(QaMessage message, RouteResponse routeResponse) {
@@ -707,6 +802,7 @@ public class QaApplicationService {
         target.setNeedClarification(source.getNeedClarification());
         target.setClarificationQuestions(source.getClarificationQuestions());
         target.setProviderTraceId(source.getProviderTraceId());
+        target.setRetrievalDiagnostics(source.getRetrievalDiagnostics());
         target.setCreatedAt(source.getCreatedAt());
         target.setUpdatedAt(source.getUpdatedAt());
     }
@@ -715,6 +811,7 @@ public class QaApplicationService {
         target.setNeedClarification(source.getNeedClarification());
         target.setClarificationQuestions(source.getClarificationQuestions());
         target.setProviderTraceId(source.getProviderTraceId());
+        target.setRetrievalDiagnostics(source.getRetrievalDiagnostics());
     }
 
     private List<Long> readIds(Object value) {
