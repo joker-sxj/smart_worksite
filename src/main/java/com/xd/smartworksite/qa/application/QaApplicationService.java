@@ -221,21 +221,41 @@ public class QaApplicationService {
 
     private QaMessageResponse executeSynchronously(QaSession session, QaMessage message, QaRouteMode route,
                                                    List<Long> knowledgeBaseIds, List<Long> dataSourceIds, Long userId) {
-        QaMessageResponse aiResult = answerQuestion(session, message, route, knowledgeBaseIds, dataSourceIds,
-                buildContextMessages(session.getId(), message.getId()), false);
-        String answer = answerSanitizer.sanitize(aiResult.getAnswer());
-        if (answer == null || answer.isBlank()) {
-            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "qa answer was empty after sanitization");
-        }
-        message.setAnswer(answer);
-        message.setRouteMode(aiResult.getRouteMode());
-        message.setReferencesJson(writeJson(aiResult.getReferences()));
-        message.setUsageJson(writeJson(aiResult.getUsage()));
-        message.setRetrievalDiagnosticsJson(writeJson(safeRetrievalDiagnostics(aiResult.getRetrievalDiagnostics())));
-        message.setStatus(QaMessageStatus.SUCCESS.name());
-        message.setUpdatedBy(userId);
-        if (qaRepository.updateMessage(message) == 0) {
-            throw new BusinessException(ErrorCode.CONFLICT, "qa message answer update failed");
+        QaMessageResponse aiResult;
+        try {
+            aiResult = answerQuestion(session, message, route, knowledgeBaseIds, dataSourceIds,
+                    buildContextMessages(session.getId(), message.getId()), false);
+            String answer = answerSanitizer.sanitize(aiResult.getAnswer());
+            if (answer == null || answer.isBlank()) {
+                throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "qa answer was empty after sanitization");
+            }
+            message.setAnswer(answer);
+            message.setRouteMode(aiResult.getRouteMode());
+            message.setReferencesJson(writeJson(aiResult.getReferences()));
+            message.setUsageJson(writeJson(aiResult.getUsage()));
+            message.setRetrievalDiagnosticsJson(writeJson(safeRetrievalDiagnostics(aiResult.getRetrievalDiagnostics())));
+            message.setStatus(QaMessageStatus.SUCCESS.name());
+            message.setUpdatedBy(userId);
+            if (qaRepository.updateMessage(message) == 0) {
+                throw new BusinessException(ErrorCode.CONFLICT, "qa message answer update failed");
+            }
+        } catch (RuntimeException ex) {
+            message.setAnswer(null);
+            message.setReferencesJson("[]");
+            message.setUsageJson("{}");
+            message.setRetrievalDiagnosticsJson(writeJson(failureDiagnostics(ex)));
+            message.setStatus(QaMessageStatus.FAILED.name());
+            message.setErrorMessage(limitError(ex.getMessage()));
+            message.setUpdatedBy(userId);
+            if (qaRepository.updateMessage(message) == 0) {
+                BusinessException persistenceFailure = new BusinessException(
+                        ErrorCode.CONFLICT,
+                        "qa message failure state cannot be persisted: " + limitError(ex.getMessage())
+                );
+                persistenceFailure.addSuppressed(ex);
+                throw persistenceFailure;
+            }
+            return toMessageResponse(message);
         }
         QaMessageResponse response = toMessageResponse(requireMessageAccess(message.getId()));
         copyTransientAnswerFields(aiResult, response);
@@ -533,7 +553,7 @@ public class QaApplicationService {
     private Map<String, Object> safeRetrievalDiagnostics(Map<String, Object> source) {
         if (source == null) return Map.of();
         Map<String, Object> safe = new LinkedHashMap<>();
-        List<String> keys = List.of("evidenceStatus", "retrievalRounds", "normalizedQuery", "rewrittenQuery",
+        List<String> keys = List.of("status", "evidenceStatus", "retrievalRounds", "normalizedQuery", "rewrittenQuery",
                 "candidateCount", "selectedCount", "questionType", "validityStatus",
                 "futureEffectiveFrom", "queryFingerprints", "degradedComponents", "missingAspects", "stopReason");
         if (source.containsKey("attemptNo")) keys = List.of("attemptNo", "queryFingerprint", "strategy",
@@ -825,7 +845,7 @@ public class QaApplicationService {
         response.setReferences(readList(message.getReferencesJson()));
         response.setUsage(readMap(message.getUsageJson()));
         response.setFeedback(readMap(message.getFeedbackJson()));
-        response.setRetrievalDiagnostics(readMap(message.getRetrievalDiagnosticsJson()));
+        response.setRetrievalDiagnostics(safeRetrievalDiagnostics(readMap(message.getRetrievalDiagnosticsJson())));
         response.setStatus(message.getStatus());
         response.setCreatedAt(message.getCreatedAt());
         response.setUpdatedAt(message.getUpdatedAt());

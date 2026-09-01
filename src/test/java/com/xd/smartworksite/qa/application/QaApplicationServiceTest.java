@@ -25,6 +25,7 @@ import com.xd.smartworksite.qa.domain.QaMessage;
 import com.xd.smartworksite.qa.domain.QaSession;
 import com.xd.smartworksite.qa.dto.QaFeedbackRequest;
 import com.xd.smartworksite.qa.dto.QaMessageSendRequest;
+import com.xd.smartworksite.qa.dto.QaMessageResponse;
 import com.xd.smartworksite.qa.dto.QaSessionCreateRequest;
 import com.xd.smartworksite.qa.dto.QaSessionQueryRequest;
 import com.xd.smartworksite.qa.dto.QaSessionUpdateRequest;
@@ -125,6 +126,77 @@ class QaApplicationServiceTest {
         assertThatThrownBy(() -> service.sendMessage(session.getSessionId(), request))
                 .isInstanceOfSatisfying(BusinessException.class, ex ->
                         assertThat(ex.getCode()).isEqualTo(ErrorCode.CONFLICT.getCode()));
+    }
+
+    @Test
+    void synchronousGenerationFailurePersistsAndReturnsFailedMessage() {
+        var session = service.createSession(createSessionRequest(1L, "current-project"));
+        aiGateway.modelFailure = new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "model token=secret failed");
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("question");
+        request.setRouteMode("MODEL");
+
+        var response = service.sendMessage(session.getSessionId(), request);
+
+        assertThat(response.getStatus()).isEqualTo("FAILED");
+        assertThat(response.getAnswer()).isNull();
+        assertThat(response.getErrorMessage()).isEqualTo("model token=secret failed");
+        assertThat(response.getRetrievalDiagnostics())
+                .containsEntry("status", "FAILED")
+                .containsEntry("stopReason", "EXCEPTION");
+        assertThat(response.getRetrievalDiagnostics().toString()).doesNotContain("token", "secret");
+        assertThat(qaRepository.findMessageById(response.getMessageId())).get().satisfies(message -> {
+            assertThat(message.getStatus()).isEqualTo("FAILED");
+            assertThat(message.getRetrievalDiagnosticsJson())
+                    .contains("\"status\":\"FAILED\"", "\"stopReason\":\"EXCEPTION\"");
+        });
+    }
+
+    @Test
+    void synchronousGenerationFailurePreservesOriginalExceptionWhenFailedStateCannotBePersisted() {
+        var session = service.createSession(createSessionRequest(1L, "current-project"));
+        BusinessException original = new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "model down");
+        aiGateway.modelFailure = original;
+        qaRepository.failMessageUpdate = true;
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("question");
+        request.setRouteMode("MODEL");
+
+        assertThatThrownBy(() -> service.sendMessage(session.getSessionId(), request))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(ErrorCode.CONFLICT.getCode());
+                    assertThat(ex.getMessage()).contains("failure state cannot be persisted");
+                    assertThat(ex.getSuppressed()).containsExactly(original);
+                });
+    }
+
+    @Test
+    void messageReadbackFiltersUnsafeDiagnosticsFromDatabaseJson() throws Exception {
+        var session = service.createSession(createSessionRequest(1L, "current-project"));
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("question");
+        request.setRouteMode("MODEL");
+        var created = service.sendMessage(session.getSessionId(), request);
+        QaMessage stored = qaRepository.findMessageById(created.getMessageId()).orElseThrow();
+        stored.setRetrievalDiagnosticsJson(new ObjectMapper().writeValueAsString(java.util.Map.of(
+                "status", "FAILED",
+                "stopReason", "EXCEPTION",
+                "prompt", "hidden prompt",
+                "token", "secret-token",
+                "internalUrl", "http://internal.service/admin",
+                "path", "C:\\secrets\\key.txt",
+                "attempts", List.of(java.util.Map.of(
+                        "attemptNo", 1, "elapsedMs", 12, "internalUrl", "http://private")))));
+
+        var response = service.getMessage(created.getMessageId());
+
+        assertThat(response.getRetrievalDiagnostics())
+                .containsEntry("status", "FAILED")
+                .containsEntry("stopReason", "EXCEPTION")
+                .doesNotContainKeys("prompt", "token", "internalUrl", "path");
+        assertThat(response.getRetrievalDiagnostics().toString())
+                .contains("elapsedMs=12")
+                .doesNotContain("hidden prompt", "secret-token", "internal.service", "private", "secrets");
     }
 
     @Test
@@ -509,15 +581,15 @@ class QaApplicationServiceTest {
     }
 
     @Test
-    void databaseRouteRequiresExactlyOneDataSource() {
+    void databaseRouteFailureAfterMessageInsertIsReturnedAsFailedMessage() {
         var session = service.createSession(createSessionRequest(1L, "current-project"));
         QaMessageSendRequest request = new QaMessageSendRequest();
         request.setQuestion("\u98ce\u9669\u4e8b\u4ef6\u6570\u91cf");
         request.setRouteMode("DATABASE");
 
-        assertThatThrownBy(() -> service.sendMessage(session.getSessionId(), request))
-                .isInstanceOfSatisfying(BusinessException.class, ex ->
-                        assertThat(ex.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode()));
+        assertThat(service.sendMessage(session.getSessionId(), request))
+                .extracting(QaMessageResponse::getStatus)
+                .isEqualTo("FAILED");
     }
 
     @Test
@@ -664,6 +736,7 @@ class QaApplicationServiceTest {
         private boolean dynamicCalled;
         private int dynamicCallCount;
         private Integer selectedEvidenceItems;
+        private RuntimeException modelFailure;
         private List<String> selectedEvidenceSourceIds;
         private List<String> selectedEvidenceChunkIds;
 
@@ -679,6 +752,7 @@ class QaApplicationServiceTest {
         @Override
         public ModelInvokeResponse invokeModel(ModelInvokeRequest request) {
             lastModelRequest = request;
+            if (modelFailure != null) throw modelFailure;
             ModelInvokeResponse response = new ModelInvokeResponse();
             response.setAnswer("\u6a21\u578b\u56de\u7b54");
             response.setProviderTraceId("model-trace");
