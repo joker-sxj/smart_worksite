@@ -176,6 +176,12 @@ export interface QaReference {
   documentId?: ID;
 }
 
+export type QaEvidenceStatus = 'SUFFICIENT' | 'PARTIAL' | 'INSUFFICIENT' | 'CONFLICT' | 'VALIDITY_UNKNOWN' | 'RETRIEVAL_DEGRADED' | 'TIMEOUT';
+
+export interface QaRetrievalDiagnostics extends Record<string, unknown> {
+  evidenceStatus?: QaEvidenceStatus | string;
+}
+
 export interface QaMessage {
   messageId: ID;
   sessionId: ID;
@@ -184,6 +190,8 @@ export interface QaMessage {
   answer?: string;
   routeMode?: 'AUTO' | 'MODEL' | 'KNOWLEDGE' | 'DATABASE' | 'MIXED';
   references?: QaReference[];
+  retrievalDiagnostics?: QaRetrievalDiagnostics;
+  evidenceStatus?: QaEvidenceStatus | string;
   feedback?: Record<string, unknown>;
   status: Status;
   taskId?: ID;

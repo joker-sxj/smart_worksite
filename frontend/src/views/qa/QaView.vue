@@ -1,3 +1,29 @@
+<script lang="ts">
+import type { QaEvidenceStatus, QaMessage } from '../../api/types';
+
+export const EVIDENCE_RECOVERY_PROMPT = '请在下方问题框补充地区、时间、对象或指定标准名称后重新发送。';
+export const evidenceStatusMeta: Record<Exclude<QaEvidenceStatus, 'SUFFICIENT'>, { label: string; meaning: string; tagType: 'warning' | 'danger' | 'info' }> = {
+  PARTIAL: { label: '证据部分充分', meaning: '部分内容已有证据支持，但仍有信息未覆盖。', tagType: 'warning' },
+  INSUFFICIENT: { label: '证据不足', meaning: '现有资料不足以形成可靠回答。', tagType: 'warning' },
+  CONFLICT: { label: '证据存在冲突', meaning: '不同来源的信息互相冲突，暂不宜直接下结论。', tagType: 'danger' },
+  VALIDITY_UNKNOWN: { label: '资料有效性未知', meaning: '资料的适用地区或有效时间尚未确认。', tagType: 'warning' },
+  RETRIEVAL_DEGRADED: { label: '检索能力已降级', meaning: '部分检索能力不可用，当前结果可能不完整。', tagType: 'warning' },
+  TIMEOUT: { label: '检索超时', meaning: '检索未在时限内完成，当前结果可能不完整。', tagType: 'info' }
+};
+
+export function qaEvidenceRecovery(message: QaMessage & Record<string, unknown>) {
+  const messageStatus = String(message.status || '').toUpperCase();
+  const role = String(message.role || 'assistant').toLowerCase();
+  if (role !== 'assistant' || message.pending || messageStatus === 'FAILED') return null;
+  const evidenceStatus = String(message.retrievalDiagnostics?.evidenceStatus || message.evidenceStatus || '').toUpperCase();
+  return evidenceStatusMeta[evidenceStatus as keyof typeof evidenceStatusMeta] || null;
+}
+
+export function appendQaSubmission<T, U, V>(existing: T[], userMessage: U, pendingMessage: V): Array<T | U | V> {
+  return [...existing, userMessage, pendingMessage];
+}
+</script>
+
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -7,7 +33,7 @@ import { fetchKnowledgeBases } from '../../api/knowledge';
 import { archiveQaSession, createQaSession, fetchQaMessageDetail, fetchQaMessageReferences, fetchQaMessages, fetchQaSessionDetail, fetchQaSessions, regenerateMessage, sendQuestion, submitFeedback, updateQaSession } from '../../api/qa';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
-import type { DataSourceItem, ID, KnowledgeBase, QaMessage, QaSession } from '../../api/types';
+import type { DataSourceItem, ID, KnowledgeBase, QaSession } from '../../api/types';
 import { hasSuspiciousText } from '../../utils/textQuality';
 import { renderQaMarkdown } from '../../utils/qaMarkdown';
 import { hasActiveQaGeneration, normalizeQaMessages, qaMessageText } from './qaMessagePolling';
@@ -70,6 +96,10 @@ function messageRole(msg: QaMessageExtra) {
 
 function messageText(msg: QaMessageExtra) {
   return qaMessageText(msg);
+}
+
+function messageEvidenceMeta(msg: QaMessageExtra) {
+  return qaEvidenceRecovery(msg);
 }
 
 function stopMessagePolling() {
@@ -283,9 +313,8 @@ async function ask() {
   messageError.value = '';
   const sessionId = activeSessionId.value;
   const userMessage = createLocalUserMessage(sessionId, projectId, content);
-  messages.value.push(userMessage);
   const pendingMessage = createPendingAssistantMessage(sessionId, projectId);
-  messages.value.push(pendingMessage);
+  messages.value = appendQaSubmission(messages.value, userMessage, pendingMessage);
   const sendToken = `${Date.now()}-${Math.random()}`;
   activeSend.value = { token: sendToken, userMessageId: userMessage.messageId, pendingMessageId: pendingMessage.messageId, content };
   question.value = '';
@@ -400,6 +429,13 @@ onUnmounted(stopMessagePolling);
             <div v-if="msg.pending && messageRole(msg) === 'assistant'" class="typing-indicator" aria-live="polite"><span></span><span></span><span></span>{{ t('AI 正在生成回答') }}</div>
             <div v-else class="message-body" v-html="renderMessageHtml(msg)"></div>
             <template v-if="messageRole(msg) === 'assistant'">
+              <div v-if="messageEvidenceMeta(msg)" class="evidence-recovery" role="status">
+                <div class="evidence-status-line">
+                  <el-tag :type="messageEvidenceMeta(msg)?.tagType" size="small">{{ messageEvidenceMeta(msg)?.label }}</el-tag>
+                  <span>{{ messageEvidenceMeta(msg)?.meaning }}</span>
+                </div>
+                <p>{{ EVIDENCE_RECOVERY_PROMPT }}</p>
+              </div>
               <div v-if="msg.needClarification || msg.clarificationQuestions?.length" class="clarify-block"><strong>{{ t('需要补充的信息') }}</strong><ul><li v-for="item in msg.clarificationQuestions" :key="item">{{ item }}</li></ul></div>
               <div v-if="!msg.pending" class="feedback">
                 <span v-if="feedbackMap[String(msg.messageId)] !== undefined">{{ t('已反馈：') }}{{ feedbackMap[String(msg.messageId)] ? t('有用') : t('无用') }}</span>
@@ -479,6 +515,9 @@ onUnmounted(stopMessagePolling);
 .typing-indicator span:nth-child(3) { animation-delay: 0.3s; }
 @keyframes qa-typing { 0%, 80%, 100% { opacity: 0.35; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
 .answer-meta { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.evidence-recovery { margin-top: 10px; padding: 10px 12px; border: 1px solid #fed7aa; border-radius: 10px; background: #fffaf2; color: #7c2d12; font-size: 13px; line-height: 1.55; }
+.evidence-status-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.evidence-recovery p { margin: 6px 0 0; color: #9a3412; }
 .clarify-block { margin-top: 10px; padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; }
 .clarify-block ul { margin: 6px 0 0; padding-left: 18px; }
 .reference-block { margin-top: 10px; padding: 10px; background: #f8fafc; border-radius: 10px; }
@@ -491,5 +530,5 @@ onUnmounted(stopMessagePolling);
 .input-label { margin: 10px 0 8px; font-weight: 700; }
 .refs-title { margin-top: 16px; }
 .json-block { white-space: pre-wrap; background: #f8fafc; border: 1px solid var(--sw-border); border-radius: 10px; padding: 12px; max-height: 320px; overflow: auto; }
-@media (max-width: 960px) { .qa-page { height: auto; overflow: visible; } .three-col { grid-template-columns: 1fr; } .session-card, .qa-main { overflow: visible; } .message-scroll, .session-list { max-height: none; overflow: visible; } }
+@media (max-width: 960px) { .qa-page { height: auto; overflow: visible; } .three-col { grid-template-columns: 1fr; } .session-card, .qa-main { overflow: visible; } .message-scroll, .session-list { max-height: none; overflow: visible; } .chat.user, .chat.assistant { width: auto; max-width: 100%; } .evidence-status-line { align-items: flex-start; } }
 </style>
