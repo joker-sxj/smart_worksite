@@ -11,6 +11,8 @@ from .qwen_client import QwenClient
 from .vector_store import (ChunkRecord, LocalJsonVectorStore, PgVectorStore, MilvusVectorStore, VectorStore,
                            chinese_numeral_to_int, compact_search_text, extract_clause_numbers, iter_bigrams, text_match_score)
 
+MAX_MERGED_CANDIDATES = 100
+
 
 def split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     clean = re.sub(r"\s+", " ", text).strip()
@@ -119,11 +121,16 @@ class RagService:
         return RagDeleteData(deletedChunks=deleted, provider=self.settings.rag_provider.upper())
 
     async def search(self, request: RagSearchRequest) -> tuple[RagSearchData, dict[str, Any]]:
-        vectors, usage = await self.embed([request.query])
+        degraded_components: list[str] = []
+        try:
+            vectors, usage = await self.embed([request.query])
+        except Exception:
+            vectors, usage = [], {"embeddingProvider": "TEXT_FALLBACK"}
+            degraded_components.append("EMBEDDING")
         candidate_limit = max(request.topK, self.settings.rag_rerank_top_k if request.rerankEnabled else request.topK)
         candidates = await self.store.search(
             vectors[0], request.projectId, request.knowledgeBaseIds, candidate_limit
-        )
+        ) if vectors else []
         text_search = getattr(self.store, "search_text", None)
         text_candidates = await text_search(
             request.query, request.projectId, request.knowledgeBaseIds, max(candidate_limit, request.topK * 4)
@@ -139,6 +146,8 @@ class RagService:
         if request.rerankEnabled:
             records, rerank_usage = await self.rerank(request.query, records, len(records))
             usage = merge_usage(usage, rerank_usage)
+            if rerank_usage.get("rerankProvider") == "LEXICAL_FALLBACK":
+                degraded_components.append("RERANKER")
         records = [
             (chunk, score, clause_aware_score(request.query, chunk, rerank_score))
             for chunk, score, rerank_score in records
@@ -193,6 +202,8 @@ class RagService:
                     metadata=neighbor_metadata,
                 ))
                 emitted_ids.add(neighbor.id)
+        if degraded_components:
+            usage["degradedComponents"] = degraded_components
         return RagSearchData(records=output), usage
 
     async def embed(self, texts: list[str]) -> tuple[list[list[float]], dict[str, Any]]:
@@ -249,7 +260,7 @@ def merge_candidates(
             current = merged.get(chunk.id)
             if current is None or normalized > current[1]:
                 merged[chunk.id] = (chunk, normalized)
-    return sorted(merged.values(), key=lambda item: item[1], reverse=True)
+    return sorted(merged.values(), key=lambda item: item[1], reverse=True)[:MAX_MERGED_CANDIDATES]
 
 
 def to_rag_record(chunk: ChunkRecord, score: float, rerank_score: float) -> RagRecord:

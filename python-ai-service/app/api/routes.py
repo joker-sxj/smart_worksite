@@ -10,6 +10,8 @@ from app.models.schemas import (
     AgentInvokeData,
     RagSearchRequest,
     RagSearchData,
+    DynamicRetrievalRequest,
+    DynamicRetrievalData,
     RagIndexRequest,
     RagIndexData,
     RagDeleteRequest,
@@ -33,6 +35,7 @@ from app.services.qwen_client import QwenClient
 from app.services.model_readiness_service import ModelReadinessService
 from app.services.model_service import ModelService, AgentService
 from app.services.rag_service import RagService
+from app.services.retrieval_orchestrator import RetrievalOrchestrator
 from app.services.route_context_service import RouteService, ContextService
 from app.services.database_service import DatabaseQaService
 from app.services.agent_tools import ToolRegistry, ToolSpec
@@ -84,6 +87,7 @@ def services():
         "model": ModelService(qwen, ContextBudgetPlanner(TokenCounter(settings, qwen)), settings),
         "agent": AgentService(qwen, registry),
         "rag": rag,
+        "retrieval": RetrievalOrchestrator(rag.search),
         "route": RouteService(qwen),
         "context": ContextService(qwen),
         "database": db,
@@ -121,6 +125,12 @@ async def agent_invoke(request: AgentInvokeRequest):
 @router.post("/rag/search", response_model=StandardResponse[RagSearchData])
 async def rag_search(request: RagSearchRequest):
     data, usage = await services()["rag"].search(request)
+    return ok(data, usage)
+
+
+@router.post("/rag/dynamic-search", response_model=StandardResponse[DynamicRetrievalData])
+async def rag_dynamic_search(request: DynamicRetrievalRequest):
+    data, usage = await services()["retrieval"].retrieve(request)
     return ok(data, usage)
 
 

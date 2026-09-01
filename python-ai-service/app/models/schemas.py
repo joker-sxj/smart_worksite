@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Any, Generic, TypeVar
 from pydantic import BaseModel, Field, PositiveInt, model_validator
 
@@ -68,7 +69,7 @@ class RagSearchRequest(BaseModel):
     projectId: PositiveInt
     knowledgeBaseIds: list[PositiveInt] = Field(min_length=1)
     libraryTypes: list[str] = Field(default_factory=list)
-    topK: int = 5
+    topK: int = Field(default=5, ge=1, le=100)
     scoreThreshold: float | None = None
     rerankEnabled: bool = True
 
@@ -89,6 +90,60 @@ class RagRecord(BaseModel):
 
 class RagSearchData(BaseModel):
     records: list[RagRecord] = Field(default_factory=list)
+
+
+class EvidenceStatus(str, Enum):
+    SUFFICIENT = "SUFFICIENT"
+    PARTIAL = "PARTIAL"
+    INSUFFICIENT = "INSUFFICIENT"
+    CONFLICT = "CONFLICT"
+    VALIDITY_UNKNOWN = "VALIDITY_UNKNOWN"
+    RETRIEVAL_DEGRADED = "RETRIEVAL_DEGRADED"
+    TIMEOUT = "TIMEOUT"
+
+
+class RetrievalDiagnostics(BaseModel):
+    candidateCount: int = 0
+    queryFingerprints: list[str] = Field(default_factory=list)
+    degradedComponents: list[str] = Field(default_factory=list)
+    missingAspects: list[str] = Field(default_factory=list)
+    stopReason: str | None = None
+
+
+class DynamicRetrievalRequest(RagSearchRequest):
+    documentScope: list[str] = Field(default_factory=list)
+    strategy: str = "HYBRID"
+    permissionScope: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def normalize_dynamic_scope(self):
+        self.documentScope = list(dict.fromkeys(value.strip() for value in self.documentScope))
+        if any(not value for value in self.documentScope):
+            raise ValueError("documentScope must not contain blank values")
+        self.strategy = self.strategy.strip().upper()
+        if not self.strategy:
+            raise ValueError("strategy must not be blank")
+        return self
+
+    def as_rag_search_request(self, query: str | None = None) -> RagSearchRequest:
+        return RagSearchRequest(
+            query=query or self.query,
+            projectId=self.projectId,
+            knowledgeBaseIds=self.knowledgeBaseIds,
+            libraryTypes=self.libraryTypes,
+            topK=self.topK,
+            scoreThreshold=self.scoreThreshold,
+            rerankEnabled=self.rerankEnabled,
+        )
+
+
+class DynamicRetrievalData(BaseModel):
+    records: list[RagRecord] = Field(default_factory=list)
+    evidenceStatus: EvidenceStatus
+    retrievalRounds: int = Field(ge=0, le=2)
+    normalizedQuery: str | None = None
+    rewrittenQuery: str | None = None
+    diagnostics: RetrievalDiagnostics = Field(default_factory=RetrievalDiagnostics)
 
 
 class RagDocumentBlock(BaseModel):
