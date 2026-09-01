@@ -30,6 +30,39 @@ export function qaValidityCaution(message: QaMessage & Record<string, unknown>) 
 export function appendQaSubmission<T, U, V>(existing: T[], userMessage: U, pendingMessage: V): Array<T | U | V> {
   return [...existing, userMessage, pendingMessage];
 }
+
+export function qaSuggestedFollowUps(message: QaMessage & Record<string, unknown>) {
+  const messageStatus = String(message.status || '').toUpperCase();
+  const suggestionStatus = String(message.suggestionStatus || '').toUpperCase();
+  const role = String(message.role || 'assistant').toLowerCase();
+  if (role !== 'assistant' || message.pending || messageStatus !== 'SUCCESS' || suggestionStatus !== 'SUCCESS') return [];
+  if (!Array.isArray(message.suggestedFollowUpQuestions)) return [];
+  return message.suggestedFollowUpQuestions
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim())
+    .slice(0, 3);
+}
+
+export interface SuggestedFollowUpSubmissionState {
+  pending: boolean;
+  submittedKeys: Set<string>;
+}
+
+export async function runSuggestedFollowUpSubmission(
+  state: SuggestedFollowUpSubmissionState,
+  key: string,
+  submit: () => Promise<void>
+) {
+  if (state.pending || state.submittedKeys.has(key)) return false;
+  state.pending = true;
+  try {
+    await submit();
+    state.submittedKeys.add(key);
+    return true;
+  } finally {
+    state.pending = false;
+  }
+}
 </script>
 
 <script setup lang="ts">
@@ -41,10 +74,10 @@ import { fetchKnowledgeBases } from '../../api/knowledge';
 import { archiveQaSession, createQaSession, fetchQaMessageDetail, fetchQaMessageReferences, fetchQaMessages, fetchQaSessionDetail, fetchQaSessions, regenerateMessage, sendQuestion, submitFeedback, updateQaSession } from '../../api/qa';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
-import type { DataSourceItem, ID, KnowledgeBase, QaSession } from '../../api/types';
+import type { DataSourceItem, ID, KnowledgeBase, QaMessageSendRequest, QaSession } from '../../api/types';
 import { hasSuspiciousText } from '../../utils/textQuality';
 import { renderQaMarkdown } from '../../utils/qaMarkdown';
-import { hasActiveQaGeneration, normalizeQaMessages, qaMessageText } from './qaMessagePolling';
+import { hasActiveQaGeneration, normalizeQaMessages, qaMessageText, restoreSubmittedSuggestionKeys } from './qaMessagePolling';
 
 type QaMessageExtra = QaMessage & Record<string, unknown>;
 
@@ -77,6 +110,7 @@ const selectedDataSourceId = ref<ID | ''>('');
 const resourceLoading = ref(false);
 const resourceError = ref('');
 const activeSend = ref<{ token: string; userMessageId: ID; pendingMessageId: ID; content: string } | null>(null);
+const suggestionSubmission = ref<SuggestedFollowUpSubmissionState>({ pending: false, submittedKeys: new Set<string>() });
 let messagePollTimer: ReturnType<typeof setTimeout> | null = null;
 const MESSAGE_POLL_INTERVAL_MS = 2000;
 
@@ -112,6 +146,14 @@ function messageEvidenceMeta(msg: QaMessageExtra) {
 
 function messageValidityCaution(msg: QaMessageExtra) {
   return qaValidityCaution(msg);
+}
+
+function messageSuggestions(msg: QaMessageExtra) {
+  return qaSuggestedFollowUps(msg);
+}
+
+function suggestionKey(msg: QaMessageExtra, index: number) {
+  return `${msg.messageId}:${index}`;
 }
 
 function stopMessagePolling() {
@@ -311,10 +353,18 @@ async function newSession() {
   }
 }
 
-async function ask() {
+function buildQuestionPayload(content: string, extra: Partial<QaMessageSendRequest> = {}): QaMessageSendRequest {
+  return {
+    question: content,
+    routeMode: routeMode.value,
+    knowledgeBaseIds: ['AUTO', 'KNOWLEDGE', 'MIXED'].includes(routeMode.value) ? selectedKnowledgeBaseIds.value : [],
+    dataSourceIds: ['AUTO', 'DATABASE', 'MIXED'].includes(routeMode.value) && selectedDataSourceId.value ? [selectedDataSourceId.value] : [],
+    ...extra
+  };
+}
+
+async function submitQuestion(content: string, payloadExtra: Partial<QaMessageSendRequest> = {}, clearManualInput = true) {
   if (!canManageQa.value) return ElMessage.warning(qaManageTip);
-  const content = question.value.trim();
-  if (!content) return ElMessage.warning(t('请输入问题'));
   const projectId = projectStore.currentProject?.projectId;
   if (!projectId) return ElMessage.warning(t('请先选择项目'));
   if (!activeSessionId.value) return ElMessage.warning(t('请先新建会话'));
@@ -329,30 +379,49 @@ async function ask() {
   messages.value = appendQaSubmission(messages.value, userMessage, pendingMessage);
   const sendToken = `${Date.now()}-${Math.random()}`;
   activeSend.value = { token: sendToken, userMessageId: userMessage.messageId, pendingMessageId: pendingMessage.messageId, content };
-  question.value = '';
+  if (clearManualInput) question.value = '';
   try {
-    const payload = {
-      question: content,
-      routeMode: routeMode.value,
-      knowledgeBaseIds: ['AUTO', 'KNOWLEDGE', 'MIXED'].includes(routeMode.value) ? selectedKnowledgeBaseIds.value : [],
-      dataSourceIds: ['AUTO', 'DATABASE', 'MIXED'].includes(routeMode.value) && selectedDataSourceId.value ? [selectedDataSourceId.value] : []
-    };
+    const payload = buildQuestionPayload(content, payloadExtra);
     await sendQuestion(sessionId, payload, projectId) as QaMessageExtra;
-    if (activeSend.value?.token !== sendToken) return;
+    if (activeSend.value?.token !== sendToken) return false;
     messages.value = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+    suggestionSubmission.value.submittedKeys = restoreSubmittedSuggestionKeys(messages.value);
     scheduleMessagePolling(sessionId);
+    return true;
   } catch (err) {
-    if (activeSend.value?.token !== sendToken) return;
+    if (activeSend.value?.token !== sendToken) return false;
     const detail = err instanceof Error && err.message ? ` ${err.message}` : '';
     const pendingIndex = messages.value.findIndex((msg) => String(msg.messageId) === String(pendingMessage.messageId));
     const errorMessage = createErrorAssistantMessage(sessionId, projectId, `${t('问题发送失败，请检查后端问答接口。')}${detail}`);
     if (pendingIndex >= 0) messages.value.splice(pendingIndex, 1, errorMessage);
     else messages.value.push(errorMessage);
+    return false;
   } finally {
     if (activeSend.value?.token === sendToken) {
       activeSend.value = null;
       sending.value = false;
     }
+  }
+}
+
+async function ask() {
+  const content = question.value.trim();
+  if (!content) return ElMessage.warning(t('请输入问题'));
+  return submitQuestion(content);
+}
+
+async function askSuggestedFollowUp(msg: QaMessageExtra, suggestion: string, index: number) {
+  const key = suggestionKey(msg, index);
+  try {
+    await runSuggestedFollowUpSubmission(suggestionSubmission.value, key, async () => {
+      const sent = await submitQuestion(suggestion, {
+        clientRequestId: `suggestion-${msg.sessionId}-${msg.messageId}-${index}`,
+        sourceSuggestionMessageId: msg.messageId
+      }, false);
+      if (sent !== true) throw new Error('suggestion submission failed');
+    });
+  } catch {
+    // The normal send path already renders a visible failed assistant message.
   }
 }
 
@@ -451,6 +520,22 @@ onUnmounted(stopMessagePolling);
               </div>
               <p v-else-if="messageValidityCaution(msg)" class="validity-caution standalone-validity-caution">{{ messageValidityCaution(msg) }}</p>
               <div v-if="msg.needClarification || msg.clarificationQuestions?.length" class="clarify-block"><strong>{{ t('需要补充的信息') }}</strong><ul><li v-for="item in msg.clarificationQuestions" :key="item">{{ item }}</li></ul></div>
+              <section v-if="messageSuggestions(msg).length" class="suggestion-block" aria-label="延伸问题">
+                <strong>{{ t('继续追问') }}</strong>
+                <div class="suggestion-list">
+                  <el-button
+                    v-for="(suggestion, index) in messageSuggestions(msg)"
+                    :key="suggestionKey(msg, index)"
+                    class="suggestion-button"
+                    plain
+                    :disabled="sending || suggestionSubmission.pending || suggestionSubmission.submittedKeys.has(suggestionKey(msg, index))"
+                    @click="askSuggestedFollowUp(msg, suggestion, index)"
+                  >
+                    <span>{{ suggestion }}</span>
+                    <small v-if="suggestionSubmission.submittedKeys.has(suggestionKey(msg, index))">{{ t('已提问') }}</small>
+                  </el-button>
+                </div>
+              </section>
               <div v-if="!msg.pending" class="feedback">
                 <span v-if="feedbackMap[String(msg.messageId)] !== undefined">{{ t('已反馈：') }}{{ feedbackMap[String(msg.messageId)] ? t('有用') : t('无用') }}</span>
                 <template v-else>
@@ -536,6 +621,12 @@ onUnmounted(stopMessagePolling);
 .standalone-validity-caution { margin: 10px 0; padding: 8px 10px; border: 1px solid #fed7aa; border-radius: 8px; background: #fffaf2; font-size: 13px; }
 .clarify-block { margin-top: 10px; padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; }
 .clarify-block ul { margin: 6px 0 0; padding-left: 18px; }
+.suggestion-block { margin-top: 14px; padding-top: 12px; border-top: 1px dashed #bfdbfe; }
+.suggestion-block > strong { color: #1e3a5f; font-size: 13px; }
+.suggestion-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin-top: 8px; }
+.suggestion-button { width: fit-content; max-width: 100%; height: auto; min-height: 34px; margin: 0; padding: 8px 12px; border-color: #93c5fd; white-space: normal; text-align: left; }
+.suggestion-button span { min-width: 0; overflow-wrap: anywhere; }
+.suggestion-button small { flex-shrink: 0; margin-left: 8px; color: var(--sw-muted); }
 .reference-block { margin-top: 10px; padding: 10px; background: #f8fafc; border-radius: 10px; }
 .source { padding: 8px 0; border-bottom: 1px solid var(--sw-border); }
 .feedback { margin-top: 8px; display: flex; gap: 8px; align-items: center; color: var(--sw-muted); }
@@ -546,5 +637,5 @@ onUnmounted(stopMessagePolling);
 .input-label { margin: 10px 0 8px; font-weight: 700; }
 .refs-title { margin-top: 16px; }
 .json-block { white-space: pre-wrap; background: #f8fafc; border: 1px solid var(--sw-border); border-radius: 10px; padding: 12px; max-height: 320px; overflow: auto; }
-@media (max-width: 960px) { .qa-page { height: auto; overflow: visible; } .three-col { grid-template-columns: 1fr; } .session-card, .qa-main { overflow: visible; } .message-scroll, .session-list { max-height: none; overflow: visible; } .chat.user, .chat.assistant { width: auto; max-width: 100%; } .evidence-status-line { align-items: flex-start; } }
+@media (max-width: 960px) { .qa-page { height: auto; overflow: visible; } .three-col { grid-template-columns: 1fr; } .session-card, .qa-main { overflow: visible; } .message-scroll, .session-list { max-height: none; overflow: visible; } .chat.user, .chat.assistant { width: auto; max-width: 100%; } .evidence-status-line { align-items: flex-start; } .suggestion-button { width: 100%; justify-content: space-between; } }
 </style>

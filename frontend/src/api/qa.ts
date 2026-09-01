@@ -1,6 +1,6 @@
 import request from '../utils/request';
 import { mockQaMessages, mockQaSessions, type QaMessageWithExtra } from '../mocks/qa';
-import type { ID, PageResult, QaMessage, QaReference, QaSession } from './types';
+import type { ID, PageResult, QaMessage, QaMessageSendRequest, QaReference, QaSession } from './types';
 import { useModuleMock } from './mock';
 
 const useMock = useModuleMock('VITE_USE_QA_MOCK', false);
@@ -83,7 +83,7 @@ export async function archiveQaSession(sessionId: ID) {
   return request.delete<null>(`/qa/sessions/${sessionId}`);
 }
 
-export async function sendQuestion(sessionId: ID, data: { question: string; routeMode?: string; dataSourceIds?: ID[]; knowledgeBaseIds?: ID[] }, projectId?: ID) {
+export async function sendQuestion(sessionId: ID, data: QaMessageSendRequest, projectId?: ID) {
   if (useMock) {
     const mockProjectId = projectId || mockSessions.find((item) => String(item.sessionId) === String(sessionId))?.projectId;
     if (!mockProjectId) throw new Error(`问答 mock 会话缺少项目编号：${sessionId}`);

@@ -10,6 +10,8 @@ public class QaMessageSendRequest {
     private String routeMode = "AUTO";
     private List<Long> dataSourceIds = new ArrayList<>();
     private List<Long> knowledgeBaseIds = new ArrayList<>();
+    private String clientRequestId;
+    private Long sourceSuggestionMessageId;
 
     public String getQuestion() { return question; }
     public void setQuestion(String question) { this.question = question; }
@@ -19,4 +21,8 @@ public class QaMessageSendRequest {
     public void setDataSourceIds(List<Long> dataSourceIds) { this.dataSourceIds = dataSourceIds; }
     public List<Long> getKnowledgeBaseIds() { return knowledgeBaseIds; }
     public void setKnowledgeBaseIds(List<Long> knowledgeBaseIds) { this.knowledgeBaseIds = knowledgeBaseIds; }
+    public String getClientRequestId() { return clientRequestId; }
+    public void setClientRequestId(String clientRequestId) { this.clientRequestId = clientRequestId; }
+    public Long getSourceSuggestionMessageId() { return sourceSuggestionMessageId; }
+    public void setSourceSuggestionMessageId(Long sourceSuggestionMessageId) { this.sourceSuggestionMessageId = sourceSuggestionMessageId; }
 }

@@ -16,8 +16,12 @@ import {
   EVIDENCE_RECOVERY_PROMPT,
   evidenceStatusMeta,
   qaEvidenceRecovery,
+  qaSuggestedFollowUps,
+  runSuggestedFollowUpSubmission,
   qaValidityCaution
 } from './QaView.vue';
+import { restoreSubmittedSuggestionKeys } from './qaMessagePolling';
+import qaViewSource from './QaView.vue?raw';
 
 function assistant(evidenceStatus: string, status = 'SUCCESS'): QaMessage & Record<string, unknown> {
   return {
@@ -89,5 +93,91 @@ describe('QaView evidence recovery', () => {
 
   it('does not present a pending message as a completed evidence state', () => {
     expect(qaEvidenceRecovery({ ...assistant('PARTIAL'), pending: true })).toBeNull();
+  });
+});
+
+describe('QaView persisted follow-up suggestions', () => {
+  function suggestedMessage(status = 'SUCCESS', suggestionStatus = 'SUCCESS') {
+    return {
+      ...assistant('SUFFICIENT', status),
+      suggestionStatus,
+      suggestedFollowUpQuestions: ['追问一', '追问二', '追问三', '追问四']
+    };
+  }
+
+  it('automatically exposes at most three persisted suggestions for a successful assistant message', () => {
+    expect(qaSuggestedFollowUps(suggestedMessage())).toEqual(['追问一', '追问二', '追问三']);
+  });
+
+  it('does not expose an empty suggestion section', () => {
+    expect(qaSuggestedFollowUps({ ...suggestedMessage(), suggestedFollowUpQuestions: [] })).toEqual([]);
+  });
+
+  it.each([
+    ['PENDING', 'SUCCESS'],
+    ['RUNNING', 'SUCCESS'],
+    ['FAILED', 'SUCCESS'],
+    ['SUCCESS', 'PENDING'],
+    ['SUCCESS', 'FAILED']
+  ])('hides suggestions for message status %s and suggestion status %s', (status, suggestionStatus) => {
+    expect(qaSuggestedFollowUps(suggestedMessage(status, suggestionStatus))).toEqual([]);
+  });
+
+  it('restores suggestions from normalized polling and history records', () => {
+    const restored = suggestedMessage();
+    expect(qaSuggestedFollowUps(restored)).toEqual(['追问一', '追问二', '追问三']);
+  });
+
+  it('sends a clicked suggestion immediately and suppresses a duplicate click while pending', async () => {
+    const state = { pending: false, submittedKeys: new Set<string>() };
+    const payloads: string[] = [];
+    let finish!: () => void;
+    const first = runSuggestedFollowUpSubmission(state, '1:0', async () => {
+      payloads.push('追问一');
+      await new Promise<void>((resolve) => { finish = resolve; });
+    });
+    const duplicate = await runSuggestedFollowUpSubmission(state, '1:0', async () => {
+      payloads.push('不应发送');
+    });
+
+    expect(payloads).toEqual(['追问一']);
+    expect(duplicate).toBe(false);
+    finish();
+    await expect(first).resolves.toBe(true);
+    expect(state.submittedKeys.has('1:0')).toBe(true);
+  });
+
+  it('uses the backend idempotency and suggestion-source contract', () => {
+    expect(qaViewSource).toContain('clientRequestId:');
+    expect(qaViewSource).toContain('sourceSuggestionMessageId: msg.messageId');
+    expect(qaViewSource).not.toContain('idempotencyKey:');
+    expect(qaViewSource).not.toContain('sourceMessageId: msg.messageId');
+  });
+
+  it('restores clicked suggestions from persisted history after refresh', () => {
+    const records = [
+      { messageId: 11, sourceSuggestionMessageId: 7, clientRequestId: 'suggestion-3-7-1' },
+      { messageId: 12 },
+      { messageId: 13, sourceSuggestionMessageId: 9, clientRequestId: 'manual-request' }
+    ] as QaMessage[];
+
+    expect([...restoreSubmittedSuggestionKeys(records)]).toEqual(['7:1']);
+  });
+
+  it('unlocks suggestion submission after a failed send', async () => {
+    const state = { pending: false, submittedKeys: new Set<string>() };
+
+    await expect(runSuggestedFollowUpSubmission(state, '1:0', async () => {
+      throw new Error('send failed');
+    })).rejects.toThrow('send failed');
+
+    expect(state.pending).toBe(false);
+    expect(state.submittedKeys.has('1:0')).toBe(false);
+  });
+
+  it('uses wrapping full-width controls on narrow screens', () => {
+    expect(qaViewSource).toContain('class="suggestion-list"');
+    expect(qaViewSource).toMatch(/\.suggestion-list\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
+    expect(qaViewSource).toMatch(/@media \(max-width:\s*960px\)[\s\S]*\.suggestion-button[^}]*width:\s*100%/);
   });
 });

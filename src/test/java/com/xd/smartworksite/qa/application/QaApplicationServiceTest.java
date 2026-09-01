@@ -3,6 +3,10 @@ package com.xd.smartworksite.qa.application;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xd.smartworksite.ai.dto.DatabaseQueryRequest;
 import com.xd.smartworksite.ai.dto.DatabaseQueryResponse;
+import com.xd.smartworksite.ai.dto.ConversationFinalizeRequest;
+import com.xd.smartworksite.ai.dto.ConversationFinalizeResponse;
+import com.xd.smartworksite.ai.dto.ConversationResolveRequest;
+import com.xd.smartworksite.ai.dto.ConversationResolveResponse;
 import com.xd.smartworksite.ai.dto.ModelInvokeRequest;
 import com.xd.smartworksite.ai.dto.ModelInvokeResponse;
 import com.xd.smartworksite.ai.dto.RagSearchRequest;
@@ -22,6 +26,7 @@ import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
 import com.xd.smartworksite.project.domain.Project;
 import com.xd.smartworksite.project.repository.ProjectRepository;
 import com.xd.smartworksite.qa.domain.QaMessage;
+import com.xd.smartworksite.qa.domain.QaSessionMemory;
 import com.xd.smartworksite.qa.domain.QaSession;
 import com.xd.smartworksite.qa.dto.QaFeedbackRequest;
 import com.xd.smartworksite.qa.dto.QaMessageSendRequest;
@@ -40,6 +45,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -113,6 +119,104 @@ class QaApplicationServiceTest {
         assertThat(message.getStatus()).isEqualTo("SUCCESS");
         assertThat(message.getUsage()).containsKey("contextUsage");
         assertThat(qaRepository.findMessagesBySessionId(session.getSessionId())).hasSize(1);
+    }
+
+    @Test
+    void resolvesFollowUpBeforeRetrievalButPreservesOriginalQuestion() {
+        var session = service.createSession(createSessionRequest(1L, "continuity"));
+        aiGateway.resolvedQuestion = "GB 12523-2025 night requirements";
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("What about it at night?");
+        request.setRouteMode("KNOWLEDGE");
+        request.setKnowledgeBaseIds(List.of(10L));
+
+        QaMessageResponse response = service.sendMessage(session.getSessionId(), request);
+
+        assertThat(aiGateway.lastRagRequest.getQuery()).isEqualTo("GB 12523-2025 night requirements");
+        assertThat(response.getQuestion()).isEqualTo("What about it at night?");
+        assertThat(response.getResolvedQuestion()).isEqualTo("GB 12523-2025 night requirements");
+        assertThat(response.getRetrievalDiagnostics()).containsEntry("resolvedQuery", "GB 12523-2025 night requirements");
+    }
+
+    @Test
+    void finalizesSuccessfulAnswerAndRestoresPersistedSuggestionsAndScopedMemory() {
+        var session = service.createSession(createSessionRequest(1L, "continuity"));
+        aiGateway.finalizedSummary = Map.of("topics", List.of("noise"), "userCorrections", List.of("use 2025 standard"));
+        aiGateway.suggestions = List.of("When does it take effect?", "What is the night limit?", "How is it measured?", "drop fourth");
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("Explain the standard");
+        request.setRouteMode("MODEL");
+
+        QaMessageResponse response = service.sendMessage(session.getSessionId(), request);
+        QaMessageResponse restored = service.getSessionMessages(session.getSessionId()).get(0);
+
+        assertThat(response.getSuggestionStatus()).isEqualTo("SUCCESS");
+        assertThat(restored.getSuggestedFollowUpQuestions()).containsExactly(
+                "When does it take effect?", "What is the night limit?", "How is it measured?");
+        assertThat(qaRepository.findSessionMemory(session.getSessionId(), 1L, 2L))
+                .get().extracting(QaSessionMemory::getSummaryJson).asString().contains("userCorrections");
+        assertThat(qaRepository.findSessionMemory(session.getSessionId(), 1L, 99L)).isEmpty();
+    }
+
+    @Test
+    void finalizeFailureDoesNotChangeSuccessfulAnswer() {
+        var session = service.createSession(createSessionRequest(1L, "continuity"));
+        aiGateway.finalizeFailure = new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "secret prompt");
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("question");
+        request.setRouteMode("MODEL");
+
+        QaMessageResponse response = service.sendMessage(session.getSessionId(), request);
+
+        assertThat(response.getStatus()).isEqualTo("SUCCESS");
+        assertThat(response.getAnswer()).isEqualTo("\u6a21\u578b\u56de\u7b54");
+        assertThat(response.getSuggestionStatus()).isEqualTo("FAILED");
+        assertThat(response.getSuggestedFollowUpQuestions()).isEmpty();
+        assertThat(response.getErrorMessage()).isNull();
+    }
+
+    @Test
+    void duplicateSuggestionClickReturnsExistingMessageWithoutSecondAiCall() {
+        var session = service.createSession(createSessionRequest(1L, "continuity"));
+        QaMessage source = new QaMessage();
+        source.setProjectId(1L);
+        source.setSessionId(session.getSessionId());
+        source.setQuestion("source");
+        source.setStatus("SUCCESS");
+        source.setCreatedBy(2L);
+        qaRepository.insertMessage(source);
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("follow up");
+        request.setRouteMode("MODEL");
+        request.setClientRequestId("click-123");
+        request.setSourceSuggestionMessageId(source.getId());
+
+        QaMessageResponse first = service.sendMessage(session.getSessionId(), request);
+        QaMessageResponse duplicate = service.sendMessage(session.getSessionId(), request);
+
+        assertThat(duplicate.getMessageId()).isEqualTo(first.getMessageId());
+        assertThat(qaRepository.findMessagesBySessionId(session.getSessionId())).hasSize(2);
+        assertThat(aiGateway.modelCallCount).isEqualTo(1);
+    }
+
+    @Test
+    void suggestionClickRejectsSourceMessageFromAnotherSession() {
+        var sourceSession = service.createSession(createSessionRequest(1L, "source"));
+        QaMessageSendRequest source = new QaMessageSendRequest();
+        source.setQuestion("source question");
+        source.setRouteMode("MODEL");
+        QaMessageResponse sourceMessage = service.sendMessage(sourceSession.getSessionId(), source);
+        var targetSession = service.createSession(createSessionRequest(1L, "target"));
+        QaMessageSendRequest click = new QaMessageSendRequest();
+        click.setQuestion("clicked suggestion");
+        click.setRouteMode("MODEL");
+        click.setClientRequestId("cross-session-click");
+        click.setSourceSuggestionMessageId(sourceMessage.getMessageId());
+
+        assertThatThrownBy(() -> service.sendMessage(targetSession.getSessionId(), click))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("source suggestion");
+        assertThat(qaRepository.findMessagesBySessionId(targetSession.getSessionId())).isEmpty();
     }
 
     @Test
@@ -469,7 +573,7 @@ class QaApplicationServiceTest {
     }
 
     @Test
-    void forwardsAtMostLatestHundredSuccessfulMessagesFromCurrentSession() {
+    void forwardsAtMostLatestTwentyContextMessagesFromCurrentSession() {
         var session = service.createSession(createSessionRequest(1L, "history"));
         for (int i = 0; i < 110; i++) {
             QaMessage old = completedMessage(session.getSessionId(), "old-question-" + i, "old-answer-" + i);
@@ -489,10 +593,28 @@ class QaApplicationServiceTest {
 
         assertThat(aiGateway.lastModelRequest.getContextMessages())
                 .extracting(message -> message.getContent())
-                .hasSize(100)
-                .contains("old-question-60", "old-answer-60", "old-question-109", "old-answer-109")
-                .doesNotContain("old-question-59", "old-answer-59")
+                .hasSize(20)
+                .contains("old-question-100", "old-answer-100", "old-question-109", "old-answer-109")
+                .doesNotContain("old-question-99", "old-answer-99")
                 .doesNotContain("failed-question", "pending-question");
+    }
+
+    @Test
+    void sessionMemoryDoesNotRegressWhenOlderFinalizationCompletesLast() {
+        var session = service.createSession(createSessionRequest(1L, "summary-order"));
+        QaSessionMemory latest = new QaSessionMemory();
+        latest.setSessionId(session.getSessionId()); latest.setProjectId(1L); latest.setUserId(2L);
+        latest.setCoveredMessageId(20L); latest.setSummaryJson("{\"topic\":\"latest\"}");
+        QaSessionMemory stale = new QaSessionMemory();
+        stale.setSessionId(session.getSessionId()); stale.setProjectId(1L); stale.setUserId(2L);
+        stale.setCoveredMessageId(10L); stale.setSummaryJson("{\"topic\":\"stale\"}");
+
+        qaRepository.upsertSessionMemory(latest);
+        qaRepository.upsertSessionMemory(stale);
+
+        assertThat(qaRepository.findSessionMemory(session.getSessionId(), 1L, 2L)).get()
+                .extracting(QaSessionMemory::getCoveredMessageId, QaSessionMemory::getSummaryJson)
+                .containsExactly(20L, "{\"topic\":\"latest\"}");
     }
 
     @Test
@@ -792,6 +914,28 @@ class QaApplicationServiceTest {
         private RuntimeException modelFailure;
         private List<String> selectedEvidenceSourceIds;
         private List<String> selectedEvidenceChunkIds;
+        private String resolvedQuestion;
+        private Map<String, Object> finalizedSummary = Map.of();
+        private List<String> suggestions = List.of();
+        private RuntimeException finalizeFailure;
+        private int modelCallCount;
+
+        @Override
+        public ConversationResolveResponse resolveConversation(ConversationResolveRequest request) {
+            ConversationResolveResponse response = new ConversationResolveResponse();
+            response.setStandaloneQuestion(resolvedQuestion == null ? request.getCurrentQuestion() : resolvedQuestion);
+            response.setUsedFallback(resolvedQuestion == null);
+            return response;
+        }
+
+        @Override
+        public ConversationFinalizeResponse finalizeConversation(ConversationFinalizeRequest request) {
+            if (finalizeFailure != null) throw finalizeFailure;
+            ConversationFinalizeResponse response = new ConversationFinalizeResponse();
+            response.setSummary(finalizedSummary);
+            response.setSuggestedFollowUpQuestions(suggestions);
+            return response;
+        }
 
         @Override
         public RouteResponse route(RouteRequest request) {
@@ -804,6 +948,7 @@ class QaApplicationServiceTest {
 
         @Override
         public ModelInvokeResponse invokeModel(ModelInvokeRequest request) {
+            modelCallCount++;
             lastModelRequest = request;
             if (modelFailure != null) throw modelFailure;
             ModelInvokeResponse response = new ModelInvokeResponse();
@@ -901,6 +1046,7 @@ class QaApplicationServiceTest {
         private final List<QaSession> sessions = new ArrayList<>();
         private final List<QaMessage> messages = new ArrayList<>();
         private boolean failMessageUpdate;
+        private final List<QaSessionMemory> memories = new ArrayList<>();
 
         @Override
         public QaSession insertSession(QaSession session) {
@@ -950,6 +1096,41 @@ class QaApplicationServiceTest {
         }
 
         @Override
+        public Optional<QaMessage> findMessageByClientRequestId(Long sessionId, Long createdBy, String clientRequestId) {
+            return messages.stream().filter(message -> sessionId.equals(message.getSessionId()))
+                    .filter(message -> createdBy.equals(message.getCreatedBy()))
+                    .filter(message -> clientRequestId.equals(message.getClientRequestId())).findFirst();
+        }
+
+        @Override
+        public Optional<QaSessionMemory> findSessionMemory(Long sessionId, Long projectId, Long userId) {
+            return memories.stream().filter(memory -> sessionId.equals(memory.getSessionId()))
+                    .filter(memory -> projectId.equals(memory.getProjectId()))
+                    .filter(memory -> userId.equals(memory.getUserId())).findFirst();
+        }
+
+        @Override
+        public int upsertSessionMemory(QaSessionMemory memory) {
+            Optional<QaSessionMemory> current = memories.stream().filter(item -> item.getSessionId().equals(memory.getSessionId())
+                    && item.getProjectId().equals(memory.getProjectId()) && item.getUserId().equals(memory.getUserId())).findFirst();
+            if (current.isPresent()) {
+                if (memory.getCoveredMessageId() <= current.get().getCoveredMessageId()) return 1;
+                memories.remove(current.get());
+            }
+            memories.add(memory);
+            return 1;
+        }
+
+        @Override
+        public int updateMessageSuggestions(Long messageId, String suggestionsJson, String suggestionStatus, Long updatedBy) {
+            return findMessageById(messageId).map(message -> {
+                message.setSuggestionsJson(suggestionsJson);
+                message.setSuggestionStatus(suggestionStatus);
+                return 1;
+            }).orElse(0);
+        }
+
+        @Override
         public int updateMessage(QaMessage message) {
             if (failMessageUpdate) {
                 return 0;
@@ -960,6 +1141,7 @@ class QaApplicationServiceTest {
             current.setReferencesJson(message.getReferencesJson());
             current.setUsageJson(message.getUsageJson());
             current.setRetrievalDiagnosticsJson(message.getRetrievalDiagnosticsJson());
+            current.setResolvedQuestion(message.getResolvedQuestion());
             current.setStatus(message.getStatus());
             current.setUpdatedBy(message.getUpdatedBy());
             return 1;

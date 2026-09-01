@@ -8,6 +8,7 @@ public class QaMessage {
     private Long sessionId;
     private String role;
     private String question;
+    private String resolvedQuestion;
     private String answer;
     private String routeMode;
     private String referencesJson;
@@ -18,6 +19,10 @@ public class QaMessage {
     private Long taskId;
     private String requestJson;
     private String errorMessage;
+    private String suggestionsJson;
+    private String suggestionStatus;
+    private String clientRequestId;
+    private Long sourceSuggestionMessageId;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private Long createdBy;
@@ -33,6 +38,8 @@ public class QaMessage {
     public void setRole(String role) { this.role = role; }
     public String getQuestion() { return question; }
     public void setQuestion(String question) { this.question = question; }
+    public String getResolvedQuestion() { return resolvedQuestion; }
+    public void setResolvedQuestion(String resolvedQuestion) { this.resolvedQuestion = resolvedQuestion; }
     public String getAnswer() { return answer; }
     public void setAnswer(String answer) { this.answer = answer; }
     public String getRouteMode() { return routeMode; }
@@ -53,6 +60,14 @@ public class QaMessage {
     public void setRequestJson(String requestJson) { this.requestJson = requestJson; }
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+    public String getSuggestionsJson() { return suggestionsJson; }
+    public void setSuggestionsJson(String suggestionsJson) { this.suggestionsJson = suggestionsJson; }
+    public String getSuggestionStatus() { return suggestionStatus; }
+    public void setSuggestionStatus(String suggestionStatus) { this.suggestionStatus = suggestionStatus; }
+    public String getClientRequestId() { return clientRequestId; }
+    public void setClientRequestId(String clientRequestId) { this.clientRequestId = clientRequestId; }
+    public Long getSourceSuggestionMessageId() { return sourceSuggestionMessageId; }
+    public void setSourceSuggestionMessageId(Long sourceSuggestionMessageId) { this.sourceSuggestionMessageId = sourceSuggestionMessageId; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

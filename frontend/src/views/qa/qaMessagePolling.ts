@@ -3,7 +3,19 @@ import type { QaMessage } from '../../api/types';
 const ACTIVE_STATUSES = new Set(['PENDING', 'PROCESSING', 'QUEUED', 'RUNNING']);
 
 export function hasActiveQaGeneration(messages: QaMessage[]) {
-  return messages.some((message) => ACTIVE_STATUSES.has(String(message.status).toUpperCase()));
+  return messages.some((message) => ACTIVE_STATUSES.has(String(message.status).toUpperCase())
+    || (String(message.status).toUpperCase() === 'SUCCESS' && String(message.suggestionStatus || '').toUpperCase() === 'PENDING'));
+}
+
+export function restoreSubmittedSuggestionKeys(messages: QaMessage[]) {
+  const keys = new Set<string>();
+  messages.forEach((message) => {
+    const source = message.sourceSuggestionMessageId;
+    const requestId = message.clientRequestId || '';
+    const match = requestId.match(/^suggestion-[^-]+-([^-]+)-(\d+)$/);
+    if (source != null && match) keys.add(`${source}:${match[2]}`);
+  });
+  return keys;
 }
 
 export function qaMessageText(message: QaMessage & Record<string, unknown>) {

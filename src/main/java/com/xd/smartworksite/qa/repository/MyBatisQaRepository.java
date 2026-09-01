@@ -2,6 +2,7 @@ package com.xd.smartworksite.qa.repository;
 
 import com.xd.smartworksite.qa.domain.QaMessage;
 import com.xd.smartworksite.qa.domain.QaSession;
+import com.xd.smartworksite.qa.domain.QaSessionMemory;
 import com.xd.smartworksite.qa.mapper.QaMapper;
 import org.springframework.stereotype.Repository;
 
@@ -14,6 +15,17 @@ public class MyBatisQaRepository implements QaRepository {
 
     public MyBatisQaRepository(QaMapper qaMapper) {
         this.qaMapper = qaMapper;
+    }
+
+    @Override public Optional<QaMessage> findMessageByClientRequestId(Long sessionId, Long createdBy, String clientRequestId) {
+        return Optional.ofNullable(qaMapper.selectMessageByClientRequestId(sessionId, createdBy, clientRequestId));
+    }
+    @Override public Optional<QaSessionMemory> findSessionMemory(Long sessionId, Long projectId, Long userId) {
+        return Optional.ofNullable(qaMapper.selectSessionMemory(sessionId, projectId, userId));
+    }
+    @Override public int upsertSessionMemory(QaSessionMemory memory) { return qaMapper.upsertSessionMemory(memory); }
+    @Override public int updateMessageSuggestions(Long messageId, String suggestionsJson, String suggestionStatus, Long updatedBy) {
+        return qaMapper.updateMessageSuggestions(messageId, suggestionsJson, suggestionStatus, updatedBy);
     }
 
     @Override

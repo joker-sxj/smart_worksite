@@ -1,6 +1,10 @@
 package com.xd.smartworksite.qa.application;
 
 import com.xd.smartworksite.ai.dto.AiMessage;
+import com.xd.smartworksite.ai.dto.ConversationFinalizeRequest;
+import com.xd.smartworksite.ai.dto.ConversationFinalizeResponse;
+import com.xd.smartworksite.ai.dto.ConversationResolveRequest;
+import com.xd.smartworksite.ai.dto.ConversationResolveResponse;
 import com.xd.smartworksite.ai.dto.DatabaseQueryRequest;
 import com.xd.smartworksite.ai.dto.DatabaseQueryResponse;
 import com.xd.smartworksite.ai.dto.ModelInvokeRequest;
@@ -14,6 +18,20 @@ import com.xd.smartworksite.ai.dto.RouteResponse;
 import java.util.List;
 
 public interface QaAiGateway {
+    default ConversationResolveResponse resolveConversation(ConversationResolveRequest request) {
+        ConversationResolveResponse response = new ConversationResolveResponse();
+        response.setStandaloneQuestion(request.getCurrentQuestion());
+        response.setUsedFallback(true);
+        return response;
+    }
+    default ConversationResolveResponse resolveConversationForSystem(ConversationResolveRequest request) { return resolveConversation(request); }
+    default ConversationFinalizeResponse finalizeConversation(ConversationFinalizeRequest request) {
+        ConversationFinalizeResponse response = new ConversationFinalizeResponse();
+        response.setSummary(request.getSummary());
+        response.setUsedFallback(true);
+        return response;
+    }
+    default ConversationFinalizeResponse finalizeConversationForSystem(ConversationFinalizeRequest request) { return finalizeConversation(request); }
     RouteResponse route(RouteRequest request);
 
     default RouteResponse routeForSystem(RouteRequest request) { return route(request); }

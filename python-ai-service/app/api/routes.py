@@ -20,6 +20,10 @@ from app.models.schemas import (
     RouteData,
     ContextPrepareRequest,
     ContextPrepareData,
+    ContextResolveRequest,
+    ContextResolveData,
+    ContextFinalizeRequest,
+    ContextFinalizeData,
     DatabaseGenerateQueryRequest,
     DatabaseGenerateQueryData,
     DatabaseSummarizeRequest,
@@ -155,6 +159,18 @@ async def route(request: RouteRequest):
 @router.post("/context/prepare", response_model=StandardResponse[ContextPrepareData])
 async def context_prepare(request: ContextPrepareRequest):
     data, usage = await services()["context"].prepare(request)
+    return ok(data, usage)
+
+
+@router.post("/context/resolve-question", response_model=StandardResponse[ContextResolveData])
+async def context_resolve_question(request: ContextResolveRequest):
+    data, usage = await services()["context"].resolve_question(request)
+    return ok(data, usage)
+
+
+@router.post("/context/finalize-answer", response_model=StandardResponse[ContextFinalizeData])
+async def context_finalize_answer(request: ContextFinalizeRequest):
+    data, usage = await services()["context"].finalize_answer(request)
     return ok(data, usage)
 
 

@@ -36,7 +36,7 @@ class QaAsyncGenerationFailureTest {
         QaMessage message = queuedMessage();
         message.setRouteMode("KNOWLEDGE");
         message.setRequestJson("{\"routeMode\":\"KNOWLEDGE\",\"knowledgeBaseIds\":[10],\"dataSourceIds\":[]}");
-        QaSession session = new QaSession(); session.setId(7L); session.setProjectId(1L);
+        QaSession session = new QaSession(); session.setId(7L); session.setProjectId(1L); session.setStatus("ACTIVE");
         KnowledgeBase knowledgeBase = new KnowledgeBase();
         knowledgeBase.setId(10L); knowledgeBase.setProjectId(1L); knowledgeBase.setStatus("ENABLED");
         RagSearchResponse retrieval = new RagSearchResponse();
@@ -75,7 +75,7 @@ class QaAsyncGenerationFailureTest {
         message.setCreatedBy(2L);
         message.setRequestJson("{\"routeMode\":\"MODEL\",\"knowledgeBaseIds\":[],\"dataSourceIds\":[]}");
         message.setStatus("FAILED"); message.setTaskId(19L);
-        QaSession session = new QaSession(); session.setId(7L); session.setProjectId(1L);
+        QaSession session = new QaSession(); session.setId(7L); session.setProjectId(1L); session.setStatus("ACTIVE");
         when(repository.findMessageById(11L)).thenReturn(Optional.of(message));
         when(repository.findSessionById(7L)).thenReturn(Optional.of(session));
         when(repository.markMessageProcessing(11L, 19L, 1L)).thenReturn(1);
@@ -103,7 +103,7 @@ class QaAsyncGenerationFailureTest {
         QaAiGateway aiGateway = mock(QaAiGateway.class);
         ProjectAccessApplicationService access = mock(ProjectAccessApplicationService.class);
         QaMessage message = queuedMessage();
-        QaSession session = new QaSession(); session.setId(7L); session.setProjectId(1L);
+        QaSession session = new QaSession(); session.setId(7L); session.setProjectId(1L); session.setStatus("ACTIVE");
         when(repository.findMessageById(11L)).thenReturn(Optional.of(message));
         when(repository.findSessionById(7L)).thenReturn(Optional.of(session));
         when(repository.markMessageProcessing(11L, 19L, 1L)).thenReturn(1);
@@ -131,7 +131,7 @@ class QaAsyncGenerationFailureTest {
         QaMessage message = queuedMessage();
         message.setRouteMode("KNOWLEDGE");
         message.setRequestJson("{\"routeMode\":\"KNOWLEDGE\",\"knowledgeBaseIds\":[10],\"dataSourceIds\":[]}");
-        QaSession session = new QaSession(); session.setId(7L); session.setProjectId(1L);
+        QaSession session = new QaSession(); session.setId(7L); session.setProjectId(1L); session.setStatus("ACTIVE");
         com.xd.smartworksite.knowledge.domain.KnowledgeBase disabled = new com.xd.smartworksite.knowledge.domain.KnowledgeBase();
         disabled.setId(10L); disabled.setProjectId(1L); disabled.setStatus("DISABLED");
         when(repository.findMessageById(11L)).thenReturn(Optional.of(message));
@@ -148,6 +148,47 @@ class QaAsyncGenerationFailureTest {
                         assertThat(ex.getCause()).isInstanceOfSatisfying(BusinessException.class,
                                 cause -> assertThat(cause.getCode()).isEqualTo(ErrorCode.CONFLICT.getCode())));
         verify(aiGateway, never()).searchKnowledgeDynamicForSystem(any());
+    }
+
+    @Test
+    void workerCancelsArchivedSessionBeforeCallingAi() {
+        QaRepository repository = mock(QaRepository.class);
+        QaAiGateway aiGateway = mock(QaAiGateway.class);
+        QaMessage message = queuedMessage();
+        QaSession session = new QaSession();
+        session.setId(7L); session.setProjectId(1L); session.setStatus("ARCHIVED");
+        when(repository.findMessageById(11L)).thenReturn(Optional.of(message));
+        when(repository.findSessionById(7L)).thenReturn(Optional.of(session));
+        when(repository.markMessageProcessing(11L, 19L, 1L)).thenReturn(1);
+        when(repository.markMessageFailed(any(), any(), any(), any(), any())).thenReturn(1);
+        QaApplicationService service = new QaApplicationService(repository, mock(ProjectAccessApplicationService.class),
+                mock(KnowledgeBaseRepository.class), mock(DataSourceRepository.class), aiGateway, new ObjectMapper(),
+                null, null, new QaAnswerSanitizer());
+
+        assertThatThrownBy(() -> service.executeGenerationTask(11L, 19L))
+                .isInstanceOf(NonRetryableTaskException.class)
+                .hasMessageContaining("session is not active");
+        verify(aiGateway, never()).invokeModelForSystem(any());
+        verify(aiGateway, never()).searchKnowledgeDynamicForSystem(any());
+    }
+
+    @Test
+    void workerCancelsWhenArchivedSessionIsNoLongerQueryVisible() {
+        QaRepository repository = mock(QaRepository.class);
+        QaAiGateway aiGateway = mock(QaAiGateway.class);
+        QaMessage message = queuedMessage();
+        when(repository.findMessageById(11L)).thenReturn(Optional.of(message));
+        when(repository.findSessionById(7L)).thenReturn(Optional.empty());
+        when(repository.markMessageProcessing(11L, 19L, 1L)).thenReturn(1);
+        when(repository.markMessageFailed(any(), any(), any(), any(), any())).thenReturn(1);
+        QaApplicationService service = new QaApplicationService(repository, mock(ProjectAccessApplicationService.class),
+                mock(KnowledgeBaseRepository.class), mock(DataSourceRepository.class), aiGateway, new ObjectMapper(),
+                null, null, new QaAnswerSanitizer());
+
+        assertThatThrownBy(() -> service.executeGenerationTask(11L, 19L))
+                .isInstanceOf(NonRetryableTaskException.class)
+                .hasMessageContaining("session is not active");
+        verify(aiGateway, never()).invokeModelForSystem(any());
     }
 
     private QaMessage queuedMessage() {

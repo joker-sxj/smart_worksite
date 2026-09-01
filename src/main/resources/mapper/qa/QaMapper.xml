@@ -19,6 +19,7 @@
         <result property="sessionId" column="session_id"/>
         <result property="role" column="role"/>
         <result property="question" column="question"/>
+        <result property="resolvedQuestion" column="resolved_question"/>
         <result property="answer" column="answer"/>
         <result property="routeMode" column="route_mode"/>
         <result property="referencesJson" column="references_json"/>
@@ -29,6 +30,10 @@
         <result property="taskId" column="task_id"/>
         <result property="requestJson" column="request_json"/>
         <result property="errorMessage" column="error_message"/>
+        <result property="suggestionsJson" column="suggestions_json"/>
+        <result property="suggestionStatus" column="suggestion_status"/>
+        <result property="clientRequestId" column="client_request_id"/>
+        <result property="sourceSuggestionMessageId" column="source_suggestion_message_id"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
         <result property="createdBy" column="created_by"/>
@@ -40,8 +45,9 @@
     </sql>
 
     <sql id="MessageColumns">
-        id, project_id, session_id, role, question, answer, route_mode, references_json, usage_json,
-        retrieval_diagnostics_json, feedback_json, status, task_id, request_json, error_message, created_at, updated_at, created_by, updated_by
+        id, project_id, session_id, role, question, resolved_question, answer, route_mode, references_json, usage_json,
+        retrieval_diagnostics_json, feedback_json, status, task_id, request_json, error_message, suggestions_json,
+        suggestion_status, client_request_id, source_suggestion_message_id, created_at, updated_at, created_by, updated_by
     </sql>
 
     <insert id="insertSession" useGeneratedKeys="true" keyProperty="id">
@@ -97,27 +103,63 @@
 
     <insert id="insertMessage" useGeneratedKeys="true" keyProperty="id">
         insert into qa_message (
-            project_id, session_id, role, question, answer, route_mode, references_json, usage_json, retrieval_diagnostics_json,
-            feedback_json, status, task_id, request_json, error_message, created_by, updated_by
+            project_id, session_id, role, question, resolved_question, answer, route_mode, references_json, usage_json, retrieval_diagnostics_json,
+            feedback_json, status, task_id, request_json, error_message, suggestions_json, suggestion_status, client_request_id, source_suggestion_message_id, created_by, updated_by
         ) values (
-            #{projectId}, #{sessionId}, #{role}, #{question}, #{answer}, #{routeMode}, #{referencesJson}, #{usageJson}, #{retrievalDiagnosticsJson},
-            #{feedbackJson}, #{status}, #{taskId}, #{requestJson}, #{errorMessage}, #{createdBy}, #{updatedBy}
+            #{projectId}, #{sessionId}, #{role}, #{question}, #{resolvedQuestion}, #{answer}, #{routeMode}, #{referencesJson}, #{usageJson}, #{retrievalDiagnosticsJson},
+            #{feedbackJson}, #{status}, #{taskId}, #{requestJson}, #{errorMessage}, #{suggestionsJson}, #{suggestionStatus}, #{clientRequestId}, #{sourceSuggestionMessageId}, #{createdBy}, #{updatedBy}
         )
     </insert>
 
     <update id="updateMessage">
         update qa_message
         set answer = #{answer},
+            resolved_question = #{resolvedQuestion},
             route_mode = #{routeMode},
             references_json = #{referencesJson},
             usage_json = #{usageJson},
             retrieval_diagnostics_json = #{retrievalDiagnosticsJson},
             status = #{status},
             error_message = #{errorMessage},
+            suggestions_json = #{suggestionsJson},
+            suggestion_status = #{suggestionStatus},
             updated_by = #{updatedBy}
         where id = #{id}
           and deleted = 0
     </update>
+
+    <select id="selectMessageByClientRequestId" resultMap="QaMessageResultMap">
+        select <include refid="MessageColumns"/> from qa_message
+        where session_id = #{sessionId} and created_by = #{createdBy} and client_request_id = #{clientRequestId} and deleted = 0
+    </select>
+
+    <update id="updateMessageSuggestions">
+        update qa_message set suggestions_json = #{suggestionsJson}, suggestion_status = #{suggestionStatus}, updated_by = #{updatedBy}
+        where id = #{messageId} and status = 'SUCCESS' and deleted = 0
+    </update>
+
+    <resultMap id="QaSessionMemoryResultMap" type="com.xd.smartworksite.qa.domain.QaSessionMemory">
+        <id property="id" column="id"/><result property="sessionId" column="session_id"/>
+        <result property="projectId" column="project_id"/><result property="userId" column="user_id"/>
+        <result property="summaryJson" column="summary_json"/><result property="coveredMessageId" column="covered_message_id"/>
+        <result property="version" column="version"/><result property="estimatedTokens" column="estimated_tokens"/>
+        <result property="status" column="status"/><result property="createdAt" column="created_at"/><result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <select id="selectSessionMemory" resultMap="QaSessionMemoryResultMap">
+        select * from qa_session_memory where session_id = #{sessionId} and project_id = #{projectId} and user_id = #{userId}
+    </select>
+
+    <insert id="upsertSessionMemory" useGeneratedKeys="true" keyProperty="id">
+        insert into qa_session_memory (session_id, project_id, user_id, summary_json, covered_message_id, version, estimated_tokens, status)
+        values (#{sessionId}, #{projectId}, #{userId}, #{summaryJson}, #{coveredMessageId}, #{version}, #{estimatedTokens}, #{status})
+        on duplicate key update
+          summary_json = if(values(covered_message_id) >= coalesce(covered_message_id, 0), values(summary_json), summary_json),
+          version = if(values(covered_message_id) >= coalesce(covered_message_id, 0), values(version), version),
+          estimated_tokens = if(values(covered_message_id) >= coalesce(covered_message_id, 0), values(estimated_tokens), estimated_tokens),
+          status = if(values(covered_message_id) >= coalesce(covered_message_id, 0), values(status), status),
+          covered_message_id = if(values(covered_message_id) >= coalesce(covered_message_id, 0), values(covered_message_id), covered_message_id)
+    </insert>
 
 
     <update id="assignTask">

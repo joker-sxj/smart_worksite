@@ -12,6 +12,11 @@ describe('hasActiveQaGeneration', () => {
   it('stops polling when no message is active', () => {
     expect(hasActiveQaGeneration([message('SUCCESS'), message('FAILED')])).toBe(false);
   });
+
+  it('keeps polling while a completed answer is still generating suggestions', () => {
+    expect(hasActiveQaGeneration([message('SUCCESS', { suggestionStatus: 'PENDING' })])).toBe(true);
+    expect(hasActiveQaGeneration([message('SUCCESS', { suggestionStatus: 'EMPTY' })])).toBe(false);
+  });
 });
 
 describe('qaMessageText', () => {

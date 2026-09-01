@@ -170,6 +170,42 @@ public class AiApplicationService {
         return result;
     }
 
+    public ConversationResolveResponse resolveConversation(ConversationResolveRequest request) {
+        projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
+        return doResolveConversation(request);
+    }
+
+    public ConversationResolveResponse resolveConversationForSystem(ConversationResolveRequest request) {
+        projectAccessApplicationService.requireProjectWritableForSystem(request.getProjectId());
+        return doResolveConversation(request);
+    }
+
+    private ConversationResolveResponse doResolveConversation(ConversationResolveRequest request) {
+        AiProviderResponse response = pythonClient.postNoRetry(properties.getPaths().getContextResolve(),
+                "CONTEXT_RESOLVE", request.getProjectId(), request, 30_000);
+        ConversationResolveResponse result = pythonClient.convertData(response, ConversationResolveResponse.class);
+        result.setProviderTraceId(response.getTraceId());
+        return result;
+    }
+
+    public ConversationFinalizeResponse finalizeConversation(ConversationFinalizeRequest request) {
+        projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
+        return doFinalizeConversation(request);
+    }
+
+    public ConversationFinalizeResponse finalizeConversationForSystem(ConversationFinalizeRequest request) {
+        projectAccessApplicationService.requireProjectWritableForSystem(request.getProjectId());
+        return doFinalizeConversation(request);
+    }
+
+    private ConversationFinalizeResponse doFinalizeConversation(ConversationFinalizeRequest request) {
+        AiProviderResponse response = pythonClient.postNoRetry(properties.getPaths().getContextFinalize(),
+                "CONTEXT_FINALIZE", request.getProjectId(), request, 30_000);
+        ConversationFinalizeResponse result = pythonClient.convertData(response, ConversationFinalizeResponse.class);
+        result.setProviderTraceId(response.getTraceId());
+        return result;
+    }
+
     public DatabaseQueryResponse queryDatabase(DatabaseQueryRequest request) {
         projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
         return queryDatabaseForSystem(request);

@@ -2,11 +2,16 @@ package com.xd.smartworksite.qa.repository;
 
 import com.xd.smartworksite.qa.domain.QaMessage;
 import com.xd.smartworksite.qa.domain.QaSession;
+import com.xd.smartworksite.qa.domain.QaSessionMemory;
 
 import java.util.List;
 import java.util.Optional;
 
 public interface QaRepository {
+    default Optional<QaMessage> findMessageByClientRequestId(Long sessionId, Long createdBy, String clientRequestId) { return Optional.empty(); }
+    default Optional<QaSessionMemory> findSessionMemory(Long sessionId, Long projectId, Long userId) { return Optional.empty(); }
+    default int upsertSessionMemory(QaSessionMemory memory) { return 0; }
+    default int updateMessageSuggestions(Long messageId, String suggestionsJson, String suggestionStatus, Long updatedBy) { return 0; }
     QaSession insertSession(QaSession session);
 
     Optional<QaSession> findSessionById(Long sessionId);

@@ -59,6 +59,8 @@ public class AiPythonServiceProperties {
         private String ragDelete = "/v1/rag/delete";
         private String route = "/v1/route";
         private String contextPrepare = "/v1/context/prepare";
+        private String contextResolve = "/v1/context/resolve-question";
+        private String contextFinalize = "/v1/context/finalize-answer";
         private String databaseGenerateQuery = "/v1/database/generate-query";
         private String databaseSummarizeResult = "/v1/database/summarize-result";
         private String ocrRecognize = "/v1/ocr/recognize";
@@ -80,6 +82,10 @@ public class AiPythonServiceProperties {
         public void setRoute(String route) { this.route = route; }
         public String getContextPrepare() { return contextPrepare; }
         public void setContextPrepare(String contextPrepare) { this.contextPrepare = contextPrepare; }
+        public String getContextResolve() { return contextResolve; }
+        public void setContextResolve(String contextResolve) { this.contextResolve = contextResolve; }
+        public String getContextFinalize() { return contextFinalize; }
+        public void setContextFinalize(String contextFinalize) { this.contextFinalize = contextFinalize; }
         public String getDatabaseGenerateQuery() { return databaseGenerateQuery; }
         public void setDatabaseGenerateQuery(String databaseGenerateQuery) { this.databaseGenerateQuery = databaseGenerateQuery; }
         public String getDatabaseSummarizeResult() { return databaseSummarizeResult; }

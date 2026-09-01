@@ -12,6 +12,11 @@ public class AiApplicationQaGateway implements QaAiGateway {
         this.aiApplicationService = aiApplicationService;
     }
 
+    @Override public ConversationResolveResponse resolveConversation(ConversationResolveRequest request) { return aiApplicationService.resolveConversation(request); }
+    @Override public ConversationResolveResponse resolveConversationForSystem(ConversationResolveRequest request) { return aiApplicationService.resolveConversationForSystem(request); }
+    @Override public ConversationFinalizeResponse finalizeConversation(ConversationFinalizeRequest request) { return aiApplicationService.finalizeConversation(request); }
+    @Override public ConversationFinalizeResponse finalizeConversationForSystem(ConversationFinalizeRequest request) { return aiApplicationService.finalizeConversationForSystem(request); }
+
     @Override public RouteResponse route(RouteRequest request) { return aiApplicationService.route(request); }
     @Override public RouteResponse routeForSystem(RouteRequest request) { return aiApplicationService.routeForSystem(request); }
     @Override public ModelInvokeResponse invokeModel(ModelInvokeRequest request) { return aiApplicationService.invokeModel(request); }

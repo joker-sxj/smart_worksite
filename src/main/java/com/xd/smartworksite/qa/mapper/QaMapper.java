@@ -2,11 +2,16 @@ package com.xd.smartworksite.qa.mapper;
 
 import com.xd.smartworksite.qa.domain.QaMessage;
 import com.xd.smartworksite.qa.domain.QaSession;
+import com.xd.smartworksite.qa.domain.QaSessionMemory;
 import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
 
 public interface QaMapper {
+    QaMessage selectMessageByClientRequestId(@Param("sessionId") Long sessionId, @Param("createdBy") Long createdBy, @Param("clientRequestId") String clientRequestId);
+    QaSessionMemory selectSessionMemory(@Param("sessionId") Long sessionId, @Param("projectId") Long projectId, @Param("userId") Long userId);
+    int upsertSessionMemory(QaSessionMemory memory);
+    int updateMessageSuggestions(@Param("messageId") Long messageId, @Param("suggestionsJson") String suggestionsJson, @Param("suggestionStatus") String suggestionStatus, @Param("updatedBy") Long updatedBy);
     int insertSession(QaSession session);
 
     QaSession selectSessionById(@Param("sessionId") Long sessionId);

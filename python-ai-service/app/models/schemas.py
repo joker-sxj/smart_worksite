@@ -286,6 +286,46 @@ class ContextPrepareData(BaseModel):
     followUpQuestions: list[str] = Field(default_factory=list)
 
 
+class SessionConstraints(BaseModel):
+    region: str | None = Field(default=None, max_length=100)
+    time: str | None = Field(default=None, max_length=100)
+    subject: str | None = Field(default=None, max_length=200)
+
+
+class SessionSummary(BaseModel):
+    topics: list[str] = Field(default_factory=list, max_length=10)
+    standards: list[str] = Field(default_factory=list, max_length=10)
+    constraints: SessionConstraints = Field(default_factory=SessionConstraints)
+    confirmedFacts: list[str] = Field(default_factory=list, max_length=20)
+    userCorrections: list[str] = Field(default_factory=list, max_length=10)
+    openQuestions: list[str] = Field(default_factory=list, max_length=10)
+
+
+class ContextResolveRequest(BaseModel):
+    currentQuestion: str = Field(min_length=1, max_length=2000)
+    summary: SessionSummary = Field(default_factory=SessionSummary)
+    recentMessages: list[Message] = Field(default_factory=list, max_length=20)
+
+
+class ContextResolveData(BaseModel):
+    standaloneQuestion: str = Field(min_length=1, max_length=2000)
+    contextDependent: bool = False
+    usedFallback: bool = False
+
+
+class ContextFinalizeRequest(BaseModel):
+    currentQuestion: str = Field(min_length=1, max_length=2000)
+    answer: str = Field(min_length=1, max_length=12000)
+    summary: SessionSummary = Field(default_factory=SessionSummary)
+    alreadyAnsweredQuestions: list[str] = Field(default_factory=list, max_length=100)
+
+
+class ContextFinalizeData(BaseModel):
+    summary: SessionSummary
+    suggestedFollowUpQuestions: list[str] = Field(default_factory=list, max_length=3)
+    usedFallback: bool = False
+
+
 class DatabaseGenerateQueryRequest(BaseModel):
     question: str
     schemaSummary: str

@@ -11,6 +11,7 @@ public class QaMessageResponse {
     private Long sessionId;
     private Long projectId;
     private String question;
+    private String resolvedQuestion;
     private String answer;
     private String routeMode;
     private List<Map<String, Object>> references = new ArrayList<>();
@@ -23,6 +24,10 @@ public class QaMessageResponse {
     private Boolean needClarification = false;
     private List<String> clarificationQuestions = new ArrayList<>();
     private String providerTraceId;
+    private List<String> suggestedFollowUpQuestions = new ArrayList<>();
+    private String suggestionStatus;
+    private String clientRequestId;
+    private Long sourceSuggestionMessageId;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -34,6 +39,8 @@ public class QaMessageResponse {
     public void setProjectId(Long projectId) { this.projectId = projectId; }
     public String getQuestion() { return question; }
     public void setQuestion(String question) { this.question = question; }
+    public String getResolvedQuestion() { return resolvedQuestion; }
+    public void setResolvedQuestion(String resolvedQuestion) { this.resolvedQuestion = resolvedQuestion; }
     public String getAnswer() { return answer; }
     public void setAnswer(String answer) { this.answer = answer; }
     public String getRouteMode() { return routeMode; }
@@ -58,6 +65,14 @@ public class QaMessageResponse {
     public void setClarificationQuestions(List<String> clarificationQuestions) { this.clarificationQuestions = clarificationQuestions; }
     public String getProviderTraceId() { return providerTraceId; }
     public void setProviderTraceId(String providerTraceId) { this.providerTraceId = providerTraceId; }
+    public List<String> getSuggestedFollowUpQuestions() { return suggestedFollowUpQuestions; }
+    public void setSuggestedFollowUpQuestions(List<String> suggestedFollowUpQuestions) { this.suggestedFollowUpQuestions = suggestedFollowUpQuestions; }
+    public String getSuggestionStatus() { return suggestionStatus; }
+    public void setSuggestionStatus(String suggestionStatus) { this.suggestionStatus = suggestionStatus; }
+    public String getClientRequestId() { return clientRequestId; }
+    public void setClientRequestId(String clientRequestId) { this.clientRequestId = clientRequestId; }
+    public Long getSourceSuggestionMessageId() { return sourceSuggestionMessageId; }
+    public void setSourceSuggestionMessageId(Long sourceSuggestionMessageId) { this.sourceSuggestionMessageId = sourceSuggestionMessageId; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

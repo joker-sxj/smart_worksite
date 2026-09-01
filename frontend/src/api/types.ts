@@ -183,6 +183,17 @@ export interface QaRetrievalDiagnostics extends Record<string, unknown> {
   validityStatus?: string;
 }
 
+export type QaSuggestionStatus = 'PENDING' | 'SUCCESS' | 'EMPTY' | 'FAILED';
+
+export interface QaMessageSendRequest {
+  question: string;
+  routeMode?: string;
+  dataSourceIds?: ID[];
+  knowledgeBaseIds?: ID[];
+  clientRequestId?: string;
+  sourceSuggestionMessageId?: ID;
+}
+
 export interface QaMessage {
   messageId: ID;
   sessionId: ID;
@@ -199,6 +210,10 @@ export interface QaMessage {
   errorMessage?: string;
   needClarification?: boolean;
   clarificationQuestions?: string[];
+  suggestedFollowUpQuestions?: string[];
+  suggestionStatus?: QaSuggestionStatus | string;
+  clientRequestId?: string;
+  sourceSuggestionMessageId?: ID;
   providerTraceId?: string;
   createdAt: string;
   updatedAt: string;

@@ -1,5 +1,11 @@
 import json
-from app.models.schemas import Message, RouteRequest, RouteData, ContextPrepareRequest, ContextPrepareData
+import re
+from typing import Any
+from app.models.schemas import (
+    Message, RouteRequest, RouteData, ContextPrepareRequest, ContextPrepareData,
+    ContextResolveRequest, ContextResolveData, ContextFinalizeRequest, ContextFinalizeData,
+    SessionConstraints, SessionSummary,
+)
 from .qwen_client import QwenClient
 from .normalization import as_dict_list, as_string_list
 
@@ -85,3 +91,158 @@ class ContextService:
             missingFields=missing,
             followUpQuestions=follow,
         ), {}
+
+    async def resolve_question(self, request: ContextResolveRequest) -> tuple[ContextResolveData, dict]:
+        original = _clean_text(request.currentQuestion, 2000)
+        fallback = ContextResolveData(
+            standaloneQuestion=original,
+            contextDependent=_looks_context_dependent(original),
+            usedFallback=True,
+        )
+        messages = [
+            Message(role="system", content=(
+                "你是智慧工地对话问题改写器。仅使用提供的会话摘要和最近消息补全指代，禁止补造事实。"
+                "只返回JSON对象：standaloneQuestion为可独立检索的问题，contextDependent为布尔值。"
+            )),
+            Message(role="user", content=json.dumps({
+                "currentQuestion": original,
+                "summary": request.summary.model_dump(),
+                "recentMessages": [
+                    {"role": item.role[:20], "content": item.content[:2000]}
+                    for item in request.recentMessages[-10:]
+                ],
+            }, ensure_ascii=False)),
+        ]
+        try:
+            data, usage = await self.qwen.json_chat(messages)
+            standalone = data.get("standaloneQuestion") if isinstance(data, dict) else None
+            if not isinstance(standalone, str):
+                return fallback, usage if isinstance(usage, dict) else {}
+            standalone = _clean_text(standalone, 2000)
+            if not standalone:
+                return fallback, usage if isinstance(usage, dict) else {}
+            dependent = data.get("contextDependent")
+            if not isinstance(dependent, bool):
+                dependent = _looks_context_dependent(original) or standalone != original
+            return ContextResolveData(
+                standaloneQuestion=standalone,
+                contextDependent=dependent,
+                usedFallback=False,
+            ), usage if isinstance(usage, dict) else {}
+        except Exception:
+            return fallback, {}
+
+    async def finalize_answer(self, request: ContextFinalizeRequest) -> tuple[ContextFinalizeData, dict]:
+        safe_existing = _normalize_summary(request.summary.model_dump())
+        messages = [
+            Message(role="system", content=(
+                "你是智慧工地会话整理器。只根据输入更新安全的结构化摘要并生成相关延伸问题。"
+                "只返回JSON对象，字段summary和suggestedFollowUpQuestions。summary仅允许topics、standards、"
+                "constraints、confirmedFacts、userCorrections、openQuestions；延伸问题最多3条。"
+            )),
+            Message(role="user", content=json.dumps({
+                "currentQuestion": request.currentQuestion[:2000],
+                "answer": request.answer[:8000],
+                "summary": safe_existing.model_dump(),
+                "alreadyAnsweredQuestions": request.alreadyAnsweredQuestions[-50:],
+            }, ensure_ascii=False)),
+        ]
+        try:
+            data, usage = await self.qwen.json_chat(messages)
+            raw_summary = data.get("summary") if isinstance(data, dict) else None
+            used_fallback = not isinstance(raw_summary, dict)
+            summary = _normalize_summary(
+                _merge_summary_values(safe_existing.model_dump(), raw_summary)
+                if isinstance(raw_summary, dict) else safe_existing.model_dump()
+            )
+            raw_questions = data.get("suggestedFollowUpQuestions") if isinstance(data, dict) else []
+            questions = _normalize_follow_ups(
+                raw_questions, request.currentQuestion, request.alreadyAnsweredQuestions
+            )
+            return ContextFinalizeData(
+                summary=summary,
+                suggestedFollowUpQuestions=questions,
+                usedFallback=used_fallback,
+            ), usage if isinstance(usage, dict) else {}
+        except Exception:
+            return ContextFinalizeData(
+                summary=safe_existing,
+                suggestedFollowUpQuestions=[],
+                usedFallback=True,
+            ), {}
+
+
+def _clean_text(value: str, limit: int) -> str:
+    return re.sub(r"\s+", " ", value).strip()[:limit].strip()
+
+
+def _string_list(value: Any, count: int, length: int) -> list[str]:
+    values = value if isinstance(value, list) else [value] if isinstance(value, str) else []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        if not isinstance(item, str):
+            continue
+        cleaned = _clean_text(item, length)
+        key = cleaned.casefold()
+        if cleaned and key not in seen:
+            result.append(cleaned)
+            seen.add(key)
+        if len(result) >= count:
+            break
+    return result
+
+
+def _normalize_summary(value: Any) -> SessionSummary:
+    raw = value if isinstance(value, dict) else {}
+    constraints = raw.get("constraints") if isinstance(raw.get("constraints"), dict) else {}
+
+    def constraint(name: str, limit: int) -> str | None:
+        item = constraints.get(name)
+        return _clean_text(item, limit) if isinstance(item, str) and item.strip() else None
+
+    return SessionSummary(
+        topics=_string_list(raw.get("topics"), 10, 200),
+        standards=_string_list(raw.get("standards"), 10, 200),
+        constraints=SessionConstraints(
+            region=constraint("region", 100),
+            time=constraint("time", 100),
+            subject=constraint("subject", 200),
+        ),
+        confirmedFacts=_string_list(raw.get("confirmedFacts"), 20, 500),
+        userCorrections=_string_list(raw.get("userCorrections"), 10, 500),
+        openQuestions=_string_list(raw.get("openQuestions"), 10, 500),
+    )
+
+
+def _merge_summary_values(existing: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(existing)
+    merged.update({key: value for key, value in update.items() if value is not None})
+    existing_constraints = existing.get("constraints") if isinstance(existing.get("constraints"), dict) else {}
+    update_constraints = update.get("constraints") if isinstance(update.get("constraints"), dict) else {}
+    merged["constraints"] = {**existing_constraints, **update_constraints}
+    return merged
+
+
+def _question_key(value: str) -> str:
+    return re.sub(r"[\s，。！？、,.!?;；:：]+", "", value).casefold()
+
+
+def _normalize_follow_ups(value: Any, current: str, answered: list[str]) -> list[str]:
+    excluded = {_question_key(current), *(_question_key(item) for item in answered)}
+    result: list[str] = []
+    for question in _string_list(value, 20, 300):
+        question = re.sub(r"^\s*(?:[-*•]|\d+[.)、])\s*", "", question).strip()
+        key = _question_key(question)
+        if not key or key in excluded:
+            continue
+        excluded.add(key)
+        result.append(question)
+        if len(result) == 3:
+            break
+    return result
+
+
+def _looks_context_dependent(question: str) -> bool:
+    markers = ("这个", "那个", "它", "上述", "前者", "后者", "刚才", "那", "其")
+    return any(marker in question for marker in markers)

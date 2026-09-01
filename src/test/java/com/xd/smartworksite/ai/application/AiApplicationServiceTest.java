@@ -7,6 +7,10 @@ import com.xd.smartworksite.ai.dto.AgentInvokeRequest;
 import com.xd.smartworksite.ai.dto.AgentInvokeResponse;
 import com.xd.smartworksite.ai.dto.DatabaseQueryRequest;
 import com.xd.smartworksite.ai.dto.DatabaseQueryResponse;
+import com.xd.smartworksite.ai.dto.ConversationFinalizeRequest;
+import com.xd.smartworksite.ai.dto.ConversationFinalizeResponse;
+import com.xd.smartworksite.ai.dto.ConversationResolveRequest;
+import com.xd.smartworksite.ai.dto.ConversationResolveResponse;
 import com.xd.smartworksite.ai.dto.ExternalCallLogQueryRequest;
 import com.xd.smartworksite.ai.dto.ModelInvokeRequest;
 import com.xd.smartworksite.ai.dto.ModelInvokeResponse;
@@ -139,6 +143,43 @@ class AiApplicationServiceTest {
                             && List.of(10L).equals(scope.get("knowledgeBaseIds"));
                 }), eq(50_000));
         verify(pythonClient, never()).post(eq("/v1/rag/dynamic-search"), any(), any(), any());
+    }
+
+    @Test
+    void conversationResolveAndFinalizeUseDedicatedNoRetryPaths() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        ProjectAccessApplicationService access = mock(ProjectAccessApplicationService.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, mock(AiRepository.class), mock(SafeSqlExecutor.class), access);
+        when(pythonClient.postNoRetry(eq(properties.getPaths().getContextResolve()),
+                eq("CONTEXT_RESOLVE"), eq(1L), any(), eq(30_000)))
+                .thenReturn(provider("resolve", Map.of("standaloneQuestion", "resolved", "usedFallback", false)));
+        when(pythonClient.postNoRetry(eq(properties.getPaths().getContextFinalize()),
+                eq("CONTEXT_FINALIZE"), eq(1L), any(), eq(30_000)))
+                .thenReturn(provider("finalize", Map.of("summary", Map.of("topics", List.of("safety")),
+                        "suggestedFollowUpQuestions", List.of("next?"), "usedFallback", false)));
+        ConversationResolveResponse resolved = new ConversationResolveResponse();
+        resolved.setStandaloneQuestion("resolved");
+        ConversationFinalizeResponse finalized = new ConversationFinalizeResponse();
+        finalized.setSummary(Map.of("topics", List.of("safety")));
+        finalized.setSuggestedFollowUpQuestions(List.of("next?"));
+        when(pythonClient.convertData(any(AiProviderResponse.class), eq(ConversationResolveResponse.class))).thenReturn(resolved);
+        when(pythonClient.convertData(any(AiProviderResponse.class), eq(ConversationFinalizeResponse.class))).thenReturn(finalized);
+
+        ConversationResolveRequest resolve = new ConversationResolveRequest();
+        resolve.setProjectId(1L);
+        resolve.setCurrentQuestion("it?");
+        ConversationFinalizeRequest finalize = new ConversationFinalizeRequest();
+        finalize.setProjectId(1L);
+        finalize.setCurrentQuestion("resolved");
+        finalize.setAnswer("answer");
+
+        assertThat(service.resolveConversation(resolve).getStandaloneQuestion()).isEqualTo("resolved");
+        assertThat(service.finalizeConversation(finalize).getSuggestedFollowUpQuestions()).containsExactly("next?");
+        verify(access, times(2)).requireProjectWritableAccess(1L);
+        verify(pythonClient, never()).post(eq(properties.getPaths().getContextResolve()), any(), any(), any());
+        verify(pythonClient, never()).post(eq(properties.getPaths().getContextFinalize()), any(), any(), any());
     }
 
     @Test
