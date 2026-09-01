@@ -25,6 +25,11 @@ from app.services.vector_store import compact_search_text, extract_clause_number
 Search = Callable[[Any], Awaitable[tuple[RagSearchData, dict[str, Any]]]]
 Rewrite = Callable[[DynamicRetrievalRequest, list[RagRecord]], Awaitable[str] | str]
 MAX_DYNAMIC_CANDIDATES = 100
+NON_CURRENT_VALIDITY = {"REPEALED", "EXPIRED", "FUTURE", "RESTRICTED"}
+
+
+class SynchronousRewriteUnsupported(TypeError):
+    pass
 
 
 def normalize_query(query: str) -> str:
@@ -245,11 +250,25 @@ def resolve_validity(records: list[RagRecord]) -> str:
         str(item.metadata.get("documentValidity")).upper()
         for item in records if item.metadata.get("documentValidity") is not None
     }
-    if not values or "UNKNOWN" in values:
+    if not values:
         return "UNKNOWN"
-    if values.intersection({"REPEALED", "EXPIRED", "FUTURE"}):
+    if "CURRENT" in values:
+        return "CURRENT"
+    restricted = values.intersection(NON_CURRENT_VALIDITY)
+    if len(restricted) == 1:
+        return next(iter(restricted))
+    if restricted:
         return "RESTRICTED"
-    return "CURRENT"
+    return "UNKNOWN"
+
+
+def apply_validity_policy(records: list[RagRecord]) -> tuple[list[RagRecord], str]:
+    status = resolve_validity(records)
+    if status == "CURRENT":
+        return [item for item in records if str(item.metadata.get("documentValidity", "")).upper() == "CURRENT"], status
+    if status in NON_CURRENT_VALIDITY:
+        return [], status
+    return records, status
 
 
 def build_assessment(query: str, records: list[RagRecord], status: EvidenceStatus) -> EvidenceAssessment:
@@ -292,7 +311,7 @@ class RetrievalOrchestrator:
                 questionType=analyze_question(request.query).kind,
                 queryFingerprints=fingerprints,
                 stopReason="TIMEOUT",
-                attempts=[self._attempt(1, fingerprints[0], [], EvidenceStatus.TIMEOUT,
+                attempts=[self._attempt(1, fingerprints[0], request.strategy, [], EvidenceStatus.TIMEOUT,
                                        int((asyncio.get_running_loop().time() - started) * 1000), "TIMEOUT")],
             )
             return DynamicRetrievalData(
@@ -302,13 +321,16 @@ class RetrievalOrchestrator:
                 diagnostics=diagnostics,
             ), {"retrievalRounds": 0, "stopReason": "TIMEOUT"}
         first.records = self._filter_document_scope(first.records, request.documentScope)
+        first.records, validity_status = apply_validity_policy(first.records)
         degraded = _safe_components(first_usage)
         status, missing = evaluate_evidence(first.records, degraded, request.query)
+        if validity_status in NON_CURRENT_VALIDITY:
+            status = EvidenceStatus.VALIDITY_UNKNOWN
         rewritten_query: str | None = None
         stop_reason: str | None = None
         records = first.records[:request.topK]
         rounds = 1
-        attempts = [self._attempt(1, fingerprints[0], records, status,
+        attempts = [self._attempt(1, fingerprints[0], request.strategy, records, status,
                                   int((asyncio.get_running_loop().time() - started) * 1000))]
 
         if status == EvidenceStatus.INSUFFICIENT:
@@ -319,6 +341,10 @@ class RetrievalOrchestrator:
             except TimeoutError:
                 status = EvidenceStatus.TIMEOUT
                 stop_reason = "TIMEOUT"
+            except SynchronousRewriteUnsupported:
+                degraded = list(dict.fromkeys([*degraded, "QUERY_REWRITE"]))
+                status = EvidenceStatus.RETRIEVAL_DEGRADED
+                stop_reason = "QUERY_REWRITE_UNSUPPORTED"
             except Exception:
                 degraded = list(dict.fromkeys([*degraded, "QUERY_REWRITE"]))
                 status = EvidenceStatus.RETRIEVAL_DEGRADED
@@ -347,10 +373,13 @@ class RetrievalOrchestrator:
                     if not second_timed_out and candidate_ids(first.records) == candidate_ids(second.records):
                         stop_reason = "SKIPPED_DUPLICATE_CANDIDATES"
                     records = merge_records(first.records, second.records, request.topK)
+                    records, validity_status = apply_validity_policy(records)
                     if not second_timed_out:
                         # Rewriting improves recall; it must not change the question's evidence obligations.
                         status, missing = evaluate_evidence(records, degraded, request.query)
-                    attempts.append(self._attempt(2, fingerprints[-1], records, status,
+                        if validity_status in NON_CURRENT_VALIDITY:
+                            status = EvidenceStatus.VALIDITY_UNKNOWN
+                    attempts.append(self._attempt(2, fingerprints[-1], request.strategy, records, status,
                                                   first_elapsed=int((asyncio.get_running_loop().time() - second_started) * 1000),
                                                   stop_reason=stop_reason))
 
@@ -361,7 +390,7 @@ class RetrievalOrchestrator:
         diagnostics = RetrievalDiagnostics(
             candidateCount=len(records),
             questionType=analyze_question(request.query).kind,
-            validityStatus=resolve_validity(records),
+            validityStatus=validity_status,
             queryFingerprints=fingerprints,
             degradedComponents=degraded,
             missingAspects=missing,
@@ -391,17 +420,14 @@ class RetrievalOrchestrator:
 
     async def _rewrite_with_deadline(self, request, records, deadline):
         async with asyncio.timeout(self._remaining(deadline)):
-            if inspect.iscoroutinefunction(self.rewrite):
-                return (await self.rewrite(request, records)).strip()
-            value = await asyncio.to_thread(self.rewrite, request, records)
-            if inspect.isawaitable(value):
-                value = await value
-            return value.strip()
+            if not inspect.iscoroutinefunction(self.rewrite):
+                raise SynchronousRewriteUnsupported("rewrite must be an async function")
+            return (await self.rewrite(request, records)).strip()
 
     @staticmethod
-    def _attempt(attempt_no, fingerprint, records, status, first_elapsed=0, stop_reason=None):
+    def _attempt(attempt_no, fingerprint, strategy, records, status, first_elapsed=0, stop_reason=None):
         return RetrievalAttempt(
-            attemptNo=attempt_no, queryFingerprint=fingerprint, strategy="HYBRID",
+            attemptNo=attempt_no, queryFingerprint=fingerprint, strategy=strategy,
             candidateCount=len(records), status=status, elapsedMs=first_elapsed,
             stopReason=stop_reason,
         )
@@ -421,7 +447,7 @@ class RetrievalOrchestrator:
         ]
 
     @staticmethod
-    def _rule_rewrite(request: DynamicRetrievalRequest, _records: list[RagRecord]) -> str:
+    async def _rule_rewrite(request: DynamicRetrievalRequest, _records: list[RagRecord]) -> str:
         query = unicodedata.normalize("NFKC", request.query).strip()
         if re.search(r"第\s*[0-9]+(?:\s*[.]\s*[0-9]+)*\s*条", query):
             return f"{query} 条文正文"

@@ -636,8 +636,12 @@ def test_vector_store_embedding_failure_falls_back_to_text_search(tmp_path):
     assert usage["degradedComponents"] == ["EMBEDDING"]
 
 
-def test_synchronous_rewrite_runs_off_loop_and_times_out():
+def test_synchronous_rewrite_is_rejected_without_starting_it():
+    called = False
+
     def blocking_rewrite(_request, _records):
+        nonlocal called
+        called = True
         time.sleep(0.1)
         return "rewritten"
 
@@ -648,8 +652,83 @@ def test_synchronous_rewrite_runs_off_loop_and_times_out():
         search, blocking_rewrite, round_timeout_seconds=0.01, total_timeout_seconds=0.01,
     ).retrieve(request()))
 
-    assert result.evidenceStatus == EvidenceStatus.TIMEOUT
-    assert result.diagnostics.stopReason == "TIMEOUT"
+    assert called is False
+    assert result.evidenceStatus == EvidenceStatus.RETRIEVAL_DEGRADED
+    assert result.diagnostics.stopReason == "QUERY_REWRITE_UNSUPPORTED"
+
+
+@pytest.mark.parametrize("validity", ["REPEALED", "EXPIRED", "FUTURE", "RESTRICTED"])
+def test_explicit_non_current_validity_cannot_be_sufficient(validity):
+    async def search(_search_request):
+        return RagSearchData(records=[record(
+            "old", content="临边作业是指工作面边沿无围护设施的高处作业。",
+            documentValidity=validity,
+        )]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="什么是临边作业？",
+    )))
+
+    assert result.evidenceStatus == EvidenceStatus.VALIDITY_UNKNOWN
+    assert result.diagnostics.validityStatus == validity
+
+
+def test_current_evidence_is_preferred_and_repealed_evidence_cannot_override_it():
+    async def search(_search_request):
+        return RagSearchData(records=[
+            record("old", content="安全通道宽度不得小于0.8米。", score=0.99,
+                   documentValidity="REPEALED"),
+            record("current", content="安全通道宽度不得小于1.5米。", score=0.8,
+                   documentValidity="CURRENT"),
+        ]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="安全通道宽度应为多少？", topK=2,
+    )))
+
+    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
+    assert result.records[0].metadata["chunkId"] == "current"
+    assert all(item.metadata.get("documentValidity") != "REPEALED" for item in result.records)
+    assert result.diagnostics.validityStatus == "CURRENT"
+
+
+def test_real_rag_service_ranks_current_evidence_ahead_of_repealed_evidence(tmp_path):
+    class Settings:
+        rag_provider = "LOCAL"
+        rag_data_dir = str(tmp_path)
+        milvus_uri = milvus_token = milvus_collection = pgvector_dsn = pgvector_table = ""
+        embedding_provider = "LOCAL_HASH"
+        rerank_provider = "LEXICAL"
+        rag_rerank_top_k = 5
+
+    repealed = ChunkRecord(
+        "old", 7, 11, "doc-old", "old", "安全通道宽度不得小于0.8米。",
+        "DOCUMENT", None, {"documentValidity": "REPEALED"}, [],
+    )
+    current = ChunkRecord(
+        "current", 7, 11, "doc-current", "current", "安全通道宽度不得小于1.5米。",
+        "DOCUMENT", None, {"documentValidity": "CURRENT"}, [],
+    )
+
+    class Store:
+        async def search(self, *_args, **_kwargs):
+            return [(repealed, 0.99), (current, 0.8)]
+
+        async def search_text(self, *_args, **_kwargs):
+            return []
+
+        async def adjacent_many(self, chunks, **_kwargs):
+            return {chunk.id: [] for chunk in chunks}
+
+    service = RagService(Settings(), object())
+    service.store = Store()
+    result, _ = asyncio.run(RetrievalOrchestrator(service.search).retrieve(request(
+        query="安全通道宽度应为多少？", knowledgeBaseIds=[11], topK=1,
+    )))
+
+    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
+    assert [item.metadata["chunkId"] for item in result.records] == ["current"]
+    assert result.diagnostics.validityStatus == "CURRENT"
 
 
 def test_rag_service_pushes_document_scope_to_vector_text_and_adjacency_store_calls(tmp_path):
@@ -785,7 +864,18 @@ def test_rag_service_never_returns_more_than_top_k_after_adjacency_expansion(tmp
         query="安全通道宽度应为多少？", knowledgeBaseIds=[11], topK=2,
     ).as_rag_search_request()))
 
-    assert len(result.records) == 2
+    assert len(result.records) <= 2
+    assert result.records[0].metadata["evidenceWindowChunkIds"] == ["a", "2", "3", "4"]
+    assert all(neighbor.content in result.records[0].contentSnippet for neighbor in neighbors)
+
+
+def test_attempt_uses_the_requested_strategy():
+    async def search(_search_request):
+        return RagSearchData(records=[]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(strategy="EXACT_KEYWORD")))
+
+    assert result.diagnostics.attempts[0].strategy == "EXACT_KEYWORD"
 
 
 def test_dynamic_retrieval_route_returns_evidence_status_and_safe_diagnostics(monkeypatch):

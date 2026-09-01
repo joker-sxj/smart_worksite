@@ -188,47 +188,32 @@ class RagService:
                 for chunk in candidate_chunks
             }
         records.sort(
-            key=lambda item: evidence_sort_key(
-                request.query,
-                item[0],
-                item[2],
-                evidence_content=join_evidence_window(item[0], adjacent_by_chunk.get(item[0].id, [])),
+            key=lambda item: (
+                validity_sort_rank(item[0].metadata),
+                evidence_sort_key(
+                    request.query,
+                    item[0],
+                    item[2],
+                    evidence_content=join_evidence_window(item[0], adjacent_by_chunk.get(item[0].id, [])),
+                ),
             ),
             reverse=True,
         )
         selected = records[: request.topK]
         output: list[RagRecord] = []
-        selected_ids = {chunk.id for chunk, _, _ in selected}
         emitted_ids: set[str] = set()
         for chunk, score, rerank_score in selected:
             if chunk.id in emitted_ids:
                 continue
-            output.append(to_rag_record(chunk, score, rerank_score))
-            emitted_ids.add(chunk.id)
             adjacent = adjacent_by_chunk.get(chunk.id, [])
-            for neighbor in adjacent:
-                if neighbor.id in selected_ids or neighbor.id in emitted_ids:
-                    continue
-                neighbor_metadata = {
-                    **neighbor.metadata,
-                    "projectId": neighbor.projectId,
-                    "knowledgeBaseId": neighbor.knowledgeBaseId,
-                    "documentId": neighbor.documentId,
-                    "chunkId": neighbor.chunkId,
-                    "contextExpansion": True,
-                    "expandedFromChunkId": chunk.chunkId,
-                }
-                output.append(RagRecord(
-                    title=neighbor.title,
-                    contentSnippet=neighbor.content,
-                    sourceType=neighbor.sourceType,
-                    sourceId=neighbor.sourceId or neighbor.documentId,
-                    score=float(score),
-                    metadata=neighbor_metadata,
-                ))
-                emitted_ids.add(neighbor.id)
-                if request.enforceTopK and len(output) >= request.topK:
-                    break
+            output.append(to_rag_record(
+                chunk,
+                score,
+                rerank_score,
+                evidence_content=join_evidence_window(chunk, adjacent),
+                evidence_window_ids=[chunk.chunkId, *(item.chunkId for item in adjacent)],
+            ))
+            emitted_ids.add(chunk.id)
             if request.enforceTopK and len(output) >= request.topK:
                 break
         if degraded_components:
@@ -297,10 +282,16 @@ def is_embedding_failure(exc: Exception) -> bool:
     return "embedding" in message or "vector dimension" in message
 
 
-def to_rag_record(chunk: ChunkRecord, score: float, rerank_score: float) -> RagRecord:
+def to_rag_record(
+    chunk: ChunkRecord,
+    score: float,
+    rerank_score: float,
+    evidence_content: str | None = None,
+    evidence_window_ids: list[str] | None = None,
+) -> RagRecord:
     return RagRecord(
         title=chunk.title,
-        contentSnippet=chunk.content,
+        contentSnippet=evidence_content or chunk.content,
         sourceType=chunk.sourceType,
         sourceId=chunk.sourceId or chunk.documentId,
         score=float(score),
@@ -311,6 +302,7 @@ def to_rag_record(chunk: ChunkRecord, score: float, rerank_score: float) -> RagR
             "documentId": chunk.documentId,
             "chunkId": chunk.chunkId,
             "rerankScore": float(rerank_score),
+            "evidenceWindowChunkIds": evidence_window_ids or [chunk.chunkId],
         },
     )
 
@@ -393,6 +385,15 @@ def join_evidence_window(chunk: ChunkRecord, adjacent: list[ChunkRecord]) -> str
         record.metadata.get("unitIndex", 0), record.metadata.get("chunkIndex", 0)
     ))
     return "\n".join(record.content for record in records)
+
+
+def validity_sort_rank(metadata: dict[str, Any]) -> int:
+    validity = str(metadata.get("documentValidity", "")).upper()
+    if validity == "CURRENT":
+        return 2
+    if validity in {"REPEALED", "EXPIRED", "FUTURE", "RESTRICTED"}:
+        return 0
+    return 1
 
 
 def contains_clause_body(content: str, clause: str) -> bool:
