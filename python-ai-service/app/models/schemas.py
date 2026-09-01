@@ -81,6 +81,8 @@ class RagSearchRequest(BaseModel):
         self.documentScope = list(dict.fromkeys(value.strip() for value in self.documentScope))
         if any(not value for value in self.documentScope):
             raise ValueError("documentScope must not contain blank values")
+        if self.libraryTypes:
+            raise ValueError("libraryTypes is not supported by the configured storage contract")
         return self
 
 
@@ -109,8 +111,10 @@ class EvidenceStatus(str, Enum):
 
 class RetrievalDiagnostics(BaseModel):
     candidateCount: int = 0
+    selectedCount: int = 0
     questionType: str | None = None
     validityStatus: str = "UNKNOWN"
+    futureEffectiveFrom: list[str] = Field(default_factory=list)
     attempts: list["RetrievalAttempt"] = Field(default_factory=list)
     assessment: "EvidenceAssessment | None" = None
     queryFingerprints: list[str] = Field(default_factory=list)
@@ -124,6 +128,7 @@ class RetrievalAttempt(BaseModel):
     queryFingerprint: str
     strategy: str
     candidateCount: int = Field(ge=0)
+    selectedCount: int = Field(default=0, ge=0)
     status: EvidenceStatus
     elapsedMs: int = Field(ge=0)
     stopReason: str | None = None

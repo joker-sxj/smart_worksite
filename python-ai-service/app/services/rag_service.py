@@ -38,9 +38,11 @@ class RagService:
     def _build_store(self, settings: Settings) -> VectorStore:
         provider = settings.rag_provider.upper()
         if provider == "MILVUS":
-            return MilvusVectorStore(settings.milvus_uri, settings.milvus_token, settings.milvus_collection)
+            return MilvusVectorStore(settings.milvus_uri, settings.milvus_token, settings.milvus_collection,
+                                     getattr(settings, "rag_store_timeout_seconds", 25.0))
         if provider == "PGVECTOR":
-            return PgVectorStore(settings.pgvector_dsn, settings.pgvector_table)
+            return PgVectorStore(settings.pgvector_dsn, settings.pgvector_table,
+                                 getattr(settings, "rag_store_timeout_seconds", 25.0))
         return LocalJsonVectorStore(settings.rag_data_dir, reembed=self._embed_for_legacy)
 
     async def _embed_for_legacy(self, texts: list[str]) -> list[list[float]]:
@@ -155,6 +157,7 @@ class RagService:
         else:
             text_candidates = []
         candidates = merge_candidates(candidates, text_candidates)
+        candidate_count = len(candidates)
         threshold = request.scoreThreshold if request.scoreThreshold is not None else -1.0
         records = []
         for chunk, score in candidates:
@@ -218,7 +221,10 @@ class RagService:
                 break
         if degraded_components:
             usage["degradedComponents"] = degraded_components
-        return RagSearchData(records=output[:request.topK] if request.enforceTopK else output), usage
+        output = output[:request.topK] if request.enforceTopK else output
+        usage["candidateCount"] = candidate_count
+        usage["selectedCount"] = len(output)
+        return RagSearchData(records=output), usage
 
     async def embed(self, texts: list[str]) -> tuple[list[list[float]], dict[str, Any]]:
         if self.settings.embedding_provider.upper() == "LOCAL_HASH":

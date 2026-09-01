@@ -327,15 +327,16 @@ def dimension_counts(records: list[ChunkRecord], expected_dimension: int) -> dic
 
 
 class PgVectorStore:
-    def __init__(self, dsn: str, table: str):
+    def __init__(self, dsn: str, table: str, timeout_seconds: float = 25.0):
         self.dsn = dsn
         self.table = safe_identifier(table, "PGVECTOR_TABLE")
+        self.timeout_seconds = timeout_seconds
 
     def _connect(self):
         import psycopg
         if not self.dsn:
             raise RuntimeError("PGVECTOR_DSN is not configured")
-        return psycopg.connect(self.dsn)
+        return psycopg.connect(self.dsn, connect_timeout=self.timeout_seconds)
 
     def _ensure_table(self, cur, dimension: int) -> None:
         cur.execute("create extension if not exists vector")
@@ -426,6 +427,7 @@ class PgVectorStore:
             params.append(document_scope)
         with self._connect() as conn:
             with conn.cursor() as cur:
+                cur.execute("set local statement_timeout = %s", [int(self.timeout_seconds * 1000)])
                 cur.execute(
                     f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata, embedding <=> %s::vector as distance from {self.table}{where} order by embedding <=> %s::vector limit %s",
                     [query_embedding] + params + [query_embedding, top_k],
@@ -453,6 +455,7 @@ class PgVectorStore:
         records_by_scope: dict[tuple[int, int, str], list[ChunkRecord]] = {}
         with self._connect() as conn:
             with conn.cursor() as cur:
+                cur.execute("set local statement_timeout = %s", [int(self.timeout_seconds * 1000)])
                 for project_id, knowledge_base_id, document_id in scopes:
                     cur.execute(
                         f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata "
@@ -468,10 +471,11 @@ class PgVectorStore:
 
 
 class MilvusVectorStore:
-    def __init__(self, uri: str, token: str, collection: str):
+    def __init__(self, uri: str, token: str, collection: str, timeout_seconds: float = 25.0):
         self.uri = uri
         self.token = token
         self.collection = collection
+        self.timeout_seconds = timeout_seconds
 
     async def upsert(self, chunks: list[ChunkRecord]) -> None:
         from pymilvus import MilvusClient, DataType
@@ -501,7 +505,7 @@ class MilvusVectorStore:
         data = [asdict(chunk) for chunk in chunks]
         client.upsert(collection_name=self.collection, data=data)
         client.flush(collection_name=self.collection)
-        client.load_collection(collection_name=self.collection)
+        client.load_collection(collection_name=self.collection, timeout=self.timeout_seconds)
 
     async def replace_document(self, project_id: int, knowledge_base_id: int, document_id: str, chunks: list[ChunkRecord]) -> None:
         validate_document_scope(project_id, knowledge_base_id, document_id, chunks)
@@ -539,11 +543,12 @@ class MilvusVectorStore:
         validate_search_scope(project_id, knowledge_base_ids)
         from pymilvus import MilvusClient
         client = MilvusClient(uri=self.uri, token=self.token or None)
-        client.load_collection(collection_name=self.collection)
+        client.load_collection(collection_name=self.collection, timeout=self.timeout_seconds)
         expr = f"projectId == {project_id} and knowledgeBaseId in [" + ",".join(str(x) for x in knowledge_base_ids) + "]"
         if document_scope:
             expr += " and documentId in [" + ",".join(json.dumps(value) for value in document_scope) + "]"
-        rows = client.search(collection_name=self.collection, data=[query_embedding], limit=top_k, filter=expr, output_fields=["*"])
+        rows = client.search(collection_name=self.collection, data=[query_embedding], limit=top_k, filter=expr,
+                             output_fields=["*"], timeout=self.timeout_seconds)
         results = []
         for hit in rows[0]:
             entity = hit.get("entity", {})
@@ -576,7 +581,8 @@ class MilvusVectorStore:
             # Query until exhaustion so long documents do not lose neighbors past the first page.
             iterator = getattr(client, "query_iterator", None)
             if iterator is not None:
-                handle = iterator(collection_name=self.collection, filter=expr, output_fields=["*"], batch_size=256)
+                handle = iterator(collection_name=self.collection, filter=expr, output_fields=["*"], batch_size=256,
+                                  timeout=self.timeout_seconds)
                 try:
                     while True:
                         page = handle.next()
@@ -590,7 +596,8 @@ class MilvusVectorStore:
             else:
                 offset = 0
                 while True:
-                    page = client.query(collection_name=self.collection, filter=expr, output_fields=["*"], limit=256, offset=offset)
+                    page = client.query(collection_name=self.collection, filter=expr, output_fields=["*"], limit=256,
+                                        offset=offset, timeout=self.timeout_seconds)
                     if not page:
                         break
                     rows.extend(page)

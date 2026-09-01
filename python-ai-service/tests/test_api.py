@@ -528,11 +528,44 @@ def test_database_summarize_result_fails_fast_when_qwen_fails(monkeypatch):
         "rows": [{"value": 1}],
     })
 
-    assert response.status_code == 200
+    assert response.status_code == 500
     body = response.json()
     assert body["success"] is False
-    assert body["errorCode"] == "RuntimeError"
-    assert "summary service down" in body["errorMessage"]
+    assert body["errorCode"] == "INTERNAL_ERROR"
+    assert body["errorMessage"] == "Internal service error"
+
+
+def test_global_500_does_not_leak_internal_url_token_or_path(monkeypatch):
+    from app.api import routes
+    secret = "https://internal.local?token=secret C:\\private\\model"
+    class FailingDatabase:
+        async def summarize_result(self, _request):
+            raise RuntimeError(secret)
+    monkeypatch.setattr(routes, "services", lambda: {"database": FailingDatabase()})
+
+    response = TestClient(app, raise_server_exceptions=False).post("/v1/database/summarize-result", json={
+        "question": "统计", "sql": "select 1", "columns": ["value"], "rows": [{"value": 1}],
+    })
+
+    assert response.status_code == 500
+    assert response.json()["errorCode"] == "INTERNAL_ERROR"
+    assert secret not in response.text
+    assert "token=secret" not in response.text
+
+
+def test_request_validation_error_returns_safe_field_summary_without_input_value():
+    secret = "https://internal.local?token=secret"
+    response = TestClient(app).post("/v1/rag/search", json={
+        "query": secret, "projectId": "not-an-int", "knowledgeBaseIds": [1],
+    })
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["errorCode"] == "VALIDATION_ERROR"
+    assert body["errorDetails"]
+    assert all(set(item) == {"field", "message", "type"} for item in body["errorDetails"])
+    assert secret not in response.text
+    assert "input" not in response.text
 
 
 def test_database_generate_query_endpoint_accepts_list_parameters(monkeypatch):

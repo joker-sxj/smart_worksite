@@ -169,15 +169,39 @@ def test_pgvector_search_binds_project_and_knowledge_base_scope(monkeypatch):
         def cursor(self):
             return Cursor()
 
-    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda _: Connection()))
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda _, **__: Connection()))
     store = PgVectorStore("postgresql://local", "chunks")
 
     asyncio.run(store.search([1.0, 0.0], 7, [10, 11], 5))
 
-    sql, params = calls[0]
+    sql, params = calls[1]
     assert "project_id = %s" in sql
     assert "knowledge_base_id = any(%s)" in sql
     assert params == [[1.0, 0.0], 7, [10, 11], [1.0, 0.0], 5]
+
+
+def test_pgvector_search_sets_server_timeout_below_round_deadline(monkeypatch):
+    calls = []
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, sql, params=None): calls.append((" ".join(sql.split()), params))
+        def fetchall(self): return []
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def cursor(self): return Cursor()
+    connect_calls = []
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(
+        connect=lambda dsn, **kwargs: connect_calls.append((dsn, kwargs)) or Connection()
+    ))
+
+    asyncio.run(PgVectorStore("postgresql://local", "chunks", timeout_seconds=25).search(
+        [1.0, 0.0], 7, [10], 5,
+    ))
+
+    assert connect_calls[0][1]["connect_timeout"] == 25
+    assert calls[0] == ("set local statement_timeout = %s", [25000])
 
 
 def test_pgvector_delete_binds_project_scope(monkeypatch):
@@ -208,7 +232,7 @@ def test_pgvector_delete_binds_project_scope(monkeypatch):
         def commit(self):
             pass
 
-    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda _: Connection()))
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda _, **__: Connection()))
     store = PgVectorStore("postgresql://local", "chunks")
 
     deleted = asyncio.run(store.delete_sources(7, "DOCUMENT", ["shared"], None))
@@ -251,6 +275,22 @@ def test_milvus_search_and_delete_apply_project_scope(monkeypatch):
     assert search_filter == "projectId == 7 and knowledgeBaseId in [10,11]"
     assert "projectId == 7" in delete_filter
     assert deleted == 1
+
+
+def test_milvus_retrieval_calls_receive_client_timeout(monkeypatch):
+    calls = []
+    class Client:
+        def __init__(self, **_): pass
+        def load_collection(self, **kwargs): calls.append(("load", kwargs))
+        def search(self, **kwargs): calls.append(("search", kwargs)); return [[]]
+    monkeypatch.setitem(sys.modules, "pymilvus", SimpleNamespace(MilvusClient=Client))
+
+    asyncio.run(MilvusVectorStore(
+        "http://milvus:19530", "", "chunks", timeout_seconds=25,
+    ).search([1.0, 0.0], 7, [10], 5))
+
+    assert next(kwargs for name, kwargs in calls if name == "load")["timeout"] == 25
+    assert next(kwargs for name, kwargs in calls if name == "search")["timeout"] == 25
 
 
 def test_vector_store_deletes_reject_missing_project_scope(tmp_path, monkeypatch):
@@ -354,7 +394,7 @@ def test_pgvector_new_table_requires_knowledge_base_identity(monkeypatch):
         def commit(self):
             pass
 
-    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda _: Connection()))
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda _, **__: Connection()))
     store = PgVectorStore("postgresql://local", "chunks")
 
     asyncio.run(store.upsert([chunk("strict-kb")]))
@@ -391,7 +431,7 @@ def test_pgvector_replace_document_deletes_only_obsolete_chunks_in_exact_scope(m
         def commit(self):
             pass
 
-    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda _: Connection()))
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda _, **__: Connection()))
     store = PgVectorStore("postgresql://local", "chunks")
     replacement = chunk("current", project_id=7, knowledge_base_id=10, document_id="doc-1")
 
@@ -481,7 +521,7 @@ def test_pgvector_empty_document_replacement_is_safe_before_table_creation(monke
         def commit(self):
             pass
 
-    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda _: Connection()))
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda _, **__: Connection()))
     store = PgVectorStore("postgresql://local", "chunks")
 
     asyncio.run(store.replace_document(7, 10, "doc-empty", []))

@@ -2,6 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
@@ -55,20 +56,30 @@ async def handle_context_budget_exceeded(request: Request, exc: ContextBudgetExc
 async def handle_exception(request: Request, exc: Exception):
     logger.exception("ai service error path=%s", request.url.path)
     return JSONResponse(
-        status_code=200,
+        status_code=500,
         content={
             "success": False,
             "traceId": "",
             "data": None,
             "usage": {},
-            "errorCode": exc.__class__.__name__,
-            "errorMessage": str(exc),
+            "errorCode": "INTERNAL_ERROR",
+            "errorMessage": "Internal service error",
         },
     )
 
 
-@app.exception_handler(ValidationError)
-async def handle_validation_error(request: Request, exc: ValidationError):
+def safe_validation_details(exc: ValidationError | RequestValidationError):
+    return [
+        {
+            "field": ".".join(str(part) for part in error.get("loc", ()) if part != "body"),
+            "message": "Invalid value",
+            "type": error.get("type", "validation_error"),
+        }
+        for error in exc.errors()
+    ]
+
+
+async def handle_validation_error(request: Request, exc: ValidationError | RequestValidationError):
     return JSONResponse(
         status_code=422,
         content={
@@ -77,6 +88,11 @@ async def handle_validation_error(request: Request, exc: ValidationError):
             "data": None,
             "usage": {},
             "errorCode": "VALIDATION_ERROR",
-            "errorMessage": str(exc),
+            "errorMessage": "Request validation failed",
+            "errorDetails": safe_validation_details(exc),
         },
     )
+
+
+app.add_exception_handler(ValidationError, handle_validation_error)
+app.add_exception_handler(RequestValidationError, handle_validation_error)

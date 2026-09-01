@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     rag_chunk_size: int = 800
     rag_chunk_overlap: int = 120
     rag_rerank_top_k: int = 20
+    rag_store_timeout_seconds: float = Field(default=25.0, gt=0, lt=30)
 
     milvus_uri: str = "http://127.0.0.1:19530"
     milvus_token: str = ""

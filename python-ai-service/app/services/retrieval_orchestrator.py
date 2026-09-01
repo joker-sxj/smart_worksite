@@ -246,10 +246,7 @@ def _safe_components(usage: dict[str, Any]) -> list[str]:
 
 
 def resolve_validity(records: list[RagRecord]) -> str:
-    values = {
-        str(item.metadata.get("documentValidity")).upper()
-        for item in records if item.metadata.get("documentValidity") is not None
-    }
+    values = {validity_value(item) for item in records}
     if not values:
         return "UNKNOWN"
     if "CURRENT" in values:
@@ -264,11 +261,59 @@ def resolve_validity(records: list[RagRecord]) -> str:
 
 def apply_validity_policy(records: list[RagRecord]) -> tuple[list[RagRecord], str]:
     status = resolve_validity(records)
-    if status == "CURRENT":
-        return [item for item in records if str(item.metadata.get("documentValidity", "")).upper() == "CURRENT"], status
-    if status in NON_CURRENT_VALIDITY:
-        return [], status
     return records, status
+
+
+def validity_value(record: RagRecord) -> str:
+    value = record.metadata.get("documentValidity")
+    return str(value).upper() if value is not None else "UNKNOWN"
+
+
+def assessment_records(records: list[RagRecord], validity_status: str) -> list[RagRecord]:
+    if validity_status == "CURRENT":
+        current = [item for item in records if validity_value(item) == "CURRENT"]
+        newest_by_family: dict[str, tuple[str, tuple[int, ...]]] = {}
+        for item in current:
+            family = version_family(item)
+            newest_by_family[family] = max(newest_by_family.get(family, ("", ())), version_key(item))
+        return [item for item in current if version_key(item) == newest_by_family[version_family(item)]]
+    if validity_status == "UNKNOWN":
+        if any(validity_value(item) == "CURRENT" for item in records):
+            return [item for item in records if validity_value(item) == "CURRENT"]
+        if any(validity_value(item) in NON_CURRENT_VALIDITY for item in records):
+            return []
+    if validity_status in NON_CURRENT_VALIDITY:
+        return []
+    return records
+
+
+def future_effective_from(records: list[RagRecord]) -> list[str]:
+    return sorted({
+        str(item.metadata["effectiveFrom"])
+        for item in records
+        if validity_value(item) == "FUTURE" and item.metadata.get("effectiveFrom")
+    })
+
+
+def sort_by_validity_version(records: list[RagRecord]) -> list[RagRecord]:
+    def key(item: RagRecord):
+        return validity_value(item) == "CURRENT", *version_key(item)
+    return sorted(records, key=key, reverse=True)
+
+
+def version_key(item: RagRecord) -> tuple[str, tuple[int, ...]]:
+    metadata = item.metadata
+    date = str(metadata.get("versionDate") or metadata.get("effectiveFrom") or "")
+    version = tuple(int(value) for value in re.findall(r"\d+", str(metadata.get("versionNo") or "")))
+    return date, version
+
+
+def version_family(item: RagRecord) -> str:
+    metadata = item.metadata
+    return str(
+        metadata.get("versionGroup") or metadata.get("standardNo") or metadata.get("regulationName")
+        or metadata.get("documentId") or item.sourceId or item.title
+    )
 
 
 def build_assessment(query: str, records: list[RagRecord], status: EvidenceStatus) -> EvidenceAssessment:
@@ -321,17 +366,25 @@ class RetrievalOrchestrator:
                 diagnostics=diagnostics,
             ), {"retrievalRounds": 0, "stopReason": "TIMEOUT"}
         first.records = self._filter_document_scope(first.records, request.documentScope)
+        first.records = sort_by_validity_version(first.records)
         first.records, validity_status = apply_validity_policy(first.records)
         degraded = _safe_components(first_usage)
-        status, missing = evaluate_evidence(first.records, degraded, request.query)
-        if validity_status in NON_CURRENT_VALIDITY:
+        assessed_first = assessment_records(first.records, validity_status)
+        status, missing = evaluate_evidence(assessed_first, degraded, request.query)
+        if first.records and (validity_status in NON_CURRENT_VALIDITY or (
+            validity_status == "UNKNOWN" and not any(validity_value(item) == "CURRENT" for item in first.records)
+        )):
             status = EvidenceStatus.VALIDITY_UNKNOWN
         rewritten_query: str | None = None
         stop_reason: str | None = None
         records = first.records[:request.topK]
         rounds = 1
-        attempts = [self._attempt(1, fingerprints[0], request.strategy, records, status,
-                                  int((asyncio.get_running_loop().time() - started) * 1000))]
+        attempts = [self._attempt(
+            1, fingerprints[0], request.strategy, records, status,
+            int((asyncio.get_running_loop().time() - started) * 1000),
+            candidate_count=int(first_usage.get("candidateCount", len(first.records))),
+            selected_count=int(first_usage.get("selectedCount", len(records))),
+        )]
 
         if status == EvidenceStatus.INSUFFICIENT:
             try:
@@ -372,31 +425,39 @@ class RetrievalOrchestrator:
                     degraded = list(dict.fromkeys([*degraded, *_safe_components(second_usage)]))
                     if not second_timed_out and candidate_ids(first.records) == candidate_ids(second.records):
                         stop_reason = "SKIPPED_DUPLICATE_CANDIDATES"
-                    records = merge_records(first.records, second.records, request.topK)
+                    records = sort_by_validity_version(merge_records(first.records, second.records, request.topK))
                     records, validity_status = apply_validity_policy(records)
                     if not second_timed_out:
                         # Rewriting improves recall; it must not change the question's evidence obligations.
-                        status, missing = evaluate_evidence(records, degraded, request.query)
-                        if validity_status in NON_CURRENT_VALIDITY:
+                        status, missing = evaluate_evidence(
+                            assessment_records(records, validity_status), degraded, request.query
+                        )
+                        if records and (validity_status in NON_CURRENT_VALIDITY or (
+                            validity_status == "UNKNOWN" and not any(validity_value(item) == "CURRENT" for item in records)
+                        )):
                             status = EvidenceStatus.VALIDITY_UNKNOWN
                     attempts.append(self._attempt(2, fingerprints[-1], request.strategy, records, status,
                                                   first_elapsed=int((asyncio.get_running_loop().time() - second_started) * 1000),
-                                                  stop_reason=stop_reason))
+                                                  stop_reason=stop_reason,
+                                                  candidate_count=int(second_usage.get("candidateCount", len(second.records))),
+                                                  selected_count=int(second_usage.get("selectedCount", len(second.records)))))
 
         if stop_reason and len(attempts) == 1:
             attempts[0].status = status
             attempts[0].stopReason = stop_reason
 
         diagnostics = RetrievalDiagnostics(
-            candidateCount=len(records),
+            candidateCount=sum(item.candidateCount for item in attempts),
+            selectedCount=len(records),
             questionType=analyze_question(request.query).kind,
             validityStatus=validity_status,
+            futureEffectiveFrom=future_effective_from(records),
             queryFingerprints=fingerprints,
             degradedComponents=degraded,
             missingAspects=missing,
             stopReason=stop_reason,
             attempts=attempts,
-            assessment=build_assessment(request.query, records, status),
+            assessment=build_assessment(request.query, assessment_records(records, validity_status), status),
         )
         data = DynamicRetrievalData(
             records=records,
@@ -407,7 +468,8 @@ class RetrievalOrchestrator:
             diagnostics=diagnostics,
         )
         usage = {
-            "candidateCount": len(records),
+            "candidateCount": diagnostics.candidateCount,
+            "selectedCount": len(records),
             "retrievalRounds": rounds,
             "degradedComponents": degraded,
         }
@@ -425,10 +487,15 @@ class RetrievalOrchestrator:
             return (await self.rewrite(request, records)).strip()
 
     @staticmethod
-    def _attempt(attempt_no, fingerprint, strategy, records, status, first_elapsed=0, stop_reason=None):
+    def _attempt(
+        attempt_no, fingerprint, strategy, records, status, first_elapsed=0,
+        stop_reason=None, candidate_count=None, selected_count=None,
+    ):
         return RetrievalAttempt(
             attemptNo=attempt_no, queryFingerprint=fingerprint, strategy=strategy,
-            candidateCount=len(records), status=status, elapsedMs=first_elapsed,
+            candidateCount=len(records) if candidate_count is None else candidate_count,
+            selectedCount=len(records) if selected_count is None else selected_count,
+            status=status, elapsedMs=first_elapsed,
             stopReason=stop_reason,
         )
 

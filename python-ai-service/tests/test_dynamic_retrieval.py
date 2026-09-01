@@ -41,6 +41,7 @@ def request(**overrides):
 
 
 def record(chunk_id, content="证据正文", score=0.9, **metadata):
+    metadata.setdefault("documentValidity", "CURRENT")
     return RagRecord(
         title="施工安全检查标准",
         contentSnippet=content,
@@ -240,17 +241,106 @@ def test_generic_compound_entities_are_assessed_individually_without_phrase_spec
 
 
 def test_validity_missing_metadata_is_unknown_but_does_not_permanently_reject_legacy_evidence():
+    legacy = record("definition", content="临边作业是指工作面边沿无围护设施的高处作业。")
+    legacy.metadata.pop("documentValidity")
+
     async def search(_search_request):
-        return RagSearchData(records=[record(
-            "definition", content="临边作业是指工作面边沿无围护设施的高处作业。",
-        )]), {}
+        return RagSearchData(records=[legacy]), {}
 
     result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
         query="什么是临边作业？",
     )))
 
-    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
+    assert result.evidenceStatus == EvidenceStatus.VALIDITY_UNKNOWN
+    assert [item.metadata["chunkId"] for item in result.records] == ["definition"]
     assert result.diagnostics.validityStatus == "UNKNOWN"
+
+
+def test_mixed_validity_keeps_audit_records_but_assesses_only_current_evidence():
+    async def search(_search_request):
+        return RagSearchData(records=[
+            record("unknown", content="安全通道宽度不得小于2.5米。", documentValidity="UNKNOWN"),
+            record("future", content="安全通道宽度不得小于2.0米。",
+                   documentValidity="FUTURE", effectiveFrom="2030-01-01"),
+            record("repealed", content="安全通道宽度不得小于0.8米。", documentValidity="REPEALED"),
+            record("current", content="安全通道宽度不得小于1.5米。", documentValidity="CURRENT"),
+        ]), {"candidateCount": 4, "selectedCount": 4}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="安全通道宽度应为多少？", topK=4,
+    )))
+
+    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
+    assert {item.metadata["chunkId"] for item in result.records} == {
+        "unknown", "future", "repealed", "current",
+    }
+    assert result.diagnostics.assessment.coveredAspects == ["TOPIC", "NUMBER"]
+    assert result.diagnostics.validityStatus == "CURRENT"
+    assert result.diagnostics.futureEffectiveFrom == ["2030-01-01"]
+
+
+def test_unknown_validity_enum_is_not_treated_as_current():
+    async def search(_search_request):
+        return RagSearchData(records=[record(
+            "invalid", content="临边作业是指工作面边沿无围护设施的高处作业。",
+            documentValidity="ACTIVEISH",
+        )]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(query="什么是临边作业？")))
+
+    assert result.evidenceStatus == EvidenceStatus.VALIDITY_UNKNOWN
+    assert result.diagnostics.validityStatus == "UNKNOWN"
+
+
+def test_current_versions_sort_latest_first_and_keep_same_version_conflicts_together():
+    async def search(_search_request):
+        return RagSearchData(records=[
+            record("v1", documentValidity="CURRENT", versionNo="1", versionDate="2025-01-01"),
+            record("v2-a", documentValidity="CURRENT", versionNo="2", versionDate="2026-01-01", conflict=True),
+            record("v2-b", documentValidity="CURRENT", versionNo="2", versionDate="2026-01-01", conflict=True),
+        ]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(topK=3)))
+
+    assert [item.metadata["chunkId"] for item in result.records] == ["v2-a", "v2-b", "v1"]
+    assert result.evidenceStatus == EvidenceStatus.CONFLICT
+
+
+def test_older_current_version_does_not_override_newer_current_assessment():
+    async def search(_search_request):
+        return RagSearchData(records=[
+            record("old", content="安全通道宽度不得小于0.8米。", documentValidity="CURRENT",
+                   versionDate="2025-01-01", conflict=True),
+            record("new", content="安全通道宽度不得小于1.5米。", documentValidity="CURRENT",
+                   versionDate="2026-01-01"),
+        ]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="安全通道宽度应为多少？", topK=2,
+    )))
+
+    assert [item.metadata["chunkId"] for item in result.records] == ["new", "old"]
+    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
+
+
+def test_latest_version_selection_does_not_suppress_other_current_document_families():
+    builder = record(
+        "builder", content="建设单位负责提供施工现场基础资料。", documentValidity="CURRENT",
+        versionDate="2025-01-01", documentId="doc-builder",
+    ).model_copy(update={"title": "建设管理规定"})
+    contractor = record(
+        "contractor", content="施工单位负责落实安全管理措施。", documentValidity="CURRENT",
+        versionDate="2026-01-01", documentId="doc-contractor",
+    ).model_copy(update={"title": "施工安全规定"})
+
+    async def search(_search_request):
+        return RagSearchData(records=[builder, contractor]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="建设单位和施工单位分别负责什么？", topK=2,
+    )))
+
+    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
 
 
 def test_sufficient_first_round_stops_without_rewrite():
@@ -688,7 +778,7 @@ def test_current_evidence_is_preferred_and_repealed_evidence_cannot_override_it(
 
     assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
     assert result.records[0].metadata["chunkId"] == "current"
-    assert all(item.metadata.get("documentValidity") != "REPEALED" for item in result.records)
+    assert {item.metadata.get("documentValidity") for item in result.records} == {"CURRENT", "REPEALED"}
     assert result.diagnostics.validityStatus == "CURRENT"
 
 
@@ -789,7 +879,7 @@ def test_real_local_rag_service_dynamic_orchestration_respects_scope_and_top_k(t
         query="什么是临边作业？", knowledgeBaseIds=[11], documentScope=["doc-a"], topK=1,
     )))
 
-    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
+    assert result.evidenceStatus == EvidenceStatus.VALIDITY_UNKNOWN
     assert len(result.records) == 1
     assert result.records[0].metadata["documentId"] == "doc-a"
 
@@ -828,7 +918,7 @@ def test_dynamic_search_endpoint_contract_uses_real_rag_service_and_local_store(
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    assert body["data"]["evidenceStatus"] == "SUFFICIENT"
+    assert body["data"]["evidenceStatus"] == "VALIDITY_UNKNOWN"
     assert len(body["data"]["records"]) == 1
     assert body["data"]["records"][0]["metadata"]["documentId"] == "doc-a"
 
@@ -876,6 +966,66 @@ def test_attempt_uses_the_requested_strategy():
     result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(strategy="EXACT_KEYWORD")))
 
     assert result.diagnostics.attempts[0].strategy == "EXACT_KEYWORD"
+
+
+def test_rag_usage_and_orchestrator_diagnostics_distinguish_candidates_from_selected(tmp_path):
+    class Settings:
+        rag_provider = "LOCAL"
+        rag_data_dir = str(tmp_path)
+        milvus_uri = milvus_token = milvus_collection = pgvector_dsn = pgvector_table = ""
+        embedding_provider = "LOCAL_HASH"
+        rerank_provider = "LEXICAL"
+        rag_rerank_top_k = 5
+
+    chunks = [
+        ChunkRecord(str(index), 7, 11, "doc", str(index), f"证据 {index}", "DOCUMENT", None, {}, [])
+        for index in range(3)
+    ]
+
+    class Store:
+        async def search(self, *_args, **_kwargs):
+            return [(chunk, 1.0 - index / 10) for index, chunk in enumerate(chunks)]
+        async def search_text(self, *_args, **_kwargs):
+            return []
+        async def adjacent_many(self, candidates, **_kwargs):
+            return {chunk.id: [] for chunk in candidates}
+
+    service = RagService(Settings(), object())
+    service.store = Store()
+    search_request = request(query="证据是什么？", knowledgeBaseIds=[11], topK=1)
+    data, usage = asyncio.run(service.search(search_request.as_rag_search_request()))
+    result, _ = asyncio.run(RetrievalOrchestrator(service.search).retrieve(search_request))
+
+    assert len(data.records) == 1
+    assert usage["candidateCount"] == 3
+    assert usage["selectedCount"] == 1
+    assert result.diagnostics.candidateCount == 3
+    assert result.diagnostics.selectedCount == 1
+    assert result.diagnostics.attempts[0].candidateCount == 3
+    assert result.diagnostics.attempts[0].selectedCount == 1
+
+
+def test_second_attempt_reports_that_rounds_candidate_and_selected_counts():
+    calls = 0
+    async def search(_request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return RagSearchData(records=[]), {"candidateCount": 8, "selectedCount": 0}
+        return RagSearchData(records=[record("current")]), {"candidateCount": 6, "selectedCount": 1}
+    async def rewrite(_request, _records):
+        return "新的有效检索表达"
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search, rewrite).retrieve(request()))
+
+    assert [(item.candidateCount, item.selectedCount) for item in result.diagnostics.attempts] == [(8, 0), (6, 1)]
+    assert result.diagnostics.candidateCount == 14
+    assert result.diagnostics.selectedCount == 1
+
+
+def test_library_types_reject_values_the_storage_contract_cannot_enforce():
+    with pytest.raises(ValidationError, match="libraryTypes"):
+        request(libraryTypes=["DOCUMENT"])
 
 
 def test_dynamic_retrieval_route_returns_evidence_status_and_safe_diagnostics(monkeypatch):
