@@ -118,6 +118,7 @@ class RetrievalDiagnostics(BaseModel):
     futureEffectiveFrom: list[str] = Field(default_factory=list)
     attempts: list["RetrievalAttempt"] = Field(default_factory=list)
     assessment: "EvidenceAssessment | None" = None
+    firstAssessment: "EvidenceAssessment | None" = None
     queryFingerprints: list[str] = Field(default_factory=list)
     degradedComponents: list[str] = Field(default_factory=list)
     missingAspects: list[str] = Field(default_factory=list)

@@ -351,7 +351,8 @@ class RetrievalOrchestrator:
         deadline = asyncio.get_running_loop().time() + self.total_timeout_seconds
         started = asyncio.get_running_loop().time()
         try:
-            internal_top_k = min(MAX_DYNAMIC_CANDIDATES, max(request.topK * 4, request.topK))
+            # Keep the whole bounded version family visible before validity/version policy.
+            internal_top_k = MAX_DYNAMIC_CANDIDATES
             first, first_usage = await self._search_with_deadline(
                 request.as_rag_search_request(top_k=internal_top_k, enforce_top_k=False), deadline
             )
@@ -375,6 +376,7 @@ class RetrievalOrchestrator:
         degraded = _safe_components(first_usage)
         assessed_first = assessment_records(first.records, validity_status)
         status, missing = evaluate_evidence(assessed_first, degraded, request.query)
+        first_assessment = build_assessment(request.query, assessed_first, status)
         if first.records and (validity_status in NON_CURRENT_VALIDITY or (
             validity_status == "UNKNOWN" and not any(validity_value(item) == "CURRENT" for item in first.records)
         )):
@@ -464,6 +466,7 @@ class RetrievalOrchestrator:
             stopReason=stop_reason,
             attempts=attempts,
             assessment=build_assessment(request.query, assessment_records(records, validity_status), status),
+            firstAssessment=first_assessment,
         )
         data = DynamicRetrievalData(
             records=records,

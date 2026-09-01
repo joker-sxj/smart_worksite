@@ -496,6 +496,24 @@ def test_rewrite_failure_degrades_without_leaking_exception_details():
     assert "private" not in dumped
 
 
+def test_rewrite_failure_keeps_first_insufficient_assessment():
+    async def search(_search_request):
+        return RagSearchData(records=[]), {}
+
+    async def rewrite(_request, _records):
+        raise RuntimeError("rewrite backend unavailable")
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search, rewrite).retrieve(request(
+        query="安全通道宽度是多少？",
+    )))
+
+    assert result.evidenceStatus == EvidenceStatus.RETRIEVAL_DEGRADED
+    assert result.diagnostics.assessment.status == EvidenceStatus.RETRIEVAL_DEGRADED
+    assert result.diagnostics.firstAssessment is not None
+    assert result.diagnostics.firstAssessment.status == EvidenceStatus.INSUFFICIENT
+    assert "NUMBER" in result.diagnostics.firstAssessment.missingAspects
+
+
 def test_retrieval_timeout_returns_completed_timeout_state_without_rewrite():
     rewrite_calls = 0
 
@@ -853,8 +871,29 @@ def test_dynamic_wide_recall_keeps_newer_low_score_version_before_user_top_k(tmp
         query="安全通道宽度应为多少？", knowledgeBaseIds=[11], topK=1,
     )))
 
-    assert seen_top_k[0] >= 4
+    assert seen_top_k[0] == 100
     assert [item.metadata["chunkId"] for item in result.records] == ["new"]
+
+
+def test_dynamic_first_round_can_see_six_versions_before_final_top_k():
+    versions = [
+        record(f"v{index}", score=1.0 - index / 10, **{
+            "documentValidity": "CURRENT", "versionGroup": "standard",
+            "versionDate": f"202{index}-01-01",
+        })
+        for index in range(6)
+    ]
+
+    async def search(search_request):
+        assert search_request.topK == 100
+        return RagSearchData(records=versions), {"candidateCount": 6, "selectedCount": 6}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="安全通道宽度是多少？", topK=1,
+    )))
+
+    assert len(result.records) == 1
+    assert result.records[0].metadata["versionDate"] == "2025-01-01"
 
 
 def test_rag_service_passes_one_decreasing_deadline_across_store_calls(tmp_path):
@@ -927,6 +966,34 @@ def test_local_library_types_filter_vector_text_and_adjacent_context(tmp_path):
     assert [item.id for item, _ in vector] == ["policy"]
     assert [item.id for item, _ in text] == ["policy"]
     assert adjacent["policy"] == []
+
+
+def test_local_slow_file_load_does_not_block_event_loop(tmp_path, monkeypatch):
+    store = LocalJsonVectorStore(str(tmp_path))
+    original_load = store._load
+    load_finished = False
+
+    def slow_load():
+        nonlocal load_finished
+        time.sleep(0.05)
+        result = original_load()
+        load_finished = True
+        return result
+
+    monkeypatch.setattr(store, "_load", slow_load)
+
+    async def probe():
+        async def ticker():
+            await asyncio.sleep(0.01)
+            return load_finished
+
+        _, blocked = await asyncio.gather(
+            store.search_text("missing", 7, [11], 1),
+            ticker(),
+        )
+        return blocked
+
+    assert asyncio.run(probe()) is False
 
 
 def test_rag_service_pushes_document_scope_to_vector_text_and_adjacency_store_calls(tmp_path):

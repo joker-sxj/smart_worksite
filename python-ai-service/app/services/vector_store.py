@@ -193,7 +193,7 @@ class LocalJsonVectorStore:
         validate_search_scope(project_id, knowledge_base_ids)
         kb_filter = set(knowledge_base_ids)
         query_dimension = len(query_embedding)
-        records = self._load()
+        records = await asyncio.to_thread(self._load)
         scoped = [
             chunk for chunk in records
             if chunk.projectId == project_id and chunk.knowledgeBaseId in kb_filter
@@ -213,7 +213,7 @@ class LocalJsonVectorStore:
             async with self._migration_lock:
                 migrated_total = 0
                 while migrated_total < LEGACY_MIGRATION_MAX_CHUNKS_PER_SEARCH:
-                    records = self._load()
+                    records = await asyncio.to_thread(self._load)
                     selected_legacy = [
                         record for record in records
                         if record.projectId == project_id
@@ -255,7 +255,7 @@ class LocalJsonVectorStore:
                     }
                     migrated_count = 0
                     with self._write_lock:
-                        current = self._load()
+                        current = await asyncio.to_thread(self._load)
                         for record in current:
                             embedding = embeddings_by_id.get(record.id)
                             if (
@@ -281,7 +281,7 @@ class LocalJsonVectorStore:
                         knowledge_base_ids,
                         migrated_total,
                     )
-            records = self._load()
+            records = await asyncio.to_thread(self._load)
             scoped = [
                 chunk for chunk in records
                 if chunk.projectId == project_id and chunk.knowledgeBaseId in kb_filter
@@ -316,7 +316,7 @@ class LocalJsonVectorStore:
         validate_search_scope(project_id, knowledge_base_ids)
         scored: list[tuple[ChunkRecord, float]] = []
         kb_filter = set(knowledge_base_ids)
-        for record in self._load():
+        for record in await asyncio.to_thread(self._load):
             if record.projectId != project_id or record.knowledgeBaseId not in kb_filter:
                 continue
             if document_scope and record.documentId not in document_scope:
@@ -335,7 +335,7 @@ class LocalJsonVectorStore:
     async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> dict[str, list[ChunkRecord]]:
         if not chunks:
             return {}
-        records = self._load()
+        records = await asyncio.to_thread(self._load)
         result: dict[str, list[ChunkRecord]] = {}
         for chunk in chunks:
             if document_scope and chunk.documentId not in document_scope:
@@ -461,15 +461,18 @@ class PgVectorStore:
         if library_types:
             where += " and upper(coalesce(metadata->>'libraryType', source_type)) = any(%s)"
             params.append(library_types)
-        timeout = remaining_timeout(deadline)
-        with self._connect(timeout) as conn:
-            with conn.cursor() as cur:
-                cur.execute("set local statement_timeout = %s", [max(1, int(timeout * 1000))])
-                cur.execute(
-                    f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata, embedding <=> %s::vector as distance from {self.table}{where} order by embedding <=> %s::vector limit %s",
-                    [query_embedding] + params + [query_embedding, top_k],
-                )
-                rows = cur.fetchall()
+        def run_query():
+            timeout = remaining_timeout(deadline)
+            with self._connect(timeout) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("set local statement_timeout = %s", [max(1, int(timeout * 1000))])
+                    cur.execute(
+                        f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata, embedding <=> %s::vector as distance from {self.table}{where} order by embedding <=> %s::vector limit %s",
+                        [query_embedding] + params + [query_embedding, top_k],
+                    )
+                    return cur.fetchall()
+
+        rows = await asyncio.to_thread(run_query)
         remaining_timeout(deadline)
         results = []
         for row in rows:
@@ -492,16 +495,19 @@ class PgVectorStore:
         if library_types:
             where.append("upper(coalesce(metadata->>'libraryType', source_type)) = any(%s)")
             params.append(library_types)
-        timeout = remaining_timeout(deadline)
-        with self._connect(timeout) as conn:
-            with conn.cursor() as cur:
-                cur.execute("set local statement_timeout = %s", [max(1, int(timeout * 1000))])
-                cur.execute(
-                    f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata "
-                    f"from {self.table} where {' and '.join(where)} limit %s",
-                    [*params, min(100, max(top_k * 4, top_k))],
-                )
-                rows = cur.fetchall()
+        def run_query():
+            timeout = remaining_timeout(deadline)
+            with self._connect(timeout) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("set local statement_timeout = %s", [max(1, int(timeout * 1000))])
+                    cur.execute(
+                        f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata "
+                        f"from {self.table} where {' and '.join(where)} limit %s",
+                        [*params, min(100, max(top_k * 4, top_k))],
+                    )
+                    return cur.fetchall()
+
+        rows = await asyncio.to_thread(run_query)
         remaining_timeout(deadline)
         results = [
             (ChunkRecord(id=row[0], chunkId=row[1], projectId=row[2], knowledgeBaseId=row[3], documentId=row[4],
@@ -522,24 +528,27 @@ class PgVectorStore:
         scopes = {(chunk.projectId, chunk.knowledgeBaseId, chunk.documentId) for chunk in chunks}
         records_by_scope: dict[tuple[int, int, str], list[ChunkRecord]] = {}
         deadline = operation_deadline(self.timeout_seconds, timeout_seconds)
-        timeout = remaining_timeout(deadline)
-        with self._connect(timeout) as conn:
-            with conn.cursor() as cur:
-                cur.execute("set local statement_timeout = %s", [max(1, int(timeout * 1000))])
-                for project_id, knowledge_base_id, document_id in scopes:
-                    cur.execute("set local statement_timeout = %s", [max(1, int(remaining_timeout(deadline) * 1000))])
-                    library_sql = " and upper(coalesce(metadata->>'libraryType', source_type)) = any(%s)" if library_types else ""
-                    params = [project_id, knowledge_base_id, document_id, *([library_types] if library_types else [])]
-                    cur.execute(
-                        f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata "
-                        f"from {self.table} where project_id = %s and knowledge_base_id = %s and document_id = %s{library_sql}",
-                        params,
-                    )
-                    records_by_scope[(project_id, knowledge_base_id, document_id)] = [
-                        ChunkRecord(id=row[0], chunkId=row[1], projectId=row[2], knowledgeBaseId=row[3], documentId=row[4],
-                                    title=row[5], content=row[6], sourceType=row[7], sourceId=row[8], metadata=row[9] or {}, embedding=[])
-                        for row in cur.fetchall()
-                    ]
+        def run_queries():
+            timeout = remaining_timeout(deadline)
+            with self._connect(timeout) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("set local statement_timeout = %s", [max(1, int(timeout * 1000))])
+                    for project_id, knowledge_base_id, document_id in scopes:
+                        cur.execute("set local statement_timeout = %s", [max(1, int(remaining_timeout(deadline) * 1000))])
+                        library_sql = " and upper(coalesce(metadata->>'libraryType', source_type)) = any(%s)" if library_types else ""
+                        params = [project_id, knowledge_base_id, document_id, *([library_types] if library_types else [])]
+                        cur.execute(
+                            f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata "
+                            f"from {self.table} where project_id = %s and knowledge_base_id = %s and document_id = %s{library_sql}",
+                            params,
+                        )
+                        records_by_scope[(project_id, knowledge_base_id, document_id)] = [
+                            ChunkRecord(id=row[0], chunkId=row[1], projectId=row[2], knowledgeBaseId=row[3], documentId=row[4],
+                                        title=row[5], content=row[6], sourceType=row[7], sourceId=row[8], metadata=row[9] or {}, embedding=[])
+                            for row in cur.fetchall()
+                        ]
+
+        await asyncio.to_thread(run_queries)
         remaining_timeout(deadline)
         return {chunk.id: select_adjacent(records_by_scope.get((chunk.projectId, chunk.knowledgeBaseId, chunk.documentId), []), chunk, before, after) for chunk in chunks}
 
@@ -616,18 +625,22 @@ class MilvusVectorStore:
     async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> list[tuple[ChunkRecord, float]]:
         validate_search_scope(project_id, knowledge_base_ids)
         from pymilvus import MilvusClient
-        client = MilvusClient(uri=self.uri, token=self.token or None)
         deadline = operation_deadline(self.timeout_seconds, timeout_seconds)
-        timeout = remaining_timeout(deadline)
-        client.load_collection(collection_name=self.collection, timeout=timeout)
         expr = f"projectId == {project_id} and knowledgeBaseId in [" + ",".join(str(x) for x in knowledge_base_ids) + "]"
         if document_scope:
             expr += " and documentId in [" + ",".join(json.dumps(value) for value in document_scope) + "]"
         if library_types:
             quoted = ",".join(json.dumps(value) for value in library_types)
             expr += f" and (metadata[\"libraryType\"] in [{quoted}] or sourceType in [{quoted}])"
-        rows = client.search(collection_name=self.collection, data=[query_embedding], limit=top_k, filter=expr,
-                             output_fields=["*"], timeout=remaining_timeout(deadline))
+        def run_search():
+            client = MilvusClient(uri=self.uri, token=self.token or None)
+            client.load_collection(collection_name=self.collection, timeout=remaining_timeout(deadline))
+            return client.search(
+                collection_name=self.collection, data=[query_embedding], limit=top_k, filter=expr,
+                output_fields=["*"], timeout=remaining_timeout(deadline),
+            )
+
+        rows = await asyncio.to_thread(run_search)
         remaining_timeout(deadline)
         results = []
         for hit in rows[0]:
@@ -650,10 +663,13 @@ class MilvusVectorStore:
         if library_types:
             quoted = ",".join(json.dumps(value) for value in library_types)
             expr += f" and (metadata[\"libraryType\"] in [{quoted}] or sourceType in [{quoted}])"
-        rows = MilvusClient(uri=self.uri, token=self.token or None).query(
-            collection_name=self.collection, filter=expr, output_fields=["*"],
-            limit=min(100, max(top_k * 4, top_k)), timeout=remaining_timeout(deadline),
-        )
+        def run_query():
+            return MilvusClient(uri=self.uri, token=self.token or None).query(
+                collection_name=self.collection, filter=expr, output_fields=["*"],
+                limit=min(100, max(top_k * 4, top_k)), timeout=remaining_timeout(deadline),
+            )
+
+        rows = await asyncio.to_thread(run_query)
         remaining_timeout(deadline)
         results = []
         for row in rows:
@@ -677,52 +693,55 @@ class MilvusVectorStore:
             return {}
         if document_scope:
             chunks = [chunk for chunk in chunks if chunk.documentId in document_scope]
-        client = MilvusClient(uri=self.uri, token=self.token or None)
         deadline = operation_deadline(self.timeout_seconds, timeout_seconds)
-        if not client.has_collection(self.collection):
-            return {chunk.id: [] for chunk in chunks}
         scopes = {(chunk.projectId, chunk.knowledgeBaseId, chunk.documentId) for chunk in chunks}
         records_by_scope: dict[tuple[int, int, str], list[ChunkRecord]] = {}
-        for project_id, knowledge_base_id, document_id in scopes:
-            expr = (f"projectId == {project_id} and knowledgeBaseId == {knowledge_base_id} "
-                    f"and documentId == {json.dumps(document_id)}")
-            if library_types:
-                quoted = ",".join(json.dumps(value) for value in library_types)
-                expr += f" and (metadata[\"libraryType\"] in [{quoted}] or sourceType in [{quoted}])"
-            rows: list[dict[str, Any]] = []
-            # Query until exhaustion so long documents do not lose neighbors past the first page.
-            iterator = getattr(client, "query_iterator", None)
-            if iterator is not None:
-                handle = iterator(collection_name=self.collection, filter=expr, output_fields=["*"], batch_size=256,
-                                  timeout=remaining_timeout(deadline))
-                try:
+        def run_queries():
+            client = MilvusClient(uri=self.uri, token=self.token or None)
+            if not client.has_collection(self.collection):
+                return
+            for project_id, knowledge_base_id, document_id in scopes:
+                expr = (f"projectId == {project_id} and knowledgeBaseId == {knowledge_base_id} "
+                        f"and documentId == {json.dumps(document_id)}")
+                if library_types:
+                    quoted = ",".join(json.dumps(value) for value in library_types)
+                    expr += f" and (metadata[\"libraryType\"] in [{quoted}] or sourceType in [{quoted}])"
+                rows: list[dict[str, Any]] = []
+                # Query until exhaustion so long documents do not lose neighbors past the first page.
+                iterator = getattr(client, "query_iterator", None)
+                if iterator is not None:
+                    handle = iterator(collection_name=self.collection, filter=expr, output_fields=["*"], batch_size=256,
+                                      timeout=remaining_timeout(deadline))
+                    try:
+                        while True:
+                            page = handle.next()
+                            if not page:
+                                break
+                            rows.extend(page)
+                    finally:
+                        close = getattr(handle, "close", None)
+                        if close:
+                            close()
+                else:
+                    offset = 0
                     while True:
-                        page = handle.next()
+                        page = client.query(collection_name=self.collection, filter=expr, output_fields=["*"], limit=256,
+                                            offset=offset, timeout=remaining_timeout(deadline))
                         if not page:
                             break
                         rows.extend(page)
-                finally:
-                    close = getattr(handle, "close", None)
-                    if close:
-                        close()
-            else:
-                offset = 0
-                while True:
-                    page = client.query(collection_name=self.collection, filter=expr, output_fields=["*"], limit=256,
-                                        offset=offset, timeout=remaining_timeout(deadline))
-                    if not page:
-                        break
-                    rows.extend(page)
-                    if len(page) < 256:
-                        break
-                    offset += len(page)
-            records_by_scope[(project_id, knowledge_base_id, document_id)] = [
-                ChunkRecord(id=row.get("id"), chunkId=row.get("chunkId") or row.get("id"), projectId=row.get("projectId"),
-                            knowledgeBaseId=row.get("knowledgeBaseId"), documentId=row.get("documentId"), title=row.get("title"),
-                            content=row.get("content"), sourceType=row.get("sourceType"), sourceId=row.get("sourceId"),
-                            metadata=row.get("metadata") or {}, embedding=[])
-                for row in rows
-            ]
+                        if len(page) < 256:
+                            break
+                        offset += len(page)
+                records_by_scope[(project_id, knowledge_base_id, document_id)] = [
+                    ChunkRecord(id=row.get("id"), chunkId=row.get("chunkId") or row.get("id"), projectId=row.get("projectId"),
+                                knowledgeBaseId=row.get("knowledgeBaseId"), documentId=row.get("documentId"), title=row.get("title"),
+                                content=row.get("content"), sourceType=row.get("sourceType"), sourceId=row.get("sourceId"),
+                                metadata=row.get("metadata") or {}, embedding=[])
+                    for row in rows
+                ]
+
+        await asyncio.to_thread(run_queries)
         remaining_timeout(deadline)
         return {chunk.id: select_adjacent(records_by_scope.get((chunk.projectId, chunk.knowledgeBaseId, chunk.documentId), []), chunk, before, after) for chunk in chunks}
 

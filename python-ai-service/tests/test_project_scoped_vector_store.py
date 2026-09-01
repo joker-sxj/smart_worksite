@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -223,6 +224,49 @@ def test_pgvector_uses_each_calls_remaining_timeout(monkeypatch):
     assert 0 < calls[0][1][0] <= 7500
 
 
+def test_pgvector_driver_timeout_does_not_block_event_loop(monkeypatch):
+    statement_timeout = None
+    driver_finished = False
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, sql, params=None):
+            nonlocal statement_timeout, driver_finished
+            if sql.startswith("set local"):
+                statement_timeout = params[0] / 1000
+                return
+            time.sleep(statement_timeout)
+            driver_finished = True
+            raise TimeoutError("server statement timeout")
+        def fetchall(self): return []
+
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def cursor(self): return Cursor()
+
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda *_args, **_kwargs: Connection()))
+
+    async def probe():
+        async def ticker():
+            await asyncio.sleep(0.005)
+            return driver_finished
+
+        results = await asyncio.gather(
+            PgVectorStore("postgresql://local", "chunks", timeout_seconds=0.02).search([1.0], 7, [10], 1),
+            ticker(), return_exceptions=True,
+        )
+        return results
+
+    started = time.monotonic()
+    results = asyncio.run(probe())
+
+    assert isinstance(results[0], TimeoutError)
+    assert results[1] is False
+    assert time.monotonic() - started < 0.1
+
+
 def test_pgvector_library_types_filter_vector_text_and_adjacent_sql(monkeypatch):
     calls = []
     class Cursor:
@@ -347,6 +391,41 @@ def test_milvus_uses_each_calls_remaining_timeout(monkeypatch):
 
     timeouts = [kwargs["timeout"] for _, kwargs in calls]
     assert 0 < timeouts[1] < timeouts[0] <= 6.25
+
+
+def test_milvus_client_timeout_does_not_block_event_loop(monkeypatch):
+    driver_finished = False
+
+    class Client:
+        def __init__(self, **_): pass
+        def load_collection(self, **_kwargs): pass
+        def search(self, **kwargs):
+            nonlocal driver_finished
+            time.sleep(kwargs["timeout"])
+            driver_finished = True
+            raise TimeoutError("milvus client timeout")
+
+    monkeypatch.setitem(sys.modules, "pymilvus", SimpleNamespace(MilvusClient=Client))
+
+    async def probe():
+        async def ticker():
+            await asyncio.sleep(0.005)
+            return driver_finished
+
+        results = await asyncio.gather(
+            MilvusVectorStore("http://milvus", "", "chunks", timeout_seconds=0.02).search(
+                [1.0], 7, [10], 1,
+            ),
+            ticker(), return_exceptions=True,
+        )
+        return results
+
+    started = time.monotonic()
+    results = asyncio.run(probe())
+
+    assert isinstance(results[0], TimeoutError)
+    assert results[1] is False
+    assert time.monotonic() - started < 0.1
 
 
 def test_milvus_library_types_filter_vector_and_text(monkeypatch):
