@@ -8,7 +8,7 @@ from app.models.schemas import (
     DatabaseSummarizeData,
 )
 from .qwen_client import QwenClient
-from .normalization import as_dict, as_string_list
+from .normalization import as_dict, as_string_list, optional_string
 
 
 class DatabaseQaService:
@@ -54,12 +54,19 @@ class DatabaseQaService:
             Message(role="system", content=system),
             Message(role="user", content=json.dumps(prompt, ensure_ascii=False)),
         ])
+        plan = as_dict(data.get("plan"))
+        plan["projectScopeField"] = optional_string(plan.get("projectScopeField"))
+        shape = plan.get("expectedShape")
+        if isinstance(shape, list):
+            shape = shape[0] if shape else None
+        plan["expectedShape"] = optional_string(shape) or "ROWS"
+        plan["expectedColumns"] = as_string_list(plan.get("expectedColumns"))
         return DatabaseGenerateQueryData(
             sql=str(data.get("sql", "")),
             parameters=as_dict(data.get("parameters")),
             explanation=str(data.get("explanation", "根据问题生成只读查询。")),
             riskLevel=str(data.get("riskLevel", "LOW")),
-            plan=DatabaseQueryPlan(**as_dict(data.get("plan"))),
+            plan=DatabaseQueryPlan(**plan),
         ), usage
 
     async def summarize_result(self, request: DatabaseSummarizeRequest) -> tuple[DatabaseSummarizeData, dict]:

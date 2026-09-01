@@ -692,6 +692,34 @@ def test_database_generate_query_accepts_compact_plan_items():
     assert data.plan.filters == ["project_id = projectId"]
 
 
+def test_database_generate_query_normalizes_malformed_scalar_plan_fields():
+    from app.models.schemas import DatabaseGenerateQueryRequest
+    from app.services.database_service import DatabaseQaService
+
+    class FakeQwen:
+        async def json_chat(self, messages):
+            return {
+                "sql": "SELECT COUNT(*) AS total FROM issue",
+                "parameters": {},
+                "explanation": "统计问题。",
+                "plan": {
+                    "projectScopeField": {"field": "project_id"},
+                    "expectedShape": ["AGGREGATE_ROWS"],
+                    "expectedColumns": "total",
+                },
+            }, {}
+
+    data, _ = asyncio.run(DatabaseQaService(FakeQwen()).generate_query(DatabaseGenerateQueryRequest(
+        question="统计问题",
+        schemaSummary="issue(project_id)",
+        projectId=1,
+    )))
+
+    assert data.plan.projectScopeField is None
+    assert data.plan.expectedShape == "AGGREGATE_ROWS"
+    assert data.plan.expectedColumns == ["total"]
+
+
 def test_database_generate_query_prompt_includes_mysql_distinct_order_rule():
     from app.models.schemas import DatabaseGenerateQueryRequest
     from app.services.database_service import DatabaseQaService
