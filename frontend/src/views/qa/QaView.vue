@@ -19,6 +19,14 @@ export function qaEvidenceRecovery(message: QaMessage & Record<string, unknown>)
   return evidenceStatusMeta[evidenceStatus as keyof typeof evidenceStatusMeta] || null;
 }
 
+export function qaValidityCaution(message: QaMessage & Record<string, unknown>) {
+  const messageStatus = String(message.status || '').toUpperCase();
+  const role = String(message.role || 'assistant').toLowerCase();
+  const validityStatus = String(message.retrievalDiagnostics?.validityStatus || '').toUpperCase();
+  if (role !== 'assistant' || message.pending || messageStatus === 'FAILED' || validityStatus !== 'UNKNOWN') return null;
+  return '资料有效性未知：请结合地区、时间、对象或指定标准名称谨慎使用。';
+}
+
 export function appendQaSubmission<T, U, V>(existing: T[], userMessage: U, pendingMessage: V): Array<T | U | V> {
   return [...existing, userMessage, pendingMessage];
 }
@@ -100,6 +108,10 @@ function messageText(msg: QaMessageExtra) {
 
 function messageEvidenceMeta(msg: QaMessageExtra) {
   return qaEvidenceRecovery(msg);
+}
+
+function messageValidityCaution(msg: QaMessageExtra) {
+  return qaValidityCaution(msg);
 }
 
 function stopMessagePolling() {
@@ -434,8 +446,10 @@ onUnmounted(stopMessagePolling);
                   <el-tag :type="messageEvidenceMeta(msg)?.tagType" size="small">{{ messageEvidenceMeta(msg)?.label }}</el-tag>
                   <span>{{ messageEvidenceMeta(msg)?.meaning }}</span>
                 </div>
+                <p v-if="messageValidityCaution(msg)" class="validity-caution">{{ messageValidityCaution(msg) }}</p>
                 <p>{{ EVIDENCE_RECOVERY_PROMPT }}</p>
               </div>
+              <p v-else-if="messageValidityCaution(msg)" class="validity-caution standalone-validity-caution">{{ messageValidityCaution(msg) }}</p>
               <div v-if="msg.needClarification || msg.clarificationQuestions?.length" class="clarify-block"><strong>{{ t('需要补充的信息') }}</strong><ul><li v-for="item in msg.clarificationQuestions" :key="item">{{ item }}</li></ul></div>
               <div v-if="!msg.pending" class="feedback">
                 <span v-if="feedbackMap[String(msg.messageId)] !== undefined">{{ t('已反馈：') }}{{ feedbackMap[String(msg.messageId)] ? t('有用') : t('无用') }}</span>
@@ -518,6 +532,8 @@ onUnmounted(stopMessagePolling);
 .evidence-recovery { margin-top: 10px; padding: 10px 12px; border: 1px solid #fed7aa; border-radius: 10px; background: #fffaf2; color: #7c2d12; font-size: 13px; line-height: 1.55; }
 .evidence-status-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .evidence-recovery p { margin: 6px 0 0; color: #9a3412; }
+.validity-caution { color: #9a3412; }
+.standalone-validity-caution { margin: 10px 0; padding: 8px 10px; border: 1px solid #fed7aa; border-radius: 8px; background: #fffaf2; font-size: 13px; }
 .clarify-block { margin-top: 10px; padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; }
 .clarify-block ul { margin: 6px 0 0; padding-left: 18px; }
 .reference-block { margin-top: 10px; padding: 10px; background: #f8fafc; border-radius: 10px; }

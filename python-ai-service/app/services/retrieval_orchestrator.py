@@ -377,9 +377,7 @@ class RetrievalOrchestrator:
         assessed_first = assessment_records(first.records, validity_status)
         status, missing = evaluate_evidence(assessed_first, degraded, request.query)
         first_assessment = build_assessment(request.query, assessed_first, status)
-        if first.records and (validity_status in NON_CURRENT_VALIDITY or (
-            validity_status == "UNKNOWN" and not any(validity_value(item) == "CURRENT" for item in first.records)
-        )):
+        if first.records and validity_status in NON_CURRENT_VALIDITY:
             status = EvidenceStatus.VALIDITY_UNKNOWN
         rewritten_query: str | None = None
         stop_reason: str | None = None
@@ -438,9 +436,7 @@ class RetrievalOrchestrator:
                         status, missing = evaluate_evidence(
                             assessment_records(records, validity_status), degraded, request.query
                         )
-                        if records and (validity_status in NON_CURRENT_VALIDITY or (
-                            validity_status == "UNKNOWN" and not any(validity_value(item) == "CURRENT" for item in records)
-                        )):
+                        if records and validity_status in NON_CURRENT_VALIDITY:
                             status = EvidenceStatus.VALIDITY_UNKNOWN
                     attempts.append(self._attempt(2, fingerprints[-1], request.strategy, records, status,
                                                   first_elapsed=int((asyncio.get_running_loop().time() - second_started) * 1000),

@@ -413,7 +413,7 @@ public class QaApplicationService {
         }
         return answerWithModel(session, message, contextMessages, references, message.getQuestion(),
                 evidenceFromRag(searchResponse.getRecords()), QaRouteMode.KNOWLEDGE.name(),
-                searchResponse.getProviderTraceId(), systemCall, retrievalSystemPrompt(status, false), searchResponse);
+                searchResponse.getProviderTraceId(), systemCall, retrievalSystemPrompt(searchResponse, false), searchResponse);
     }
 
     private QaMessageResponse answerWithDatabase(QaSession session, QaMessage message, List<Long> dataSourceIds,
@@ -463,7 +463,7 @@ public class QaApplicationService {
         }
         return answerWithModel(session, message, contextMessages, references, prompt,
                 evidenceFromRag(searchResponse.getRecords()), QaRouteMode.MIXED.name(),
-                searchResponse.getProviderTraceId(), systemCall, retrievalSystemPrompt(status, hasDatabase), searchResponse);
+                searchResponse.getProviderTraceId(), systemCall, retrievalSystemPrompt(searchResponse, hasDatabase), searchResponse);
     }
 
     private QaMessageResponse answerWithModel(QaSession session, QaMessage message, List<AiMessage> contextMessages,
@@ -518,26 +518,40 @@ public class QaApplicationService {
     private QaMessageResponse deterministicRetrievalResponse(QaMessage message, RagSearchResponse retrieval,
                                                               List<Map<String, Object>> references) {
         QaMessageResponse response = baseMessageResponse(message, QaRouteMode.KNOWLEDGE.name());
-        response.setAnswer("TIMEOUT".equals(evidenceStatus(retrieval))
+        String answer = "TIMEOUT".equals(evidenceStatus(retrieval))
                 ? "知识检索超时，当前无法形成有证据支持的回答，请稍后重试。"
-                : "当前检索到的证据不足，无法形成可靠回答。请补充更具体的条件后再试。");
+                : "当前检索到的证据不足，无法形成可靠回答。请补充更具体的条件后再试。";
+        if (hasUnknownValidity(retrieval)) {
+            answer += " 同时，资料有效性未确认，请结合地区、时间、对象或标准名称谨慎使用。";
+        }
+        response.setAnswer(answer);
         response.setReferences(references);
         response.setProviderTraceId(retrieval.getProviderTraceId());
         response.setRetrievalDiagnostics(retrievalDiagnostics(retrieval));
         return response;
     }
 
-    private String retrievalSystemPrompt(String status, boolean mixedWithDatabase) {
+    private String retrievalSystemPrompt(RagSearchResponse response, boolean mixedWithDatabase) {
+        String status = evidenceStatus(response);
         String boundary = mixedWithDatabase
                 ? "必须明确区分知识库证据与数据库查询结果；知识库不足不得丢弃或否定独立且充分的数据库证据。"
                 : "只能依据实际提供的证据回答，不得使用常识补齐。";
-        return switch (status) {
+        String prompt = switch (status) {
             case "PARTIAL" -> boundary + "回答必须分为‘可以确认’和‘无法确认’两部分，不得补齐缺失事实。";
             case "VALIDITY_UNKNOWN" -> boundary + "必须提示资料有效性未确认，并建议用户在现有文本框补充地区、时间、对象或标准名；可以谨慎回答，不得永久拒答。";
             case "CONFLICT" -> boundary + "只总结冲突，不选边，并列出各冲突来源。";
             case "RETRIEVAL_DEGRADED" -> boundary + "必须提示检索能力已降级，基于现有资料谨慎回答。";
             default -> boundary;
         };
+        if (hasUnknownValidity(response) && !"VALIDITY_UNKNOWN".equals(status)) {
+            prompt += "同时必须提示资料有效性未确认，基于现有资料谨慎回答，但不得覆盖证据充分性结论或永久拒答。";
+        }
+        return prompt;
+    }
+
+    private boolean hasUnknownValidity(RagSearchResponse response) {
+        Object validityStatus = response.getDiagnostics() == null ? null : response.getDiagnostics().get("validityStatus");
+        return "UNKNOWN".equalsIgnoreCase(String.valueOf(validityStatus));
     }
 
     private Map<String, Object> retrievalDiagnostics(RagSearchResponse response) {

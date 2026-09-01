@@ -15,7 +15,8 @@ import {
   appendQaSubmission,
   EVIDENCE_RECOVERY_PROMPT,
   evidenceStatusMeta,
-  qaEvidenceRecovery
+  qaEvidenceRecovery,
+  qaValidityCaution
 } from './QaView.vue';
 
 function assistant(evidenceStatus: string, status = 'SUCCESS'): QaMessage & Record<string, unknown> {
@@ -50,6 +51,22 @@ describe('QaView evidence recovery', () => {
 
   it('does not show a recovery prompt for sufficient evidence', () => {
     expect(qaEvidenceRecovery(assistant('SUFFICIENT'))).toBeNull();
+  });
+
+  it('keeps the evidence label while exposing an independent unknown validity caution', () => {
+    const message = assistant('PARTIAL');
+    message.retrievalDiagnostics = { evidenceStatus: 'PARTIAL', validityStatus: 'UNKNOWN' };
+
+    expect(qaEvidenceRecovery(message)?.label).toBe('证据部分充分');
+    expect(qaValidityCaution(message)).toContain('资料有效性未知');
+  });
+
+  it('shows a small validity caution for sufficient legacy evidence', () => {
+    const message = assistant('SUFFICIENT');
+    message.retrievalDiagnostics = { evidenceStatus: 'SUFFICIENT', validityStatus: 'UNKNOWN' };
+
+    expect(qaEvidenceRecovery(message)).toBeNull();
+    expect(qaValidityCaution(message)).toContain('资料有效性未知');
   });
 
   it('keeps the previous message when adding a new question and pending answer', () => {

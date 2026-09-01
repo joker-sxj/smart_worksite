@@ -251,8 +251,49 @@ def test_validity_missing_metadata_is_unknown_but_does_not_permanently_reject_le
         query="什么是临边作业？",
     )))
 
-    assert result.evidenceStatus == EvidenceStatus.VALIDITY_UNKNOWN
+    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
     assert [item.metadata["chunkId"] for item in result.records] == ["definition"]
+    assert result.diagnostics.validityStatus == "UNKNOWN"
+
+
+def test_legacy_evidence_without_validity_retries_when_first_round_is_insufficient():
+    calls = []
+    first = record("first", content="临边作业需要设置防护设施。")
+    second = record("second", content="高处作业应落实安全管理措施。")
+    first.metadata.pop("documentValidity")
+    second.metadata.pop("documentValidity")
+
+    async def search(search_request):
+        calls.append(search_request.query)
+        return RagSearchData(records=[first if len(calls) == 1 else second]), {}
+
+    async def rewrite(_request, _records):
+        return "临边作业 定义 条文正文"
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search, rewrite).retrieve(request(
+        query="什么是临边作业？",
+    )))
+
+    assert result.evidenceStatus == EvidenceStatus.INSUFFICIENT
+    assert result.retrievalRounds == 2
+    assert len(calls) == 2
+    assert result.diagnostics.validityStatus == "UNKNOWN"
+
+
+def test_partial_legacy_evidence_keeps_partial_status_with_unknown_validity():
+    legacy = record(
+        "width", content="安全通道宽度不得小于1.5米。", partialEvidence=True,
+    )
+    legacy.metadata.pop("documentValidity")
+
+    async def search(_search_request):
+        return RagSearchData(records=[legacy]), {}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="安全通道的宽度和高度分别是多少？",
+    )))
+
+    assert result.evidenceStatus == EvidenceStatus.PARTIAL
     assert result.diagnostics.validityStatus == "UNKNOWN"
 
 
@@ -288,7 +329,7 @@ def test_unknown_validity_enum_is_not_treated_as_current():
 
     result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(query="什么是临边作业？")))
 
-    assert result.evidenceStatus == EvidenceStatus.VALIDITY_UNKNOWN
+    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
     assert result.diagnostics.validityStatus == "UNKNOWN"
 
 
@@ -1054,7 +1095,8 @@ def test_real_local_rag_service_dynamic_orchestration_respects_scope_and_top_k(t
         query="什么是临边作业？", knowledgeBaseIds=[11], documentScope=["doc-a"], topK=1,
     )))
 
-    assert result.evidenceStatus == EvidenceStatus.VALIDITY_UNKNOWN
+    assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
+    assert result.diagnostics.validityStatus == "UNKNOWN"
     assert len(result.records) == 1
     assert result.records[0].metadata["documentId"] == "doc-a"
 
@@ -1093,7 +1135,8 @@ def test_dynamic_search_endpoint_contract_uses_real_rag_service_and_local_store(
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    assert body["data"]["evidenceStatus"] == "VALIDITY_UNKNOWN"
+    assert body["data"]["evidenceStatus"] == "SUFFICIENT"
+    assert body["data"]["diagnostics"]["validityStatus"] == "UNKNOWN"
     assert len(body["data"]["records"]) == 1
     assert body["data"]["records"][0]["metadata"]["documentId"] == "doc-a"
 
@@ -1153,7 +1196,7 @@ def test_rag_usage_and_orchestrator_diagnostics_distinguish_candidates_from_sele
         rag_rerank_top_k = 5
 
     chunks = [
-        ChunkRecord(str(index), 7, 11, "doc", str(index), f"证据 {index}", "DOCUMENT", None, {}, [])
+        ChunkRecord(str(index), 7, 11, "doc", str(index), f"证据是事实材料 {index}", "DOCUMENT", None, {}, [])
         for index in range(3)
     ]
 

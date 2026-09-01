@@ -180,6 +180,7 @@ export type QaEvidenceStatus = 'SUFFICIENT' | 'PARTIAL' | 'INSUFFICIENT' | 'CONF
 
 export interface QaRetrievalDiagnostics extends Record<string, unknown> {
   evidenceStatus?: QaEvidenceStatus | string;
+  validityStatus?: string;
 }
 
 export interface QaMessage {

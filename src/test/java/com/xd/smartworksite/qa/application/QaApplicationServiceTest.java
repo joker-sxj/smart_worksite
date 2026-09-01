@@ -268,6 +268,21 @@ class QaApplicationServiceTest {
     }
 
     @Test
+    void insufficientEvidenceKeepsInsufficientAnswerAndAddsUnknownValidityCaution() {
+        RagSearchResponse response = dynamicResponse("INSUFFICIENT", List.of());
+        response.setDiagnostics(java.util.Map.of("validityStatus", "UNKNOWN"));
+        aiGateway.nextDynamicResponse = response;
+
+        var message = sendKnowledgeQuestion("缺少条件的现行要求是什么");
+
+        assertThat(message.getAnswer()).contains("证据不足", "资料有效性未确认");
+        assertThat(message.getRetrievalDiagnostics())
+                .containsEntry("evidenceStatus", "INSUFFICIENT")
+                .containsEntry("validityStatus", "UNKNOWN");
+        assertThat(aiGateway.lastModelRequest).isNull();
+    }
+
+    @Test
     void dynamicSearchReferencesContainOnlyReturnedEvidenceAndPreserveDiagnostics() {
         RagSearchResponse.Record selected = new RagSearchResponse.Record();
         selected.setTitle("实际入模证据");
@@ -328,6 +343,21 @@ class QaApplicationServiceTest {
         assertThat(message.getAnswer()).isEqualTo("模型回答");
         assertThat(aiGateway.lastModelRequest.getSystemPrompt())
                 .contains("有效性未确认", "现有文本框", "地区", "时间", "对象", "标准名");
+    }
+
+    @Test
+    void partialEvidenceKeepsPartialPromptAndAddsUnknownValidityCaution() {
+        RagSearchResponse response = dynamicResponse("PARTIAL", List.of(ragRecord("部分资料", "source-1")));
+        response.setDiagnostics(java.util.Map.of("validityStatus", "UNKNOWN"));
+        aiGateway.nextDynamicResponse = response;
+
+        var message = sendKnowledgeQuestion("现行要求有哪些");
+
+        assertThat(message.getRetrievalDiagnostics())
+                .containsEntry("evidenceStatus", "PARTIAL")
+                .containsEntry("validityStatus", "UNKNOWN");
+        assertThat(aiGateway.lastModelRequest.getSystemPrompt())
+                .contains("可以确认", "无法确认", "有效性未确认", "谨慎回答");
     }
 
     @Test
