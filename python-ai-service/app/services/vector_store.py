@@ -70,10 +70,10 @@ class ChunkRecord:
 class VectorStore(Protocol):
     async def upsert(self, chunks: list[ChunkRecord]) -> None: ...
     async def replace_document(self, project_id: int, knowledge_base_id: int, document_id: str, chunks: list[ChunkRecord]) -> None: ...
-    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]: ...
-    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]: ...
-    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]: ...
-    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1) -> dict[str, list[ChunkRecord]]: ...
+    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]: ...
+    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]: ...
+    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> list[ChunkRecord]: ...
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> dict[str, list[ChunkRecord]]: ...
     async def delete_sources(self, project_id: int, source_type: str, source_ids: list[str], exclude_knowledge_base_id: int | None) -> int: ...
 
 
@@ -167,7 +167,7 @@ class LocalJsonVectorStore:
             self._write(kept)
             return deleted
 
-    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]:
+    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]:
         validate_search_scope(project_id, knowledge_base_ids)
         kb_filter = set(knowledge_base_ids)
         query_dimension = len(query_embedding)
@@ -175,6 +175,7 @@ class LocalJsonVectorStore:
         scoped = [
             chunk for chunk in records
             if chunk.projectId == project_id and chunk.knowledgeBaseId in kb_filter
+            and (not document_scope or chunk.documentId in document_scope)
         ]
         skipped_dimensions = dimension_counts(scoped, query_dimension)
         if skipped_dimensions and self.reembed:
@@ -195,6 +196,7 @@ class LocalJsonVectorStore:
                         if record.projectId == project_id
                         and record.knowledgeBaseId in kb_filter
                         and len(record.embedding) != query_dimension
+                        and (not document_scope or record.documentId in document_scope)
                     ][:LEGACY_MIGRATION_BATCH_SIZE]
                     if not selected_legacy:
                         break
@@ -209,6 +211,7 @@ class LocalJsonVectorStore:
                             record.projectId == project_id
                             and record.knowledgeBaseId in kb_filter
                             and len(record.embedding) == query_dimension
+                            and (not document_scope or record.documentId in document_scope)
                             for record in records
                         )
                         if migrated_total == 0 and not has_compatible:
@@ -236,6 +239,7 @@ class LocalJsonVectorStore:
                                 and record.projectId == project_id
                                 and record.knowledgeBaseId in kb_filter
                                 and len(record.embedding) != query_dimension
+                                and (not document_scope or record.documentId in document_scope)
                             ):
                                 record.embedding = embedding
                                 migrated_count += 1
@@ -255,6 +259,7 @@ class LocalJsonVectorStore:
             scoped = [
                 chunk for chunk in records
                 if chunk.projectId == project_id and chunk.knowledgeBaseId in kb_filter
+                and (not document_scope or chunk.documentId in document_scope)
             ]
             skipped_dimensions = dimension_counts(scoped, query_dimension)
 
@@ -280,12 +285,14 @@ class LocalJsonVectorStore:
         results.sort(key=lambda item: item[1], reverse=True)
         return results[:top_k]
 
-    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]:
+    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]:
         validate_search_scope(project_id, knowledge_base_ids)
         scored: list[tuple[ChunkRecord, float]] = []
         kb_filter = set(knowledge_base_ids)
         for record in self._load():
             if record.projectId != project_id or record.knowledgeBaseId not in kb_filter:
+                continue
+            if document_scope and record.documentId not in document_scope:
                 continue
             score = text_match_score(query, record.content)
             if score > 0:
@@ -293,15 +300,18 @@ class LocalJsonVectorStore:
         scored.sort(key=lambda item: item[1], reverse=True)
         return scored[:max(0, top_k)]
 
-    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]:
-        return (await self.adjacent_many([chunk], before, after)).get(chunk.id, [])
+    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> list[ChunkRecord]:
+        return (await self.adjacent_many([chunk], before, after, document_scope)).get(chunk.id, [])
 
-    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1) -> dict[str, list[ChunkRecord]]:
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> dict[str, list[ChunkRecord]]:
         if not chunks:
             return {}
         records = self._load()
         result: dict[str, list[ChunkRecord]] = {}
         for chunk in chunks:
+            if document_scope and chunk.documentId not in document_scope:
+                result[chunk.id] = []
+                continue
             scoped = [record for record in records if same_document_scope(record, chunk)]
             result[chunk.id] = select_adjacent(scoped, chunk, before, after)
         return result
@@ -407,10 +417,13 @@ class PgVectorStore:
             conn.commit()
         return deleted
 
-    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]:
+    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]:
         validate_search_scope(project_id, knowledge_base_ids)
         params: list[Any] = [project_id, knowledge_base_ids]
         where = " where project_id = %s and knowledge_base_id = any(%s)"
+        if document_scope:
+            where += " and document_id = any(%s)"
+            params.append(document_scope)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -428,12 +441,14 @@ class PgVectorStore:
             results.append((record, 1.0 - distance))
         return results
 
-    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]:
-        return (await self.adjacent_many([chunk], before, after)).get(chunk.id, [])
+    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> list[ChunkRecord]:
+        return (await self.adjacent_many([chunk], before, after, document_scope)).get(chunk.id, [])
 
-    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1) -> dict[str, list[ChunkRecord]]:
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> dict[str, list[ChunkRecord]]:
         if not chunks:
             return {}
+        if document_scope:
+            chunks = [chunk for chunk in chunks if chunk.documentId in document_scope]
         scopes = {(chunk.projectId, chunk.knowledgeBaseId, chunk.documentId) for chunk in chunks}
         records_by_scope: dict[tuple[int, int, str], list[ChunkRecord]] = {}
         with self._connect() as conn:
@@ -520,12 +535,14 @@ class MilvusVectorStore:
         result = client.delete(collection_name=self.collection, filter=expr)
         return int((result or {}).get("delete_count", 0))
 
-    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int) -> list[tuple[ChunkRecord, float]]:
+    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]:
         validate_search_scope(project_id, knowledge_base_ids)
         from pymilvus import MilvusClient
         client = MilvusClient(uri=self.uri, token=self.token or None)
         client.load_collection(collection_name=self.collection)
         expr = f"projectId == {project_id} and knowledgeBaseId in [" + ",".join(str(x) for x in knowledge_base_ids) + "]"
+        if document_scope:
+            expr += " and documentId in [" + ",".join(json.dumps(value) for value in document_scope) + "]"
         rows = client.search(collection_name=self.collection, data=[query_embedding], limit=top_k, filter=expr, output_fields=["*"])
         results = []
         for hit in rows[0]:
@@ -538,13 +555,15 @@ class MilvusVectorStore:
             results.append((record, float(hit.get("distance", 0.0))))
         return results
 
-    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1) -> list[ChunkRecord]:
-        return (await self.adjacent_many([chunk], before, after)).get(chunk.id, [])
+    async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> list[ChunkRecord]:
+        return (await self.adjacent_many([chunk], before, after, document_scope)).get(chunk.id, [])
 
-    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1) -> dict[str, list[ChunkRecord]]:
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> dict[str, list[ChunkRecord]]:
         from pymilvus import MilvusClient
         if not chunks:
             return {}
+        if document_scope:
+            chunks = [chunk for chunk in chunks if chunk.documentId in document_scope]
         client = MilvusClient(uri=self.uri, token=self.token or None)
         if not client.has_collection(self.collection):
             return {chunk.id: [] for chunk in chunks}

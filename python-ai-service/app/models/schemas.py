@@ -72,10 +72,15 @@ class RagSearchRequest(BaseModel):
     topK: int = Field(default=5, ge=1, le=100)
     scoreThreshold: float | None = None
     rerankEnabled: bool = True
+    documentScope: list[str] = Field(default_factory=list)
+    enforceTopK: bool = False
 
     @model_validator(mode="after")
     def normalize_scope(self):
         self.knowledgeBaseIds = list(dict.fromkeys(self.knowledgeBaseIds))
+        self.documentScope = list(dict.fromkeys(value.strip() for value in self.documentScope))
+        if any(not value for value in self.documentScope):
+            raise ValueError("documentScope must not contain blank values")
         return self
 
 
@@ -104,6 +109,7 @@ class EvidenceStatus(str, Enum):
 
 class RetrievalDiagnostics(BaseModel):
     candidateCount: int = 0
+    questionType: str | None = None
     queryFingerprints: list[str] = Field(default_factory=list)
     degradedComponents: list[str] = Field(default_factory=list)
     missingAspects: list[str] = Field(default_factory=list)
@@ -111,18 +117,29 @@ class RetrievalDiagnostics(BaseModel):
 
 
 class DynamicRetrievalRequest(RagSearchRequest):
-    documentScope: list[str] = Field(default_factory=list)
     strategy: str = "HYBRID"
     permissionScope: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def normalize_dynamic_scope(self):
-        self.documentScope = list(dict.fromkeys(value.strip() for value in self.documentScope))
-        if any(not value for value in self.documentScope):
-            raise ValueError("documentScope must not contain blank values")
         self.strategy = self.strategy.strip().upper()
         if not self.strategy:
             raise ValueError("strategy must not be blank")
+        if self.permissionScope:
+            allowed = {"enforcement", "projectId", "knowledgeBaseIds"}
+            if set(self.permissionScope) != allowed:
+                raise ValueError("permissionScope contains unsupported enforcement claims")
+            if self.permissionScope.get("enforcement") != "PROJECT_KNOWLEDGE_BASES":
+                raise ValueError("permissionScope enforcement must be PROJECT_KNOWLEDGE_BASES")
+            if self.permissionScope.get("projectId") != self.projectId:
+                raise ValueError("permissionScope projectId must match projectId")
+            scoped_kbs = self.permissionScope.get("knowledgeBaseIds")
+            if (
+                not isinstance(scoped_kbs, list)
+                or any(not isinstance(value, int) for value in scoped_kbs)
+                or sorted(set(scoped_kbs)) != sorted(self.knowledgeBaseIds)
+            ):
+                raise ValueError("permissionScope knowledgeBaseIds must match knowledgeBaseIds")
         return self
 
     def as_rag_search_request(self, query: str | None = None) -> RagSearchRequest:
@@ -134,6 +151,8 @@ class DynamicRetrievalRequest(RagSearchRequest):
             topK=self.topK,
             scoreThreshold=self.scoreThreshold,
             rerankEnabled=self.rerankEnabled,
+            documentScope=self.documentScope,
+            enforceTopK=True,
         )
 
 

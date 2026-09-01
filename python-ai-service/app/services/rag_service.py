@@ -128,13 +128,32 @@ class RagService:
             vectors, usage = [], {"embeddingProvider": "TEXT_FALLBACK"}
             degraded_components.append("EMBEDDING")
         candidate_limit = max(request.topK, self.settings.rag_rerank_top_k if request.rerankEnabled else request.topK)
-        candidates = await self.store.search(
-            vectors[0], request.projectId, request.knowledgeBaseIds, candidate_limit
-        ) if vectors else []
+        try:
+            candidates = await self.store.search(
+                vectors[0], request.projectId, request.knowledgeBaseIds, candidate_limit, request.documentScope
+            ) if vectors and request.documentScope else (
+                await self.store.search(vectors[0], request.projectId, request.knowledgeBaseIds, candidate_limit)
+                if vectors else []
+            )
+        except Exception as exc:
+            if not is_embedding_failure(exc):
+                raise
+            candidates = []
+            if "EMBEDDING" not in degraded_components:
+                degraded_components.append("EMBEDDING")
         text_search = getattr(self.store, "search_text", None)
-        text_candidates = await text_search(
-            request.query, request.projectId, request.knowledgeBaseIds, max(candidate_limit, request.topK * 4)
-        ) if text_search else []
+        if text_search and request.documentScope:
+            text_candidates = await text_search(
+                request.query, request.projectId, request.knowledgeBaseIds,
+                max(candidate_limit, request.topK * 4), request.documentScope,
+            )
+        elif text_search:
+            text_candidates = await text_search(
+                request.query, request.projectId, request.knowledgeBaseIds,
+                max(candidate_limit, request.topK * 4),
+            )
+        else:
+            text_candidates = []
         candidates = merge_candidates(candidates, text_candidates)
         threshold = request.scoreThreshold if request.scoreThreshold is not None else -1.0
         records = []
@@ -155,11 +174,17 @@ class RagService:
         candidate_chunks = [chunk for chunk, _, _ in records]
         adjacent_many = getattr(self.store, "adjacent_many", None)
         if adjacent_many is not None:
-            adjacent_by_chunk = await adjacent_many(candidate_chunks, before=1, after=1)
+            adjacent_by_chunk = await adjacent_many(
+                candidate_chunks, before=1, after=1, document_scope=request.documentScope
+            ) if request.documentScope else await adjacent_many(candidate_chunks, before=1, after=1)
         else:
             # Keep compatibility with external VectorStore implementations while the protocol rolls out.
             adjacent_by_chunk = {
-                chunk.id: await self.store.adjacent(chunk, before=1, after=1)
+                chunk.id: (
+                    await self.store.adjacent(
+                        chunk, before=1, after=1, document_scope=request.documentScope
+                    ) if request.documentScope else await self.store.adjacent(chunk, before=1, after=1)
+                )
                 for chunk in candidate_chunks
             }
         records.sort(
@@ -202,9 +227,13 @@ class RagService:
                     metadata=neighbor_metadata,
                 ))
                 emitted_ids.add(neighbor.id)
+                if request.enforceTopK and len(output) >= request.topK:
+                    break
+            if request.enforceTopK and len(output) >= request.topK:
+                break
         if degraded_components:
             usage["degradedComponents"] = degraded_components
-        return RagSearchData(records=output), usage
+        return RagSearchData(records=output[:request.topK] if request.enforceTopK else output), usage
 
     async def embed(self, texts: list[str]) -> tuple[list[list[float]], dict[str, Any]]:
         if self.settings.embedding_provider.upper() == "LOCAL_HASH":
@@ -261,6 +290,11 @@ def merge_candidates(
             if current is None or normalized > current[1]:
                 merged[chunk.id] = (chunk, normalized)
     return sorted(merged.values(), key=lambda item: item[1], reverse=True)[:MAX_MERGED_CANDIDATES]
+
+
+def is_embedding_failure(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "embedding" in message or "vector dimension" in message
 
 
 def to_rag_record(chunk: ChunkRecord, score: float, rerank_score: float) -> RagRecord:
