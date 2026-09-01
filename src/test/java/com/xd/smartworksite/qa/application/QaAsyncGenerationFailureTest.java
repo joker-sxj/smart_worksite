@@ -79,8 +79,10 @@ class QaAsyncGenerationFailureTest {
         when(repository.findMessageById(11L)).thenReturn(Optional.of(message));
         when(repository.findSessionById(7L)).thenReturn(Optional.of(session));
         when(repository.markMessageProcessing(11L, 19L, 1L)).thenReturn(1);
-        when(aiGateway.invokeModelForSystem(any())).thenThrow(new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "model down"));
-        when(repository.markMessageFailed(eq(11L), eq(19L), eq("model down"), any(), eq(1L))).thenReturn(0);
+        when(aiGateway.invokeModelForSystem(any())).thenThrow(new BusinessException(
+                ErrorCode.EXTERNAL_SERVICE_ERROR,
+                "apiKey=secret https://internal/admin C:\\keys\\qa.pem /etc/passwd jdbc:mysql://db prompt=hidden"));
+        when(repository.markMessageFailed(eq(11L), eq(19L), eq("外部服务异常"), any(), eq(1L))).thenReturn(0);
         ProjectAccessApplicationService access = mock(ProjectAccessApplicationService.class);
         QaApplicationService service = new QaApplicationService(repository, access,
                 mock(KnowledgeBaseRepository.class), mock(DataSourceRepository.class), aiGateway, new ObjectMapper(),
@@ -88,8 +90,10 @@ class QaAsyncGenerationFailureTest {
         assertThatThrownBy(() -> service.executeGenerationTask(11L, 19L))
                 .isInstanceOfSatisfying(BusinessException.class, ex -> {
                     assertThat(ex.getCode()).isEqualTo(ErrorCode.CONFLICT.getCode());
-                    assertThat(ex.getMessage()).contains("failure state cannot be persisted");
-                    assertThat(ex.getSuppressed()).singleElement().extracting(Throwable::getMessage).isEqualTo("model down");
+                    assertThat(ex.getMessage()).isEqualTo("qa message failure state cannot be persisted: 外部服务异常");
+                    assertThat(ex.getMessage()).doesNotContain("secret", "internal", "keys", "passwd", "jdbc", "prompt");
+                    assertThat(ex.getSuppressed()).singleElement().extracting(Throwable::getMessage)
+                            .asString().contains("apiKey=secret");
                 });
     }
 
@@ -114,7 +118,7 @@ class QaAsyncGenerationFailureTest {
                 .isInstanceOfSatisfying(NonRetryableTaskException.class, ex ->
                         assertThat(ex.getCause()).isInstanceOfSatisfying(BusinessException.class,
                                 cause -> assertThat(cause.getCode()).isEqualTo(ErrorCode.FORBIDDEN.getCode())));
-        verify(repository).markMessageFailed(eq(11L), eq(19L), eq("revoked"), any(), eq(1L));
+        verify(repository).markMessageFailed(eq(11L), eq(19L), eq("无权限"), any(), eq(1L));
         verify(aiGateway, never()).searchKnowledgeDynamicForSystem(any());
         verify(aiGateway, never()).invokeModelForSystem(any());
     }

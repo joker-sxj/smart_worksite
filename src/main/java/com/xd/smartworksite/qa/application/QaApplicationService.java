@@ -245,12 +245,12 @@ public class QaApplicationService {
             message.setUsageJson("{}");
             message.setRetrievalDiagnosticsJson(writeJson(failureDiagnostics(ex)));
             message.setStatus(QaMessageStatus.FAILED.name());
-            message.setErrorMessage(limitError(ex.getMessage()));
+            message.setErrorMessage(safeFailureMessage(ex));
             message.setUpdatedBy(userId);
             if (qaRepository.updateMessage(message) == 0) {
                 BusinessException persistenceFailure = new BusinessException(
                         ErrorCode.CONFLICT,
-                        "qa message failure state cannot be persisted: " + limitError(ex.getMessage())
+                        "qa message failure state cannot be persisted: " + safeFailureMessage(ex)
                 );
                 persistenceFailure.addSuppressed(ex);
                 throw persistenceFailure;
@@ -296,12 +296,12 @@ public class QaApplicationService {
                 throw new BusinessException(ErrorCode.CONFLICT, "qa message completion state changed");
             }
         } catch (RuntimeException ex) {
-            int failed = qaRepository.markMessageFailed(messageId, taskId, limitError(ex.getMessage()),
+            int failed = qaRepository.markMessageFailed(messageId, taskId, safeFailureMessage(ex),
                     writeJson(failureDiagnostics(ex)), 1L);
             if (failed == 0) {
                 BusinessException persistenceFailure = new BusinessException(
                         ErrorCode.CONFLICT,
-                        "qa message failure state cannot be persisted: " + limitError(ex.getMessage())
+                        "qa message failure state cannot be persisted: " + safeFailureMessage(ex)
                 );
                 persistenceFailure.addSuppressed(ex);
                 throw persistenceFailure;
@@ -841,7 +841,7 @@ public class QaApplicationService {
         QaMessageResponse response = baseMessageResponse(message, message.getRouteMode());
         response.setAnswer(answerSanitizer.sanitize(message.getAnswer()));
         response.setTaskId(message.getTaskId());
-        response.setErrorMessage(message.getErrorMessage());
+        response.setErrorMessage(safeStoredFailureMessage(message.getErrorMessage()));
         response.setReferences(readList(message.getReferencesJson()));
         response.setUsage(readMap(message.getUsageJson()));
         response.setFeedback(readMap(message.getFeedbackJson()));
@@ -885,9 +885,27 @@ public class QaApplicationService {
         return list.stream().filter(item -> item instanceof Number).map(item -> ((Number) item).longValue()).toList();
     }
 
-    private String limitError(String value) {
-        String text = value == null || value.isBlank() ? "qa generation failed" : value;
-        return text.length() <= 2000 ? text : text.substring(0, 2000);
+    private String safeFailureMessage(Throwable failure) {
+        Throwable current = failure;
+        while (current != null && !(current instanceof BusinessException)) current = current.getCause();
+        if (current instanceof BusinessException business) {
+            return java.util.Arrays.stream(ErrorCode.values())
+                    .filter(errorCode -> errorCode != ErrorCode.SUCCESS && errorCode.getCode() == business.getCode())
+                    .map(ErrorCode::getMessage)
+                    .findFirst()
+                    .orElse(ErrorCode.SYSTEM_ERROR.getMessage());
+        }
+        return ErrorCode.SYSTEM_ERROR.getMessage();
+    }
+
+    private String safeStoredFailureMessage(String value) {
+        if (value == null || value.isBlank()) return null;
+        return List.of(ErrorCode.PARAM_ERROR.getMessage(), ErrorCode.UNAUTHORIZED.getMessage(),
+                        ErrorCode.FORBIDDEN.getMessage(), ErrorCode.NOT_FOUND.getMessage(),
+                        ErrorCode.CONFLICT.getMessage(), ErrorCode.TOO_MANY_REQUESTS.getMessage(),
+                        ErrorCode.SYSTEM_ERROR.getMessage(), ErrorCode.EXTERNAL_SERVICE_ERROR.getMessage(),
+                        ErrorCode.SERVICE_UNAVAILABLE.getMessage())
+                .contains(value) ? value : ErrorCode.SYSTEM_ERROR.getMessage();
     }
 
     private String writeJson(Object value) {

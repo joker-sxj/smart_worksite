@@ -131,7 +131,10 @@ class QaApplicationServiceTest {
     @Test
     void synchronousGenerationFailurePersistsAndReturnsFailedMessage() {
         var session = service.createSession(createSessionRequest(1L, "current-project"));
-        aiGateway.modelFailure = new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "model token=secret failed");
+        aiGateway.modelFailure = new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR,
+                "token=secret apiKey=key password=pwd Authorization=Bearer abc "
+                        + "url=https://internal.example/admin path=C:\\secrets\\key.txt "
+                        + "linux=/etc/passwd jdbc:mysql://db/private prompt=hidden");
         QaMessageSendRequest request = new QaMessageSendRequest();
         request.setQuestion("question");
         request.setRouteMode("MODEL");
@@ -140,13 +143,14 @@ class QaApplicationServiceTest {
 
         assertThat(response.getStatus()).isEqualTo("FAILED");
         assertThat(response.getAnswer()).isNull();
-        assertThat(response.getErrorMessage()).isEqualTo("model token=secret failed");
+        assertThat(response.getErrorMessage()).isEqualTo("外部服务异常");
         assertThat(response.getRetrievalDiagnostics())
                 .containsEntry("status", "FAILED")
                 .containsEntry("stopReason", "EXCEPTION");
         assertThat(response.getRetrievalDiagnostics().toString()).doesNotContain("token", "secret");
         assertThat(qaRepository.findMessageById(response.getMessageId())).get().satisfies(message -> {
             assertThat(message.getStatus()).isEqualTo("FAILED");
+            assertThat(message.getErrorMessage()).isEqualTo("外部服务异常");
             assertThat(message.getRetrievalDiagnosticsJson())
                     .contains("\"status\":\"FAILED\"", "\"stopReason\":\"EXCEPTION\"");
         });
@@ -171,6 +175,23 @@ class QaApplicationServiceTest {
     }
 
     @Test
+    void synchronousUnexpectedFailureUsesGenericSystemMessage() {
+        var session = service.createSession(createSessionRequest(1L, "current-project"));
+        aiGateway.modelFailure = new IllegalStateException(
+                "password=pwd jdbc:mysql://db/private prompt=hidden /etc/passwd");
+        QaMessageSendRequest request = new QaMessageSendRequest();
+        request.setQuestion("question");
+        request.setRouteMode("MODEL");
+
+        var response = service.sendMessage(session.getSessionId(), request);
+
+        assertThat(response.getErrorMessage()).isEqualTo("系统错误");
+        assertThat(qaRepository.findMessageById(response.getMessageId())).get()
+                .extracting(QaMessage::getErrorMessage)
+                .isEqualTo("系统错误");
+    }
+
+    @Test
     void messageReadbackFiltersUnsafeDiagnosticsFromDatabaseJson() throws Exception {
         var session = service.createSession(createSessionRequest(1L, "current-project"));
         QaMessageSendRequest request = new QaMessageSendRequest();
@@ -187,6 +208,7 @@ class QaApplicationServiceTest {
                 "path", "C:\\secrets\\key.txt",
                 "attempts", List.of(java.util.Map.of(
                         "attemptNo", 1, "elapsedMs", 12, "internalUrl", "http://private")))));
+        stored.setErrorMessage("Authorization: Bearer secret https://internal/admin C:\\keys\\qa.pem /etc/passwd jdbc:mysql://db prompt=hidden");
 
         var response = service.getMessage(created.getMessageId());
 
@@ -197,6 +219,7 @@ class QaApplicationServiceTest {
         assertThat(response.getRetrievalDiagnostics().toString())
                 .contains("elapsedMs=12")
                 .doesNotContain("hidden prompt", "secret-token", "internal.service", "private", "secrets");
+        assertThat(response.getErrorMessage()).isEqualTo("系统错误");
     }
 
     @Test
