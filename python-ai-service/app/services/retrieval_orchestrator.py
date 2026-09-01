@@ -240,7 +240,10 @@ def _topic_coverage(query: str, content: str) -> bool:
 
 
 def _safe_components(usage: dict[str, Any]) -> list[str]:
-    allowed = {"EMBEDDING", "RERANKER", "QUERY_REWRITE", "RETRIEVAL"}
+    allowed = {
+        "EMBEDDING", "RERANKER", "QUERY_REWRITE", "RETRIEVAL",
+        "VECTOR_RETRIEVAL", "TEXT_RETRIEVAL",
+    }
     values = usage.get("degradedComponents", [])
     return [value for value in values if value in allowed]
 
@@ -348,8 +351,9 @@ class RetrievalOrchestrator:
         deadline = asyncio.get_running_loop().time() + self.total_timeout_seconds
         started = asyncio.get_running_loop().time()
         try:
+            internal_top_k = min(MAX_DYNAMIC_CANDIDATES, max(request.topK * 4, request.topK))
             first, first_usage = await self._search_with_deadline(
-                request.as_rag_search_request(), deadline
+                request.as_rag_search_request(top_k=internal_top_k, enforce_top_k=False), deadline
             )
         except TimeoutError:
             diagnostics = RetrievalDiagnostics(
@@ -377,13 +381,13 @@ class RetrievalOrchestrator:
             status = EvidenceStatus.VALIDITY_UNKNOWN
         rewritten_query: str | None = None
         stop_reason: str | None = None
-        records = first.records[:request.topK]
+        records = first.records
         rounds = 1
         attempts = [self._attempt(
             1, fingerprints[0], request.strategy, records, status,
             int((asyncio.get_running_loop().time() - started) * 1000),
             candidate_count=int(first_usage.get("candidateCount", len(first.records))),
-            selected_count=int(first_usage.get("selectedCount", len(records))),
+            selected_count=min(request.topK, int(first_usage.get("selectedCount", len(records)))),
         )]
 
         if status == EvidenceStatus.INSUFFICIENT:
@@ -412,7 +416,7 @@ class RetrievalOrchestrator:
                     second_started = asyncio.get_running_loop().time()
                     try:
                         second, second_usage = await self._search_with_deadline(
-                            request.as_rag_search_request(rewritten_query), deadline
+                            request.as_rag_search_request(rewritten_query, internal_top_k, False), deadline
                         )
                     except TimeoutError:
                         second_timed_out = True
@@ -425,7 +429,7 @@ class RetrievalOrchestrator:
                     degraded = list(dict.fromkeys([*degraded, *_safe_components(second_usage)]))
                     if not second_timed_out and candidate_ids(first.records) == candidate_ids(second.records):
                         stop_reason = "SKIPPED_DUPLICATE_CANDIDATES"
-                    records = sort_by_validity_version(merge_records(first.records, second.records, request.topK))
+                    records = sort_by_validity_version(merge_records(first.records, second.records, MAX_DYNAMIC_CANDIDATES))
                     records, validity_status = apply_validity_policy(records)
                     if not second_timed_out:
                         # Rewriting improves recall; it must not change the question's evidence obligations.
@@ -440,11 +444,13 @@ class RetrievalOrchestrator:
                                                   first_elapsed=int((asyncio.get_running_loop().time() - second_started) * 1000),
                                                   stop_reason=stop_reason,
                                                   candidate_count=int(second_usage.get("candidateCount", len(second.records))),
-                                                  selected_count=int(second_usage.get("selectedCount", len(second.records)))))
+                                                  selected_count=min(request.topK, int(second_usage.get("selectedCount", len(second.records))))))
 
         if stop_reason and len(attempts) == 1:
             attempts[0].status = status
             attempts[0].stopReason = stop_reason
+
+        records = records[:request.topK]
 
         diagnostics = RetrievalDiagnostics(
             candidateCount=sum(item.candidateCount for item in attempts),
@@ -477,7 +483,11 @@ class RetrievalOrchestrator:
 
     async def _search_with_deadline(self, search_request: Any, deadline: float):
         timeout_seconds = min(self.round_timeout_seconds, self._remaining(deadline))
+        round_deadline = asyncio.get_running_loop().time() + timeout_seconds
         async with asyncio.timeout(timeout_seconds):
+            parameters = inspect.signature(self.search).parameters
+            if "deadline" in parameters:
+                return await self.search(search_request, deadline=round_deadline)
             return await self.search(search_request)
 
     async def _rewrite_with_deadline(self, request, records, deadline):

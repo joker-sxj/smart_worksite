@@ -821,6 +821,114 @@ def test_real_rag_service_ranks_current_evidence_ahead_of_repealed_evidence(tmp_
     assert result.diagnostics.validityStatus == "CURRENT"
 
 
+def test_dynamic_wide_recall_keeps_newer_low_score_version_before_user_top_k(tmp_path):
+    class Settings:
+        rag_provider = "LOCAL"
+        rag_data_dir = str(tmp_path)
+        milvus_uri = milvus_token = milvus_collection = pgvector_dsn = pgvector_table = ""
+        embedding_provider = "LOCAL_HASH"
+        rerank_provider = "LEXICAL"
+        rag_rerank_top_k = 5
+        rag_store_timeout_seconds = 25.0
+
+    old = ChunkRecord(
+        "old", 7, 11, "standard", "old", "安全通道宽度不得小于0.8米。", "DOCUMENT", None,
+        {"documentValidity": "CURRENT", "versionDate": "2025-01-01"}, [],
+    )
+    new = ChunkRecord(
+        "new", 7, 11, "standard", "new", "安全通道宽度不得小于1.5米。", "DOCUMENT", None,
+        {"documentValidity": "CURRENT", "versionDate": "2026-01-01"}, [],
+    )
+    seen_top_k = []
+    class Store:
+        async def search(self, _embedding, _project, _kbs, top_k, **_kwargs):
+            seen_top_k.append(top_k)
+            return [(old, 0.99), (new, 0.5)][:top_k]
+        async def search_text(self, *_args, **_kwargs): return []
+        async def adjacent_many(self, chunks, **_kwargs): return {chunk.id: [] for chunk in chunks}
+
+    service = RagService(Settings(), object())
+    service.store = Store()
+    result, _ = asyncio.run(RetrievalOrchestrator(service.search).retrieve(request(
+        query="安全通道宽度应为多少？", knowledgeBaseIds=[11], topK=1,
+    )))
+
+    assert seen_top_k[0] >= 4
+    assert [item.metadata["chunkId"] for item in result.records] == ["new"]
+
+
+def test_rag_service_passes_one_decreasing_deadline_across_store_calls(tmp_path):
+    class Settings:
+        rag_provider = "LOCAL"; rag_data_dir = str(tmp_path)
+        milvus_uri = milvus_token = milvus_collection = pgvector_dsn = pgvector_table = ""
+        embedding_provider = "LOCAL_HASH"; rerank_provider = "LEXICAL"; rag_rerank_top_k = 5
+        rag_store_timeout_seconds = 1.0
+    chunk = ChunkRecord("a", 7, 11, "doc", "a", "证据正文", "DOCUMENT", None, {}, [])
+    timeouts = []
+    class Store:
+        async def search(self, *_args, timeout_seconds=None, **_kwargs):
+            timeouts.append(timeout_seconds); await asyncio.sleep(0.01); return [(chunk, 0.9)]
+        async def search_text(self, *_args, timeout_seconds=None, **_kwargs):
+            timeouts.append(timeout_seconds); await asyncio.sleep(0.01); return []
+        async def adjacent_many(self, chunks, timeout_seconds=None, **_kwargs):
+            timeouts.append(timeout_seconds); return {item.id: [] for item in chunks}
+    service = RagService(Settings(), object()); service.store = Store()
+
+    async def run_with_round_deadline():
+        deadline = asyncio.get_running_loop().time() + 0.1
+        return await service.search(request(knowledgeBaseIds=[11]).as_rag_search_request(), deadline=deadline)
+
+    asyncio.run(run_with_round_deadline())
+
+    assert len(timeouts) == 3
+    assert 0 < timeouts[2] < timeouts[1] < timeouts[0] <= 0.1
+
+
+@pytest.mark.parametrize(("failed_channel", "component"), [
+    ("text", "TEXT_RETRIEVAL"), ("vector", "VECTOR_RETRIEVAL"),
+])
+def test_one_retrieval_channel_failure_uses_the_other_and_reports_degradation(tmp_path, failed_channel, component):
+    class Settings:
+        rag_provider = "LOCAL"; rag_data_dir = str(tmp_path)
+        milvus_uri = milvus_token = milvus_collection = pgvector_dsn = pgvector_table = ""
+        embedding_provider = "LOCAL_HASH"; rerank_provider = "LEXICAL"; rag_rerank_top_k = 5
+        rag_store_timeout_seconds = 1.0
+    chunk = ChunkRecord("a", 7, 11, "doc", "a", "临边作业是指无围护设施的高处作业。", "DOCUMENT", None, {}, [])
+    class Store:
+        async def search(self, *_args, **_kwargs):
+            if failed_channel == "vector": raise RuntimeError("vector unavailable")
+            return [(chunk, 0.9)]
+        async def search_text(self, *_args, **_kwargs):
+            if failed_channel == "text": raise RuntimeError("text unavailable")
+            return [(chunk, 1.0)]
+        async def adjacent_many(self, chunks, **_kwargs): return {item.id: [] for item in chunks}
+    service = RagService(Settings(), object()); service.store = Store()
+
+    data, usage = asyncio.run(service.search(request(
+        query="什么是临边作业？", knowledgeBaseIds=[11], topK=1,
+    ).as_rag_search_request()))
+
+    assert len(data.records) == 1
+    assert component in usage["degradedComponents"]
+
+
+def test_local_library_types_filter_vector_text_and_adjacent_context(tmp_path):
+    store = LocalJsonVectorStore(str(tmp_path))
+    policy = ChunkRecord("policy", 7, 11, "doc", "policy", "安全帽政策要求", "POLICY", None,
+                         {"libraryType": "POLICY", "unitIndex": 1}, hash_embedding("安全帽政策要求"))
+    document = ChunkRecord("document", 7, 11, "doc", "document", "安全帽文档说明", "DOCUMENT", None,
+                           {"libraryType": "DOCUMENT", "unitIndex": 2}, hash_embedding("安全帽文档说明"))
+    asyncio.run(store.upsert([policy, document]))
+
+    vector = asyncio.run(store.search(hash_embedding("安全帽"), 7, [11], 10, library_types=["POLICY"]))
+    text = asyncio.run(store.search_text("安全帽", 7, [11], 10, library_types=["POLICY"]))
+    adjacent = asyncio.run(store.adjacent_many([policy], library_types=["POLICY"]))
+
+    assert [item.id for item, _ in vector] == ["policy"]
+    assert [item.id for item, _ in text] == ["policy"]
+    assert adjacent["policy"] == []
+
+
 def test_rag_service_pushes_document_scope_to_vector_text_and_adjacency_store_calls(tmp_path):
     calls = []
 
@@ -1023,9 +1131,9 @@ def test_second_attempt_reports_that_rounds_candidate_and_selected_counts():
     assert result.diagnostics.selectedCount == 1
 
 
-def test_library_types_reject_values_the_storage_contract_cannot_enforce():
-    with pytest.raises(ValidationError, match="libraryTypes"):
-        request(libraryTypes=["DOCUMENT"])
+def test_library_types_are_normalized_and_empty_values_remain_compatible():
+    assert request(libraryTypes=[]).libraryTypes == []
+    assert request(libraryTypes=[" policy ", "POLICY"]).libraryTypes == ["POLICY"]
 
 
 def test_dynamic_retrieval_route_returns_evidence_status_and_safe_diagnostics(monkeypatch):

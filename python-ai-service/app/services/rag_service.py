@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import inspect
 import re
 from typing import Any
 
@@ -12,6 +14,21 @@ from .vector_store import (ChunkRecord, LocalJsonVectorStore, PgVectorStore, Mil
                            chinese_numeral_to_int, compact_search_text, extract_clause_numbers, iter_bigrams, text_match_score)
 
 MAX_MERGED_CANDIDATES = 100
+
+
+async def _call_store(method, *args, **kwargs):
+    parameters = inspect.signature(method).parameters.values()
+    accepts_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters)
+    if not accepts_kwargs:
+        accepted = inspect.signature(method).parameters
+        kwargs = {key: value for key, value in kwargs.items() if key in accepted}
+    timeout_seconds = kwargs.get("timeout_seconds")
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        raise TimeoutError("retrieval deadline exceeded")
+    if timeout_seconds is None:
+        return await method(*args, **kwargs)
+    async with asyncio.timeout(timeout_seconds):
+        return await method(*args, **kwargs)
 
 
 def split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
@@ -122,40 +139,58 @@ class RagService:
         )
         return RagDeleteData(deletedChunks=deleted, provider=self.settings.rag_provider.upper())
 
-    async def search(self, request: RagSearchRequest) -> tuple[RagSearchData, dict[str, Any]]:
+    async def search(
+        self, request: RagSearchRequest, deadline: float | None = None,
+    ) -> tuple[RagSearchData, dict[str, Any]]:
+        local_deadline = asyncio.get_running_loop().time() + getattr(self.settings, "rag_store_timeout_seconds", 25.0)
+        deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
+        remaining = lambda: max(0.0, deadline - asyncio.get_running_loop().time())
         degraded_components: list[str] = []
         try:
             vectors, usage = await self.embed([request.query])
         except Exception:
             vectors, usage = [], {"embeddingProvider": "TEXT_FALLBACK"}
             degraded_components.append("EMBEDDING")
-        candidate_limit = max(request.topK, self.settings.rag_rerank_top_k if request.rerankEnabled else request.topK)
+        rerank_limit = self.settings.rag_rerank_top_k if request.rerankEnabled else request.topK
+        candidate_limit = min(100, max(
+            request.topK * 4 if request.enforceTopK else request.topK,
+            rerank_limit,
+        ))
         try:
-            candidates = await self.store.search(
-                vectors[0], request.projectId, request.knowledgeBaseIds, candidate_limit, request.documentScope
+            candidates = await _call_store(self.store.search,
+                vectors[0], request.projectId, request.knowledgeBaseIds, candidate_limit, request.documentScope,
+                library_types=request.libraryTypes, timeout_seconds=remaining(),
             ) if vectors and request.documentScope else (
-                await self.store.search(vectors[0], request.projectId, request.knowledgeBaseIds, candidate_limit)
+                await _call_store(self.store.search, vectors[0], request.projectId, request.knowledgeBaseIds, candidate_limit,
+                                        library_types=request.libraryTypes, timeout_seconds=remaining())
                 if vectors else []
             )
+        except TimeoutError:
+            raise
         except Exception as exc:
-            if not is_embedding_failure(exc):
-                raise
             candidates = []
             if "EMBEDDING" not in degraded_components:
-                degraded_components.append("EMBEDDING")
+                degraded_components.append("EMBEDDING" if is_embedding_failure(exc) else "VECTOR_RETRIEVAL")
         text_search = getattr(self.store, "search_text", None)
-        if text_search and request.documentScope:
-            text_candidates = await text_search(
+        try:
+            if text_search and request.documentScope:
+                text_candidates = await _call_store(text_search,
                 request.query, request.projectId, request.knowledgeBaseIds,
-                max(candidate_limit, request.topK * 4), request.documentScope,
-            )
-        elif text_search:
-            text_candidates = await text_search(
+                candidate_limit, request.documentScope, library_types=request.libraryTypes,
+                timeout_seconds=remaining(),
+                )
+            elif text_search:
+                text_candidates = await _call_store(text_search,
                 request.query, request.projectId, request.knowledgeBaseIds,
-                max(candidate_limit, request.topK * 4),
-            )
-        else:
+                candidate_limit, library_types=request.libraryTypes, timeout_seconds=remaining(),
+                )
+            else:
+                text_candidates = []
+        except TimeoutError:
+            raise
+        except Exception:
             text_candidates = []
+            degraded_components.append("TEXT_RETRIEVAL")
         candidates = merge_candidates(candidates, text_candidates)
         candidate_count = len(candidates)
         threshold = request.scoreThreshold if request.scoreThreshold is not None else -1.0
@@ -177,16 +212,18 @@ class RagService:
         candidate_chunks = [chunk for chunk, _, _ in records]
         adjacent_many = getattr(self.store, "adjacent_many", None)
         if adjacent_many is not None:
-            adjacent_by_chunk = await adjacent_many(
-                candidate_chunks, before=1, after=1, document_scope=request.documentScope
-            ) if request.documentScope else await adjacent_many(candidate_chunks, before=1, after=1)
+            adjacent_by_chunk = await _call_store(adjacent_many,
+                candidate_chunks, before=1, after=1, document_scope=request.documentScope,
+                library_types=request.libraryTypes, timeout_seconds=remaining(),
+            )
         else:
             # Keep compatibility with external VectorStore implementations while the protocol rolls out.
             adjacent_by_chunk = {
                 chunk.id: (
-                    await self.store.adjacent(
-                        chunk, before=1, after=1, document_scope=request.documentScope
-                    ) if request.documentScope else await self.store.adjacent(chunk, before=1, after=1)
+                    await _call_store(self.store.adjacent,
+                        chunk, before=1, after=1, document_scope=request.documentScope,
+                        library_types=request.libraryTypes, timeout_seconds=remaining()
+                    )
                 )
                 for chunk in candidate_chunks
             }
@@ -202,7 +239,8 @@ class RagService:
             ),
             reverse=True,
         )
-        selected = records[: request.topK]
+        selection_limit = request.topK if request.enforceTopK else candidate_limit
+        selected = records[:selection_limit]
         output: list[RagRecord] = []
         emitted_ids: set[str] = set()
         for chunk, score, rerank_score in selected:

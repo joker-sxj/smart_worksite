@@ -81,8 +81,9 @@ class RagSearchRequest(BaseModel):
         self.documentScope = list(dict.fromkeys(value.strip() for value in self.documentScope))
         if any(not value for value in self.documentScope):
             raise ValueError("documentScope must not contain blank values")
-        if self.libraryTypes:
-            raise ValueError("libraryTypes is not supported by the configured storage contract")
+        self.libraryTypes = list(dict.fromkeys(value.strip().upper() for value in self.libraryTypes))
+        if any(not value for value in self.libraryTypes):
+            raise ValueError("libraryTypes must not contain blank values")
         return self
 
 
@@ -167,17 +168,19 @@ class DynamicRetrievalRequest(RagSearchRequest):
                 raise ValueError("permissionScope knowledgeBaseIds must match knowledgeBaseIds")
         return self
 
-    def as_rag_search_request(self, query: str | None = None) -> RagSearchRequest:
+    def as_rag_search_request(
+        self, query: str | None = None, top_k: int | None = None, enforce_top_k: bool = True,
+    ) -> RagSearchRequest:
         return RagSearchRequest(
             query=query or self.query,
             projectId=self.projectId,
             knowledgeBaseIds=self.knowledgeBaseIds,
             libraryTypes=self.libraryTypes,
-            topK=self.topK,
+            topK=top_k or self.topK,
             scoreThreshold=self.scoreThreshold,
             rerankEnabled=self.rerankEnabled,
             documentScope=self.documentScope,
-            enforceTopK=True,
+            enforceTopK=enforce_top_k,
         )
 
 

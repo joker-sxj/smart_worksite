@@ -200,8 +200,48 @@ def test_pgvector_search_sets_server_timeout_below_round_deadline(monkeypatch):
         [1.0, 0.0], 7, [10], 5,
     ))
 
-    assert connect_calls[0][1]["connect_timeout"] == 25
-    assert calls[0] == ("set local statement_timeout = %s", [25000])
+    assert 0 < connect_calls[0][1]["connect_timeout"] <= 25
+    assert 0 < calls[0][1][0] <= 25000
+
+
+def test_pgvector_uses_each_calls_remaining_timeout(monkeypatch):
+    calls = []
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, sql, params=None): calls.append((" ".join(sql.split()), params))
+        def fetchall(self): return []
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def cursor(self): return Cursor()
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda *_args, **_kwargs: Connection()))
+    store = PgVectorStore("postgresql://local", "chunks", timeout_seconds=25)
+
+    asyncio.run(store.search([1.0], 7, [10], 1, timeout_seconds=7.5))
+
+    assert 0 < calls[0][1][0] <= 7500
+
+
+def test_pgvector_library_types_filter_vector_text_and_adjacent_sql(monkeypatch):
+    calls = []
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, sql, params=None): calls.append((" ".join(sql.split()), params))
+        def fetchall(self): return []
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def cursor(self): return Cursor()
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda *_args, **_kwargs: Connection()))
+    store = PgVectorStore("postgresql://local", "chunks")
+
+    asyncio.run(store.search([1.0], 7, [10], 1, library_types=["POLICY"]))
+    asyncio.run(store.search_text("helmet", 7, [10], 1, library_types=["POLICY"]))
+
+    sql = " ".join(item[0] for item in calls)
+    assert sql.count("metadata->>'libraryType'") >= 2
 
 
 def test_pgvector_delete_binds_project_scope(monkeypatch):
@@ -289,8 +329,40 @@ def test_milvus_retrieval_calls_receive_client_timeout(monkeypatch):
         "http://milvus:19530", "", "chunks", timeout_seconds=25,
     ).search([1.0, 0.0], 7, [10], 5))
 
-    assert next(kwargs for name, kwargs in calls if name == "load")["timeout"] == 25
-    assert next(kwargs for name, kwargs in calls if name == "search")["timeout"] == 25
+    assert 0 < next(kwargs for name, kwargs in calls if name == "load")["timeout"] <= 25
+    assert 0 < next(kwargs for name, kwargs in calls if name == "search")["timeout"] <= 25
+
+
+def test_milvus_uses_each_calls_remaining_timeout(monkeypatch):
+    calls = []
+    class Client:
+        def __init__(self, **_): pass
+        def load_collection(self, **kwargs): calls.append(("load", kwargs))
+        def search(self, **kwargs): calls.append(("search", kwargs)); return [[]]
+    monkeypatch.setitem(sys.modules, "pymilvus", SimpleNamespace(MilvusClient=Client))
+
+    asyncio.run(MilvusVectorStore("http://milvus", "", "chunks", 25).search(
+        [1.0], 7, [10], 1, timeout_seconds=6.25,
+    ))
+
+    timeouts = [kwargs["timeout"] for _, kwargs in calls]
+    assert 0 < timeouts[1] < timeouts[0] <= 6.25
+
+
+def test_milvus_library_types_filter_vector_and_text(monkeypatch):
+    calls = []
+    class Client:
+        def __init__(self, **_): pass
+        def load_collection(self, **_kwargs): pass
+        def search(self, **kwargs): calls.append(kwargs); return [[]]
+        def query(self, **kwargs): calls.append(kwargs); return []
+    monkeypatch.setitem(sys.modules, "pymilvus", SimpleNamespace(MilvusClient=Client))
+    store = MilvusVectorStore("http://milvus", "", "chunks")
+
+    asyncio.run(store.search([1.0], 7, [10], 1, library_types=["POLICY"]))
+    asyncio.run(store.search_text("helmet", 7, [10], 1, library_types=["POLICY"]))
+
+    assert all('metadata["libraryType"]' in item["filter"] for item in calls)
 
 
 def test_vector_store_deletes_reject_missing_project_scope(tmp_path, monkeypatch):

@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
@@ -21,6 +22,20 @@ _LOCAL_WRITE_LOCKS: dict[Path, threading.RLock] = {}
 _LOCAL_LOCK_REGISTRY_GUARD = threading.Lock()
 LEGACY_MIGRATION_BATCH_SIZE = 32
 LEGACY_MIGRATION_MAX_CHUNKS_PER_SEARCH = 64
+
+
+def operation_deadline(configured: float, requested: float | None) -> float:
+    timeout = min(configured, requested) if requested is not None else configured
+    if timeout <= 0:
+        raise TimeoutError("retrieval deadline exceeded")
+    return time.monotonic() + timeout
+
+
+def remaining_timeout(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("retrieval deadline exceeded")
+    return remaining
 
 
 def local_store_locks(path: Path) -> tuple[asyncio.Lock, threading.RLock]:
@@ -67,13 +82,20 @@ class ChunkRecord:
             raise ValueError("knowledgeBaseId must be positive")
 
 
+def matches_library_type(record: ChunkRecord, library_types: list[str] | None) -> bool:
+    if not library_types:
+        return True
+    value = str(record.metadata.get("libraryType") or record.sourceType).upper()
+    return value in set(library_types)
+
+
 class VectorStore(Protocol):
     async def upsert(self, chunks: list[ChunkRecord]) -> None: ...
     async def replace_document(self, project_id: int, knowledge_base_id: int, document_id: str, chunks: list[ChunkRecord]) -> None: ...
-    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]: ...
-    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]: ...
+    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> list[tuple[ChunkRecord, float]]: ...
+    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> list[tuple[ChunkRecord, float]]: ...
     async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> list[ChunkRecord]: ...
-    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> dict[str, list[ChunkRecord]]: ...
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> dict[str, list[ChunkRecord]]: ...
     async def delete_sources(self, project_id: int, source_type: str, source_ids: list[str], exclude_knowledge_base_id: int | None) -> int: ...
 
 
@@ -167,7 +189,7 @@ class LocalJsonVectorStore:
             self._write(kept)
             return deleted
 
-    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]:
+    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> list[tuple[ChunkRecord, float]]:
         validate_search_scope(project_id, knowledge_base_ids)
         kb_filter = set(knowledge_base_ids)
         query_dimension = len(query_embedding)
@@ -176,6 +198,7 @@ class LocalJsonVectorStore:
             chunk for chunk in records
             if chunk.projectId == project_id and chunk.knowledgeBaseId in kb_filter
             and (not document_scope or chunk.documentId in document_scope)
+            and matches_library_type(chunk, library_types)
         ]
         skipped_dimensions = dimension_counts(scoped, query_dimension)
         if skipped_dimensions and self.reembed:
@@ -197,6 +220,7 @@ class LocalJsonVectorStore:
                         and record.knowledgeBaseId in kb_filter
                         and len(record.embedding) != query_dimension
                         and (not document_scope or record.documentId in document_scope)
+                        and matches_library_type(record, library_types)
                     ][:LEGACY_MIGRATION_BATCH_SIZE]
                     if not selected_legacy:
                         break
@@ -212,6 +236,7 @@ class LocalJsonVectorStore:
                             and record.knowledgeBaseId in kb_filter
                             and len(record.embedding) == query_dimension
                             and (not document_scope or record.documentId in document_scope)
+                            and matches_library_type(record, library_types)
                             for record in records
                         )
                         if migrated_total == 0 and not has_compatible:
@@ -240,6 +265,7 @@ class LocalJsonVectorStore:
                                 and record.knowledgeBaseId in kb_filter
                                 and len(record.embedding) != query_dimension
                                 and (not document_scope or record.documentId in document_scope)
+                                and matches_library_type(record, library_types)
                             ):
                                 record.embedding = embedding
                                 migrated_count += 1
@@ -260,6 +286,7 @@ class LocalJsonVectorStore:
                 chunk for chunk in records
                 if chunk.projectId == project_id and chunk.knowledgeBaseId in kb_filter
                 and (not document_scope or chunk.documentId in document_scope)
+                and matches_library_type(chunk, library_types)
             ]
             skipped_dimensions = dimension_counts(scoped, query_dimension)
 
@@ -285,7 +312,7 @@ class LocalJsonVectorStore:
         results.sort(key=lambda item: item[1], reverse=True)
         return results[:top_k]
 
-    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]:
+    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> list[tuple[ChunkRecord, float]]:
         validate_search_scope(project_id, knowledge_base_ids)
         scored: list[tuple[ChunkRecord, float]] = []
         kb_filter = set(knowledge_base_ids)
@@ -293,6 +320,8 @@ class LocalJsonVectorStore:
             if record.projectId != project_id or record.knowledgeBaseId not in kb_filter:
                 continue
             if document_scope and record.documentId not in document_scope:
+                continue
+            if not matches_library_type(record, library_types):
                 continue
             score = text_match_score(query, record.content)
             if score > 0:
@@ -303,7 +332,7 @@ class LocalJsonVectorStore:
     async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> list[ChunkRecord]:
         return (await self.adjacent_many([chunk], before, after, document_scope)).get(chunk.id, [])
 
-    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> dict[str, list[ChunkRecord]]:
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> dict[str, list[ChunkRecord]]:
         if not chunks:
             return {}
         records = self._load()
@@ -312,7 +341,7 @@ class LocalJsonVectorStore:
             if document_scope and chunk.documentId not in document_scope:
                 result[chunk.id] = []
                 continue
-            scoped = [record for record in records if same_document_scope(record, chunk)]
+            scoped = [record for record in records if same_document_scope(record, chunk) and matches_library_type(record, library_types)]
             result[chunk.id] = select_adjacent(scoped, chunk, before, after)
         return result
 
@@ -332,11 +361,14 @@ class PgVectorStore:
         self.table = safe_identifier(table, "PGVECTOR_TABLE")
         self.timeout_seconds = timeout_seconds
 
-    def _connect(self):
+    def _connect(self, timeout_seconds: float | None = None):
         import psycopg
         if not self.dsn:
             raise RuntimeError("PGVECTOR_DSN is not configured")
-        return psycopg.connect(self.dsn, connect_timeout=self.timeout_seconds)
+        timeout = min(self.timeout_seconds, timeout_seconds) if timeout_seconds is not None else self.timeout_seconds
+        if timeout <= 0:
+            raise TimeoutError("retrieval deadline exceeded")
+        return psycopg.connect(self.dsn, connect_timeout=timeout)
 
     def _ensure_table(self, cur, dimension: int) -> None:
         cur.execute("create extension if not exists vector")
@@ -418,21 +450,27 @@ class PgVectorStore:
             conn.commit()
         return deleted
 
-    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]:
+    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> list[tuple[ChunkRecord, float]]:
         validate_search_scope(project_id, knowledge_base_ids)
+        deadline = operation_deadline(self.timeout_seconds, timeout_seconds)
         params: list[Any] = [project_id, knowledge_base_ids]
         where = " where project_id = %s and knowledge_base_id = any(%s)"
         if document_scope:
             where += " and document_id = any(%s)"
             params.append(document_scope)
-        with self._connect() as conn:
+        if library_types:
+            where += " and upper(coalesce(metadata->>'libraryType', source_type)) = any(%s)"
+            params.append(library_types)
+        timeout = remaining_timeout(deadline)
+        with self._connect(timeout) as conn:
             with conn.cursor() as cur:
-                cur.execute("set local statement_timeout = %s", [int(self.timeout_seconds * 1000)])
+                cur.execute("set local statement_timeout = %s", [max(1, int(timeout * 1000))])
                 cur.execute(
                     f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata, embedding <=> %s::vector as distance from {self.table}{where} order by embedding <=> %s::vector limit %s",
                     [query_embedding] + params + [query_embedding, top_k],
                 )
                 rows = cur.fetchall()
+        remaining_timeout(deadline)
         results = []
         for row in rows:
             record = ChunkRecord(
@@ -443,30 +481,66 @@ class PgVectorStore:
             results.append((record, 1.0 - distance))
         return results
 
+    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> list[tuple[ChunkRecord, float]]:
+        validate_search_scope(project_id, knowledge_base_ids)
+        deadline = operation_deadline(self.timeout_seconds, timeout_seconds)
+        where = ["project_id = %s", "knowledge_base_id = any(%s)", "content ilike %s"]
+        params: list[Any] = [project_id, knowledge_base_ids, f"%{query}%"]
+        if document_scope:
+            where.append("document_id = any(%s)")
+            params.append(document_scope)
+        if library_types:
+            where.append("upper(coalesce(metadata->>'libraryType', source_type)) = any(%s)")
+            params.append(library_types)
+        timeout = remaining_timeout(deadline)
+        with self._connect(timeout) as conn:
+            with conn.cursor() as cur:
+                cur.execute("set local statement_timeout = %s", [max(1, int(timeout * 1000))])
+                cur.execute(
+                    f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata "
+                    f"from {self.table} where {' and '.join(where)} limit %s",
+                    [*params, min(100, max(top_k * 4, top_k))],
+                )
+                rows = cur.fetchall()
+        remaining_timeout(deadline)
+        results = [
+            (ChunkRecord(id=row[0], chunkId=row[1], projectId=row[2], knowledgeBaseId=row[3], documentId=row[4],
+                         title=row[5], content=row[6], sourceType=row[7], sourceId=row[8], metadata=row[9] or {}, embedding=[]),
+             text_match_score(query, row[6]))
+            for row in rows
+        ]
+        return sorted((item for item in results if item[1] > 0), key=lambda item: item[1], reverse=True)[:top_k]
+
     async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> list[ChunkRecord]:
         return (await self.adjacent_many([chunk], before, after, document_scope)).get(chunk.id, [])
 
-    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> dict[str, list[ChunkRecord]]:
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> dict[str, list[ChunkRecord]]:
         if not chunks:
             return {}
         if document_scope:
             chunks = [chunk for chunk in chunks if chunk.documentId in document_scope]
         scopes = {(chunk.projectId, chunk.knowledgeBaseId, chunk.documentId) for chunk in chunks}
         records_by_scope: dict[tuple[int, int, str], list[ChunkRecord]] = {}
-        with self._connect() as conn:
+        deadline = operation_deadline(self.timeout_seconds, timeout_seconds)
+        timeout = remaining_timeout(deadline)
+        with self._connect(timeout) as conn:
             with conn.cursor() as cur:
-                cur.execute("set local statement_timeout = %s", [int(self.timeout_seconds * 1000)])
+                cur.execute("set local statement_timeout = %s", [max(1, int(timeout * 1000))])
                 for project_id, knowledge_base_id, document_id in scopes:
+                    cur.execute("set local statement_timeout = %s", [max(1, int(remaining_timeout(deadline) * 1000))])
+                    library_sql = " and upper(coalesce(metadata->>'libraryType', source_type)) = any(%s)" if library_types else ""
+                    params = [project_id, knowledge_base_id, document_id, *([library_types] if library_types else [])]
                     cur.execute(
                         f"select id, chunk_id, project_id, knowledge_base_id, document_id, title, content, source_type, source_id, metadata "
-                        f"from {self.table} where project_id = %s and knowledge_base_id = %s and document_id = %s",
-                        [project_id, knowledge_base_id, document_id],
+                        f"from {self.table} where project_id = %s and knowledge_base_id = %s and document_id = %s{library_sql}",
+                        params,
                     )
                     records_by_scope[(project_id, knowledge_base_id, document_id)] = [
                         ChunkRecord(id=row[0], chunkId=row[1], projectId=row[2], knowledgeBaseId=row[3], documentId=row[4],
                                     title=row[5], content=row[6], sourceType=row[7], sourceId=row[8], metadata=row[9] or {}, embedding=[])
                         for row in cur.fetchall()
                     ]
+        remaining_timeout(deadline)
         return {chunk.id: select_adjacent(records_by_scope.get((chunk.projectId, chunk.knowledgeBaseId, chunk.documentId), []), chunk, before, after) for chunk in chunks}
 
 
@@ -539,16 +613,22 @@ class MilvusVectorStore:
         result = client.delete(collection_name=self.collection, filter=expr)
         return int((result or {}).get("delete_count", 0))
 
-    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None) -> list[tuple[ChunkRecord, float]]:
+    async def search(self, query_embedding: list[float], project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> list[tuple[ChunkRecord, float]]:
         validate_search_scope(project_id, knowledge_base_ids)
         from pymilvus import MilvusClient
         client = MilvusClient(uri=self.uri, token=self.token or None)
-        client.load_collection(collection_name=self.collection, timeout=self.timeout_seconds)
+        deadline = operation_deadline(self.timeout_seconds, timeout_seconds)
+        timeout = remaining_timeout(deadline)
+        client.load_collection(collection_name=self.collection, timeout=timeout)
         expr = f"projectId == {project_id} and knowledgeBaseId in [" + ",".join(str(x) for x in knowledge_base_ids) + "]"
         if document_scope:
             expr += " and documentId in [" + ",".join(json.dumps(value) for value in document_scope) + "]"
+        if library_types:
+            quoted = ",".join(json.dumps(value) for value in library_types)
+            expr += f" and (metadata[\"libraryType\"] in [{quoted}] or sourceType in [{quoted}])"
         rows = client.search(collection_name=self.collection, data=[query_embedding], limit=top_k, filter=expr,
-                             output_fields=["*"], timeout=self.timeout_seconds)
+                             output_fields=["*"], timeout=remaining_timeout(deadline))
+        remaining_timeout(deadline)
         results = []
         for hit in rows[0]:
             entity = hit.get("entity", {})
@@ -560,16 +640,45 @@ class MilvusVectorStore:
             results.append((record, float(hit.get("distance", 0.0))))
         return results
 
+    async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> list[tuple[ChunkRecord, float]]:
+        validate_search_scope(project_id, knowledge_base_ids)
+        from pymilvus import MilvusClient
+        deadline = operation_deadline(self.timeout_seconds, timeout_seconds)
+        expr = f"projectId == {project_id} and knowledgeBaseId in [" + ",".join(str(x) for x in knowledge_base_ids) + "]"
+        if document_scope:
+            expr += " and documentId in [" + ",".join(json.dumps(value) for value in document_scope) + "]"
+        if library_types:
+            quoted = ",".join(json.dumps(value) for value in library_types)
+            expr += f" and (metadata[\"libraryType\"] in [{quoted}] or sourceType in [{quoted}])"
+        rows = MilvusClient(uri=self.uri, token=self.token or None).query(
+            collection_name=self.collection, filter=expr, output_fields=["*"],
+            limit=min(100, max(top_k * 4, top_k)), timeout=remaining_timeout(deadline),
+        )
+        remaining_timeout(deadline)
+        results = []
+        for row in rows:
+            score = text_match_score(query, row.get("content", ""))
+            if score <= 0:
+                continue
+            results.append((ChunkRecord(
+                id=row.get("id"), chunkId=row.get("chunkId") or row.get("id"), projectId=row.get("projectId"),
+                knowledgeBaseId=row.get("knowledgeBaseId"), documentId=row.get("documentId"), title=row.get("title"),
+                content=row.get("content"), sourceType=row.get("sourceType"), sourceId=row.get("sourceId"),
+                metadata=row.get("metadata") or {}, embedding=[],
+            ), score))
+        return sorted(results, key=lambda item: item[1], reverse=True)[:top_k]
+
     async def adjacent(self, chunk: ChunkRecord, before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> list[ChunkRecord]:
         return (await self.adjacent_many([chunk], before, after, document_scope)).get(chunk.id, [])
 
-    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None) -> dict[str, list[ChunkRecord]]:
+    async def adjacent_many(self, chunks: list[ChunkRecord], before: int = 1, after: int = 1, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> dict[str, list[ChunkRecord]]:
         from pymilvus import MilvusClient
         if not chunks:
             return {}
         if document_scope:
             chunks = [chunk for chunk in chunks if chunk.documentId in document_scope]
         client = MilvusClient(uri=self.uri, token=self.token or None)
+        deadline = operation_deadline(self.timeout_seconds, timeout_seconds)
         if not client.has_collection(self.collection):
             return {chunk.id: [] for chunk in chunks}
         scopes = {(chunk.projectId, chunk.knowledgeBaseId, chunk.documentId) for chunk in chunks}
@@ -577,12 +686,15 @@ class MilvusVectorStore:
         for project_id, knowledge_base_id, document_id in scopes:
             expr = (f"projectId == {project_id} and knowledgeBaseId == {knowledge_base_id} "
                     f"and documentId == {json.dumps(document_id)}")
+            if library_types:
+                quoted = ",".join(json.dumps(value) for value in library_types)
+                expr += f" and (metadata[\"libraryType\"] in [{quoted}] or sourceType in [{quoted}])"
             rows: list[dict[str, Any]] = []
             # Query until exhaustion so long documents do not lose neighbors past the first page.
             iterator = getattr(client, "query_iterator", None)
             if iterator is not None:
                 handle = iterator(collection_name=self.collection, filter=expr, output_fields=["*"], batch_size=256,
-                                  timeout=self.timeout_seconds)
+                                  timeout=remaining_timeout(deadline))
                 try:
                     while True:
                         page = handle.next()
@@ -597,7 +709,7 @@ class MilvusVectorStore:
                 offset = 0
                 while True:
                     page = client.query(collection_name=self.collection, filter=expr, output_fields=["*"], limit=256,
-                                        offset=offset, timeout=self.timeout_seconds)
+                                        offset=offset, timeout=remaining_timeout(deadline))
                     if not page:
                         break
                     rows.extend(page)
@@ -611,6 +723,7 @@ class MilvusVectorStore:
                             metadata=row.get("metadata") or {}, embedding=[])
                 for row in rows
             ]
+        remaining_timeout(deadline)
         return {chunk.id: select_adjacent(records_by_scope.get((chunk.projectId, chunk.knowledgeBaseId, chunk.documentId), []), chunk, before, after) for chunk in chunks}
 
 
