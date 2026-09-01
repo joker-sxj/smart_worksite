@@ -44,7 +44,10 @@ public class MyBatisQaRepository implements QaRepository {
 
     @Override
     public QaMessage insertMessage(QaMessage message) {
-        qaMapper.insertMessage(message);
+        int inserted = qaMapper.insertMessage(message);
+        if (inserted == 0 || message.getId() == null) {
+            throw new IllegalStateException("qa message insert failed or id was not generated");
+        }
         return message;
     }
 
@@ -65,13 +68,26 @@ public class MyBatisQaRepository implements QaRepository {
 
     @Override
     public int markMessageCompleted(Long messageId, Long taskId, String answer, String routeMode,
+                                    String referencesJson, String usageJson, String retrievalDiagnosticsJson, Long updatedBy) {
+        return qaMapper.markMessageCompleted(messageId, taskId, answer, routeMode, referencesJson, usageJson,
+                retrievalDiagnosticsJson, updatedBy);
+    }
+
+    @Override
+    public int markMessageCompleted(Long messageId, Long taskId, String answer, String routeMode,
                                     String referencesJson, String usageJson, Long updatedBy) {
-        return qaMapper.markMessageCompleted(messageId, taskId, answer, routeMode, referencesJson, usageJson, updatedBy);
+        return qaMapper.markMessageCompleted(messageId, taskId, answer, routeMode, referencesJson, usageJson, null, updatedBy);
+    }
+
+    @Override
+    public int markMessageFailed(Long messageId, Long taskId, String errorMessage,
+                                 String retrievalDiagnosticsJson, Long updatedBy) {
+        return qaMapper.markMessageFailed(messageId, taskId, errorMessage, retrievalDiagnosticsJson, updatedBy);
     }
 
     @Override
     public int markMessageFailed(Long messageId, Long taskId, String errorMessage, Long updatedBy) {
-        return qaMapper.markMessageFailed(messageId, taskId, errorMessage, updatedBy);
+        return qaMapper.markMessageFailed(messageId, taskId, errorMessage, null, updatedBy);
     }
 
     @Override

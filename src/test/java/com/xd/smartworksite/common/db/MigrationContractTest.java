@@ -134,6 +134,27 @@ class MigrationContractTest {
     }
 
     @Test
+    void qaRetrievalDiagnosticsMigrationAndMapperCoverPersistenceLifecycle() throws IOException {
+        String migration = Files.readString(
+                MIGRATION_DIR.resolve("V24__persist_qa_retrieval_diagnostics.sql"),
+                StandardCharsets.UTF_8
+        );
+        String mapper = Files.readString(
+                MAPPER_DIR.resolve("qa/QaMapper.xml"),
+                StandardCharsets.UTF_8
+        );
+
+        assertThat(migration).contains("ADD COLUMN retrieval_diagnostics_json JSON NULL");
+        assertThat(mapper).contains("property=\"retrievalDiagnosticsJson\" column=\"retrieval_diagnostics_json\"");
+        assertThat(mapper).contains("references_json, usage_json, retrieval_diagnostics_json");
+        assertThat(mapper).contains("#{retrievalDiagnosticsJson}");
+        assertThat(mapper).contains("retrieval_diagnostics_json = #{retrievalDiagnosticsJson}");
+        assertThat(mapper).contains("retrieval_diagnostics_json = #{retrievalDiagnosticsJson},\n            status = 'SUCCESS'");
+        assertThat(mapper).contains("retrieval_diagnostics_json = #{retrievalDiagnosticsJson},\n            updated_by = #{updatedBy}");
+        assertThat(mapper).doesNotContain("CAST(#{retrievalDiagnosticsJson}");
+    }
+
+    @Test
     void fileDownloadContractUsesAccessUrlEndpoint() throws IOException {
         String readme = Files.readString(README, StandardCharsets.UTF_8);
         String frontendFileApi = Files.readString(FRONTEND_FILE_API, StandardCharsets.UTF_8);

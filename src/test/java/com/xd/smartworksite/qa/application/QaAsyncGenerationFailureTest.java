@@ -10,13 +10,17 @@ import com.xd.smartworksite.task.application.NonRetryableTaskException;
 import com.xd.smartworksite.qa.domain.QaMessage;
 import com.xd.smartworksite.qa.domain.QaSession;
 import com.xd.smartworksite.qa.repository.QaRepository;
+import com.xd.smartworksite.ai.dto.RagSearchResponse;
+import com.xd.smartworksite.knowledge.domain.KnowledgeBase;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
@@ -24,6 +28,43 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.doThrow;
 
 class QaAsyncGenerationFailureTest {
+    @Test
+    void executeGenerationPersistsSafeRetrievalDiagnosticsOnCompletion() {
+        QaRepository repository = mock(QaRepository.class);
+        QaAiGateway aiGateway = mock(QaAiGateway.class);
+        KnowledgeBaseRepository knowledgeBases = mock(KnowledgeBaseRepository.class);
+        QaMessage message = queuedMessage();
+        message.setRouteMode("KNOWLEDGE");
+        message.setRequestJson("{\"routeMode\":\"KNOWLEDGE\",\"knowledgeBaseIds\":[10],\"dataSourceIds\":[]}");
+        QaSession session = new QaSession(); session.setId(7L); session.setProjectId(1L);
+        KnowledgeBase knowledgeBase = new KnowledgeBase();
+        knowledgeBase.setId(10L); knowledgeBase.setProjectId(1L); knowledgeBase.setStatus("ENABLED");
+        RagSearchResponse retrieval = new RagSearchResponse();
+        retrieval.setEvidenceStatus("INSUFFICIENT");
+        retrieval.setRetrievalRounds(2);
+        retrieval.setDiagnostics(java.util.Map.of(
+                "missingAspects", java.util.List.of("HEIGHT"),
+                "attempts", java.util.List.of(java.util.Map.of("attemptNo", 1, "elapsedMs", 17, "prompt", "secret"))));
+        when(repository.findMessageById(11L)).thenReturn(Optional.of(message));
+        when(repository.findSessionById(7L)).thenReturn(Optional.of(session));
+        when(repository.markMessageProcessing(11L, 19L, 1L)).thenReturn(1);
+        when(repository.markMessageCompleted(any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(1);
+        when(knowledgeBases.findById(10L)).thenReturn(Optional.of(knowledgeBase));
+        when(aiGateway.searchKnowledgeDynamicForSystem(any())).thenReturn(retrieval);
+        QaApplicationService service = new QaApplicationService(repository, mock(ProjectAccessApplicationService.class),
+                knowledgeBases, mock(DataSourceRepository.class), aiGateway, new ObjectMapper(),
+                null, null, new QaAnswerSanitizer());
+
+        service.executeGenerationTask(11L, 19L);
+
+        ArgumentCaptor<String> diagnostics = ArgumentCaptor.forClass(String.class);
+        verify(repository).markMessageCompleted(eq(11L), eq(19L), any(), eq("KNOWLEDGE"),
+                eq("[]"), eq("{}"), diagnostics.capture(), eq(1L));
+        assertThat(diagnostics.getValue())
+                .contains("\"evidenceStatus\":\"INSUFFICIENT\"", "\"retrievalRounds\":2", "\"elapsedMs\":17")
+                .doesNotContain("prompt", "secret");
+    }
+
     @Test
     void executeGenerationFailsVisiblyWhenFailureStateCannotBePersisted() {
         QaRepository repository = mock(QaRepository.class);
@@ -39,7 +80,7 @@ class QaAsyncGenerationFailureTest {
         when(repository.findSessionById(7L)).thenReturn(Optional.of(session));
         when(repository.markMessageProcessing(11L, 19L, 1L)).thenReturn(1);
         when(aiGateway.invokeModelForSystem(any())).thenThrow(new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "model down"));
-        when(repository.markMessageFailed(11L, 19L, "model down", 1L)).thenReturn(0);
+        when(repository.markMessageFailed(eq(11L), eq(19L), eq("model down"), any(), eq(1L))).thenReturn(0);
         ProjectAccessApplicationService access = mock(ProjectAccessApplicationService.class);
         QaApplicationService service = new QaApplicationService(repository, access,
                 mock(KnowledgeBaseRepository.class), mock(DataSourceRepository.class), aiGateway, new ObjectMapper(),
@@ -62,7 +103,7 @@ class QaAsyncGenerationFailureTest {
         when(repository.findMessageById(11L)).thenReturn(Optional.of(message));
         when(repository.findSessionById(7L)).thenReturn(Optional.of(session));
         when(repository.markMessageProcessing(11L, 19L, 1L)).thenReturn(1);
-        when(repository.markMessageFailed(any(), any(), any(), any())).thenReturn(1);
+        when(repository.markMessageFailed(any(), any(), any(), any(), any())).thenReturn(1);
         doThrow(new BusinessException(ErrorCode.FORBIDDEN, "revoked"))
                 .when(access).requireUserProjectWritableAccess(1L, 2L);
         QaApplicationService service = new QaApplicationService(repository, access,
@@ -73,7 +114,7 @@ class QaAsyncGenerationFailureTest {
                 .isInstanceOfSatisfying(NonRetryableTaskException.class, ex ->
                         assertThat(ex.getCause()).isInstanceOfSatisfying(BusinessException.class,
                                 cause -> assertThat(cause.getCode()).isEqualTo(ErrorCode.FORBIDDEN.getCode())));
-        verify(repository).markMessageFailed(11L, 19L, "revoked", 1L);
+        verify(repository).markMessageFailed(eq(11L), eq(19L), eq("revoked"), any(), eq(1L));
         verify(aiGateway, never()).searchKnowledgeDynamicForSystem(any());
         verify(aiGateway, never()).invokeModelForSystem(any());
     }
@@ -92,7 +133,7 @@ class QaAsyncGenerationFailureTest {
         when(repository.findMessageById(11L)).thenReturn(Optional.of(message));
         when(repository.findSessionById(7L)).thenReturn(Optional.of(session));
         when(repository.markMessageProcessing(11L, 19L, 1L)).thenReturn(1);
-        when(repository.markMessageFailed(any(), any(), any(), any())).thenReturn(1);
+        when(repository.markMessageFailed(any(), any(), any(), any(), any())).thenReturn(1);
         when(knowledgeBases.findById(10L)).thenReturn(Optional.of(disabled));
         QaApplicationService service = new QaApplicationService(repository, mock(ProjectAccessApplicationService.class),
                 knowledgeBases, mock(DataSourceRepository.class), aiGateway, new ObjectMapper(),

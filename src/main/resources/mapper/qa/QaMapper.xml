@@ -23,6 +23,7 @@
         <result property="routeMode" column="route_mode"/>
         <result property="referencesJson" column="references_json"/>
         <result property="usageJson" column="usage_json"/>
+        <result property="retrievalDiagnosticsJson" column="retrieval_diagnostics_json"/>
         <result property="feedbackJson" column="feedback_json"/>
         <result property="status" column="status"/>
         <result property="taskId" column="task_id"/>
@@ -40,7 +41,7 @@
 
     <sql id="MessageColumns">
         id, project_id, session_id, role, question, answer, route_mode, references_json, usage_json,
-        feedback_json, status, task_id, request_json, error_message, created_at, updated_at, created_by, updated_by
+        retrieval_diagnostics_json, feedback_json, status, task_id, request_json, error_message, created_at, updated_at, created_by, updated_by
     </sql>
 
     <insert id="insertSession" useGeneratedKeys="true" keyProperty="id">
@@ -96,10 +97,10 @@
 
     <insert id="insertMessage" useGeneratedKeys="true" keyProperty="id">
         insert into qa_message (
-            project_id, session_id, role, question, answer, route_mode, references_json, usage_json,
+            project_id, session_id, role, question, answer, route_mode, references_json, usage_json, retrieval_diagnostics_json,
             feedback_json, status, task_id, request_json, error_message, created_by, updated_by
         ) values (
-            #{projectId}, #{sessionId}, #{role}, #{question}, #{answer}, #{routeMode}, #{referencesJson}, #{usageJson},
+            #{projectId}, #{sessionId}, #{role}, #{question}, #{answer}, #{routeMode}, #{referencesJson}, #{usageJson}, #{retrievalDiagnosticsJson},
             #{feedbackJson}, #{status}, #{taskId}, #{requestJson}, #{errorMessage}, #{createdBy}, #{updatedBy}
         )
     </insert>
@@ -110,6 +111,7 @@
             route_mode = #{routeMode},
             references_json = #{referencesJson},
             usage_json = #{usageJson},
+            retrieval_diagnostics_json = #{retrievalDiagnosticsJson},
             status = #{status},
             error_message = #{errorMessage},
             updated_by = #{updatedBy}
@@ -144,6 +146,7 @@
             route_mode = #{routeMode},
             references_json = #{referencesJson},
             usage_json = #{usageJson},
+            retrieval_diagnostics_json = #{retrievalDiagnosticsJson},
             status = 'SUCCESS',
             error_message = null,
             updated_by = #{updatedBy}
@@ -157,6 +160,7 @@
         update qa_message
         set status = 'FAILED',
             error_message = #{errorMessage},
+            retrieval_diagnostics_json = #{retrievalDiagnosticsJson},
             updated_by = #{updatedBy}
         where id = #{messageId}
           and task_id = #{taskId}

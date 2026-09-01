@@ -182,7 +182,18 @@ class QaApplicationServiceTest {
         response.setRetrievalRounds(2);
         response.setNormalizedQuery("规范要求");
         response.setRewrittenQuery("施工规范要求");
-        response.setDiagnostics(java.util.Map.of("selectedCount", 1, "attempts", List.of(java.util.Map.of("attemptNo", 1))));
+        response.setDiagnostics(java.util.Map.of(
+                "selectedCount", 1,
+                "missingAspects", List.of("高度"),
+                "degradedComponents", List.of("RERANKER"),
+                "stopReason", "ENOUGH_EVIDENCE",
+                "attempts", List.of(java.util.Map.of(
+                        "attemptNo", 1, "status", "PARTIAL", "elapsedMs", 23,
+                        "evidenceText", "不得持久化的完整证据正文")),
+                "assessment", java.util.Map.of(
+                        "status", "PARTIAL", "missingAspects", List.of("高度"),
+                        "prompt", "不得持久化的提示词"),
+                "exceptionSecret", "token=secret"));
         aiGateway.nextDynamicResponse = response;
         var session = service.createSession(createSessionRequest(1L, "动态知识问答"));
         QaMessageSendRequest request = new QaMessageSendRequest();
@@ -198,7 +209,18 @@ class QaApplicationServiceTest {
                 .containsEntry("evidenceStatus", "PARTIAL")
                 .containsEntry("retrievalRounds", 2)
                 .containsEntry("normalizedQuery", "规范要求")
-                .containsEntry("rewrittenQuery", "施工规范要求");
+                .containsEntry("rewrittenQuery", "施工规范要求")
+                .containsEntry("missingAspects", List.of("高度"))
+                .containsEntry("degradedComponents", List.of("RERANKER"))
+                .doesNotContainKeys("exceptionSecret", "prompt", "evidenceText", "diagnostics");
+        assertThat(message.getRetrievalDiagnostics().get("attempts").toString()).doesNotContain("完整证据正文");
+        assertThat(message.getRetrievalDiagnostics().get("assessment").toString()).doesNotContain("提示词");
+
+        assertThat(service.getMessage(message.getMessageId()).getRetrievalDiagnostics())
+                .isEqualTo(message.getRetrievalDiagnostics());
+        assertThat(service.getSessionMessages(session.getSessionId())).singleElement()
+                .extracting(item -> item.getRetrievalDiagnostics())
+                .isEqualTo(message.getRetrievalDiagnostics());
         assertThat(aiGateway.lastModelRequest.getSystemPrompt()).contains("可以确认", "无法确认");
         assertThat(aiGateway.lastModelRequest.getEvidenceItems()).hasSize(1);
     }
@@ -810,6 +832,7 @@ class QaApplicationServiceTest {
             current.setRouteMode(message.getRouteMode());
             current.setReferencesJson(message.getReferencesJson());
             current.setUsageJson(message.getUsageJson());
+            current.setRetrievalDiagnosticsJson(message.getRetrievalDiagnosticsJson());
             current.setStatus(message.getStatus());
             current.setUpdatedBy(message.getUpdatedBy());
             return 1;

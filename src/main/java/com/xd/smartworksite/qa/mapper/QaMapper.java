@@ -41,11 +41,13 @@ public interface QaMapper {
                              @Param("routeMode") String routeMode,
                              @Param("referencesJson") String referencesJson,
                              @Param("usageJson") String usageJson,
+                             @Param("retrievalDiagnosticsJson") String retrievalDiagnosticsJson,
                              @Param("updatedBy") Long updatedBy);
 
     int markMessageFailed(@Param("messageId") Long messageId,
                           @Param("taskId") Long taskId,
                           @Param("errorMessage") String errorMessage,
+                          @Param("retrievalDiagnosticsJson") String retrievalDiagnosticsJson,
                           @Param("updatedBy") Long updatedBy);
 
     QaMessage selectMessageById(@Param("messageId") Long messageId);

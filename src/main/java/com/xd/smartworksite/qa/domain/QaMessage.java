@@ -12,6 +12,7 @@ public class QaMessage {
     private String routeMode;
     private String referencesJson;
     private String usageJson;
+    private String retrievalDiagnosticsJson;
     private String feedbackJson;
     private String status;
     private Long taskId;
@@ -40,6 +41,8 @@ public class QaMessage {
     public void setReferencesJson(String referencesJson) { this.referencesJson = referencesJson; }
     public String getUsageJson() { return usageJson; }
     public void setUsageJson(String usageJson) { this.usageJson = usageJson; }
+    public String getRetrievalDiagnosticsJson() { return retrievalDiagnosticsJson; }
+    public void setRetrievalDiagnosticsJson(String retrievalDiagnosticsJson) { this.retrievalDiagnosticsJson = retrievalDiagnosticsJson; }
     public String getFeedbackJson() { return feedbackJson; }
     public void setFeedbackJson(String feedbackJson) { this.feedbackJson = feedbackJson; }
     public String getStatus() { return status; }

@@ -181,6 +181,7 @@ public class QaApplicationService {
         message.setRouteMode(requestedRoute.name());
         message.setReferencesJson("[]");
         message.setUsageJson("{}");
+        message.setRetrievalDiagnosticsJson("{}");
         message.setFeedbackJson("{}");
         message.setStatus(QaMessageStatus.PENDING.name());
         message.setRequestJson(writeJson(Map.of(
@@ -230,6 +231,7 @@ public class QaApplicationService {
         message.setRouteMode(aiResult.getRouteMode());
         message.setReferencesJson(writeJson(aiResult.getReferences()));
         message.setUsageJson(writeJson(aiResult.getUsage()));
+        message.setRetrievalDiagnosticsJson(writeJson(safeRetrievalDiagnostics(aiResult.getRetrievalDiagnostics())));
         message.setStatus(QaMessageStatus.SUCCESS.name());
         message.setUpdatedBy(userId);
         if (qaRepository.updateMessage(message) == 0) {
@@ -269,11 +271,13 @@ public class QaApplicationService {
             String answer = answerSanitizer.sanitize(result.getAnswer());
             if (answer == null || answer.isBlank()) throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "qa answer was empty after sanitization");
             if (qaRepository.markMessageCompleted(messageId, taskId, answer, result.getRouteMode(),
-                    writeJson(result.getReferences()), writeJson(result.getUsage()), 1L) == 0) {
+                    writeJson(result.getReferences()), writeJson(result.getUsage()),
+                    writeJson(safeRetrievalDiagnostics(result.getRetrievalDiagnostics())), 1L) == 0) {
                 throw new BusinessException(ErrorCode.CONFLICT, "qa message completion state changed");
             }
         } catch (RuntimeException ex) {
-            int failed = qaRepository.markMessageFailed(messageId, taskId, limitError(ex.getMessage()), 1L);
+            int failed = qaRepository.markMessageFailed(messageId, taskId, limitError(ex.getMessage()),
+                    writeJson(failureDiagnostics(ex)), 1L);
             if (failed == 0) {
                 BusinessException persistenceFailure = new BusinessException(
                         ErrorCode.CONFLICT,
@@ -522,8 +526,41 @@ public class QaApplicationService {
         result.put("retrievalRounds", response.getRetrievalRounds());
         result.put("normalizedQuery", response.getNormalizedQuery());
         result.put("rewrittenQuery", response.getRewrittenQuery());
-        result.put("diagnostics", response.getDiagnostics() == null ? Map.of() : response.getDiagnostics());
+        result.putAll(safeRetrievalDiagnostics(response.getDiagnostics()));
         return result;
+    }
+
+    private Map<String, Object> safeRetrievalDiagnostics(Map<String, Object> source) {
+        if (source == null) return Map.of();
+        Map<String, Object> safe = new LinkedHashMap<>();
+        List<String> keys = List.of("evidenceStatus", "retrievalRounds", "normalizedQuery", "rewrittenQuery",
+                "candidateCount", "selectedCount", "questionType", "validityStatus",
+                "futureEffectiveFrom", "queryFingerprints", "degradedComponents", "missingAspects", "stopReason");
+        if (source.containsKey("attemptNo")) keys = List.of("attemptNo", "queryFingerprint", "strategy",
+                "candidateCount", "selectedCount", "status", "elapsedMs", "stopReason");
+        if (source.containsKey("requiredAspects")) keys = List.of("status", "requiredAspects", "coveredAspects", "missingAspects");
+        keys.forEach(key -> { if (source.containsKey(key)) safe.put(key, source.get(key)); });
+        copySafeList(source, "attempts", safe);
+        copySafeMap(source, "assessment", safe);
+        copySafeMap(source, "firstAssessment", safe);
+        return safe;
+    }
+
+    private void copySafeList(Map<String, Object> source, String key, Map<String, Object> target) {
+        Object value = source.get(key);
+        if (value instanceof List<?> list) {
+            target.put(key, list.stream().filter(item -> item instanceof Map<?, ?>)
+                    .map(item -> safeRetrievalDiagnostics((Map<String, Object>) item)).toList());
+        }
+    }
+
+    private void copySafeMap(Map<String, Object> source, String key, Map<String, Object> target) {
+        Object value = source.get(key);
+        if (value instanceof Map<?, ?> map) target.put(key, safeRetrievalDiagnostics((Map<String, Object>) map));
+    }
+
+    private Map<String, Object> failureDiagnostics(RuntimeException ex) {
+        return Map.of("status", "FAILED", "stopReason", "EXCEPTION");
     }
 
     private List<Map<String, Object>> limitKnowledgeReferencesToModeledEvidence(
@@ -788,6 +825,7 @@ public class QaApplicationService {
         response.setReferences(readList(message.getReferencesJson()));
         response.setUsage(readMap(message.getUsageJson()));
         response.setFeedback(readMap(message.getFeedbackJson()));
+        response.setRetrievalDiagnostics(readMap(message.getRetrievalDiagnosticsJson()));
         response.setStatus(message.getStatus());
         response.setCreatedAt(message.getCreatedAt());
         response.setUpdatedAt(message.getUpdatedAt());
