@@ -349,6 +349,7 @@ class QaApplicationServiceTest {
             assertThat(evidence.getSourceId()).isEqualTo("doc-1");
             assertThat(evidence.getChunkId()).isEqualTo("chunk-1");
             assertThat(evidence.getPageNumber()).isEqualTo(3);
+            assertThat(evidence.getTableLocation()).isEqualTo("Sheet=Safety Risks, 单元格范围=A1:E3");
             assertThat(evidence.getScore()).isEqualTo(0.91);
         });
     }
@@ -597,6 +598,22 @@ class QaApplicationServiceTest {
                 .contains("old-question-100", "old-answer-100", "old-question-109", "old-answer-109")
                 .doesNotContain("old-question-99", "old-answer-99")
                 .doesNotContain("failed-question", "pending-question");
+    }
+
+    @Test
+    void mapsPdfAndPresentationLocationsFromStructuredRagMetadata() {
+        RagSearchResponse.Record pdf = ragRecord("施工规范", "pdf-source");
+        pdf.setMetadata(Map.of("location", Map.of("page", "12")));
+        RagSearchResponse.Record presentation = ragRecord("安全培训", "ppt-source");
+        presentation.setMetadata(Map.of("location", Map.of("slide", 4)));
+        aiGateway.nextDynamicResponse = dynamicResponse("SUFFICIENT", List.of(pdf, presentation));
+
+        sendKnowledgeQuestion("规范页码和培训幻灯片位置");
+
+        assertThat(aiGateway.lastModelRequest.getEvidenceItems()).satisfiesExactly(
+                evidence -> assertThat(evidence.getPageNumber()).isEqualTo(12),
+                evidence -> assertThat(evidence.getSlideNumber()).isEqualTo(4)
+        );
     }
 
     @Test
@@ -978,7 +995,11 @@ class QaApplicationServiceTest {
             record.setSourceType("DOCUMENT");
             record.setSourceId("doc-1");
             record.setScore(0.91);
-            record.setMetadata(java.util.Map.of("chunkId", "chunk-1", "pageNumber", 3));
+            record.setMetadata(java.util.Map.of(
+                    "chunkId", "chunk-1",
+                    "pageNumber", 3,
+                    "location", java.util.Map.of("sheet", "Safety Risks", "cellRange", "A1:E3")
+            ));
             response.setRecords(List.of(record));
             response.setProviderTraceId("rag-trace");
             return response;

@@ -27,6 +27,7 @@ class EvidenceItem:
     document_id: str | None = None
     document_title: str | None = None
     page_number: int | None = None
+    slide_number: int | None = None
     table_location: str | None = None
     relevance: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -47,6 +48,8 @@ class EvidenceItem:
             metadata.append(f"sourceId: {self.source_id}")
         if self.page_number is not None:
             metadata.append(f"页码: {self.page_number}")
+        if self.slide_number is not None:
+            metadata.append(f"幻灯片: {self.slide_number}")
         if self.table_location:
             metadata.append(f"表格位置: {self.table_location}")
         if self.chunk_id:

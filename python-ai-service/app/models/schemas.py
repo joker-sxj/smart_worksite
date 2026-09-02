@@ -27,6 +27,7 @@ class ModelEvidenceItem(BaseModel):
     documentId: str | None = None
     chunkId: str | None = None
     pageNumber: int | None = None
+    slideNumber: int | None = None
     tableLocation: str | None = None
     score: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

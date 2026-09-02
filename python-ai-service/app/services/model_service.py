@@ -34,6 +34,7 @@ class ModelService:
                 document_id=item.documentId,
                 document_title=item.title,
                 page_number=item.pageNumber,
+                slide_number=item.slideNumber,
                 table_location=item.tableLocation,
                 relevance=item.score,
                 metadata=item.metadata,

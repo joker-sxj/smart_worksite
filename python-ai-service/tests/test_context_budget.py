@@ -192,6 +192,22 @@ from app.services.context_budget import (
 )
 
 
+def test_evidence_block_exposes_office_document_source_location_to_model():
+    spreadsheet = EvidenceItem(
+        "Risk Level | Owner\nLevel 1 | Zhang San",
+        document_title="safety_multi.xlsx",
+        table_location="Sheet=Safety Risks, 单元格范围=A1:E3",
+    )
+    presentation = EvidenceItem(
+        "Emergency drill plan",
+        document_title="safety_review.pptx",
+        slide_number=2,
+    )
+
+    assert "表格位置: Sheet=Safety Risks, 单元格范围=A1:E3" in spreadsheet.as_block()
+    assert "幻灯片: 2" in presentation.as_block()
+
+
 class FixedTokenCounter:
     def __init__(self, text_tokens: dict[str, int] | None = None, mode: str = "ESTIMATED"):
         self.text_tokens = text_tokens or {}

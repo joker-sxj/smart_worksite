@@ -10,6 +10,7 @@ public class ModelEvidenceItem {
     private String documentId;
     private String chunkId;
     private Integer pageNumber;
+    private Integer slideNumber;
     private String tableLocation;
     private Double score;
     private Map<String, Object> metadata = new LinkedHashMap<>();
@@ -26,6 +27,8 @@ public class ModelEvidenceItem {
     public void setChunkId(String chunkId) { this.chunkId = chunkId; }
     public Integer getPageNumber() { return pageNumber; }
     public void setPageNumber(Integer pageNumber) { this.pageNumber = pageNumber; }
+    public Integer getSlideNumber() { return slideNumber; }
+    public void setSlideNumber(Integer slideNumber) { this.slideNumber = slideNumber; }
     public String getTableLocation() { return tableLocation; }
     public void setTableLocation(String tableLocation) { this.tableLocation = tableLocation; }
     public Double getScore() { return score; }

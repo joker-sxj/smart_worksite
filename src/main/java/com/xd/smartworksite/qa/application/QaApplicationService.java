@@ -735,12 +735,37 @@ public class QaApplicationService {
             Object chunkId = item.getMetadata().get("chunkId");
             Object pageNumber = item.getMetadata().get("pageNumber");
             Object tableLocation = item.getMetadata().get("tableLocation");
+            Map<?, ?> location = item.getMetadata().get("location") instanceof Map<?, ?> value ? value : Map.of();
             if (documentId != null) item.setDocumentId(String.valueOf(documentId));
             if (chunkId != null) item.setChunkId(String.valueOf(chunkId));
-            if (pageNumber instanceof Number number) item.setPageNumber(number.intValue());
-            if (tableLocation != null) item.setTableLocation(String.valueOf(tableLocation));
+            item.setPageNumber(integerValue(pageNumber != null ? pageNumber : location.get("page")));
+            item.setSlideNumber(integerValue(location.get("slide")));
+            item.setTableLocation(tableLocation != null
+                    ? String.valueOf(tableLocation)
+                    : spreadsheetLocation(location));
             return item;
         }).toList();
+    }
+
+    private Integer integerValue(Object value) {
+        if (value instanceof Number number) return number.intValue();
+        if (value instanceof String text) {
+            try {
+                return Integer.valueOf(text.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private String spreadsheetLocation(Map<?, ?> location) {
+        String sheet = trimToNull(location.get("sheet") == null ? null : String.valueOf(location.get("sheet")));
+        String cellRange = trimToNull(location.get("cellRange") == null ? null : String.valueOf(location.get("cellRange")));
+        if (sheet == null && cellRange == null) return null;
+        if (sheet == null) return "单元格范围=" + cellRange;
+        if (cellRange == null) return "Sheet=" + sheet;
+        return "Sheet=" + sheet + ", 单元格范围=" + cellRange;
     }
 
     private Map<String, Object> databaseReference(DatabaseQueryResponse response) {
