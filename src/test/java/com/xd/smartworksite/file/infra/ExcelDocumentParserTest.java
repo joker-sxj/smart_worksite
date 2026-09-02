@@ -55,6 +55,18 @@ class ExcelDocumentParserTest {
     }
 
     @Test
+    void preservesCsvLineNumbersWhenBlankLinesAreSkipped() {
+        ExcelDocumentParser parser = new ExcelDocumentParser(properties(100, 1000, 20));
+
+        PreparedDocument document = parser.parse(
+                fileObject(7L, 19L, "risk.csv", "csv"),
+                "日期,问题\n\n2026-08-01,临边防护缺口\n".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(document.getBlocks().get(0).getStructuredData().get("rowMetadata").toString())
+                .contains("rowNumber=3");
+    }
+
+    @Test
     void preservesSheetsRangesMergedCellsDisplayedValuesAndCachedFormulaResults() throws Exception {
         byte[] content;
         try (XSSFWorkbook workbook = new XSSFWorkbook();

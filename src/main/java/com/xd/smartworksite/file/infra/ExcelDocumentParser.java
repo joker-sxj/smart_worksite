@@ -113,17 +113,21 @@ public class ExcelDocumentParser implements DocumentParser {
     private PreparedDocument parseCsv(FileObject fileObject, byte[] content) {
         String source = decodeCsv(content);
         List<List<String>> rows = parseDelimited(source, detectDelimiter(source));
-        List<List<String>> nonBlankRows = rows.stream()
-                .filter(row -> row.stream().anyMatch(value -> !value.isBlank()))
-                .toList();
+        List<CsvRow> nonBlankRows = new ArrayList<>();
+        for (int index = 0; index < rows.size(); index++) {
+            List<String> row = rows.get(index);
+            if (row.stream().anyMatch(value -> !value.isBlank())) {
+                nonBlankRows.add(new CsvRow(index + 1, row));
+            }
+        }
         if (nonBlankRows.isEmpty()) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "spreadsheet contains no readable cells");
         }
         if (nonBlankRows.size() > fileProperties.getParse().getMaxSpreadsheetRows()) {
             throw limitError("spreadsheet row limit exceeded");
         }
-        int maxColumns = nonBlankRows.stream().mapToInt(List::size).max().orElse(0);
-        long cells = nonBlankRows.stream().mapToLong(List::size).sum();
+        int maxColumns = nonBlankRows.stream().map(CsvRow::values).mapToInt(List::size).max().orElse(0);
+        long cells = nonBlankRows.stream().map(CsvRow::values).mapToLong(List::size).sum();
         if (maxColumns > fileProperties.getParse().getMaxSpreadsheetColumnSpan()) {
             throw limitError("spreadsheet column span limit exceeded");
         }
@@ -134,19 +138,21 @@ public class ExcelDocumentParser implements DocumentParser {
         List<Map<String, Object>> rowMetadata = new ArrayList<>();
         StringBuilder text = new StringBuilder();
         for (int index = 0; index < nonBlankRows.size(); index++) {
-            List<String> values = nonBlankRows.get(index);
-            rowMetadata.add(Map.of("rowNumber", index + 1, "firstColumn", 1, "values", values));
+            CsvRow csvRow = nonBlankRows.get(index);
+            List<String> values = csvRow.values();
+            rowMetadata.add(Map.of("rowNumber", csvRow.lineNumber(), "firstColumn", 1, "values", values));
             if (text.length() > 0) {
                 text.append('\n');
             }
             text.append(String.join("\t", values));
         }
-        String range = new CellRangeAddress(0, nonBlankRows.size() - 1, 0, maxColumns - 1).formatAsString();
+        int lastLine = nonBlankRows.get(nonBlankRows.size() - 1).lineNumber();
+        String range = new CellRangeAddress(0, lastLine - 1, 0, maxColumns - 1).formatAsString();
         Map<String, Object> structuredData = new LinkedHashMap<>();
         structuredData.put("sheetIndex", 0);
         structuredData.put("sourceType", "CSV_TABLE");
         structuredData.put("hidden", false);
-        structuredData.put("rows", nonBlankRows);
+        structuredData.put("rows", nonBlankRows.stream().map(CsvRow::values).toList());
         structuredData.put("rowMetadata", rowMetadata);
         structuredData.put("mergedRegions", List.of());
         structuredData.put("formulas", Map.of());
@@ -326,5 +332,8 @@ public class ExcelDocumentParser implements DocumentParser {
                                 Map<String, Object> formulas, String text,
                                 int cellCount, int firstRow, int lastRow,
                                 int firstColumn, int lastColumn) {
+    }
+
+    private record CsvRow(int lineNumber, List<String> values) {
     }
 }
