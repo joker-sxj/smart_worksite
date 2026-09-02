@@ -16,7 +16,7 @@
 ## Linux 实机版本
 
 - 地址：`http://172.18.12.6:5173/knowledge`
-- 提交：`151c72b7d655f6b0a6e582460267719c174b6bbf`
+- 提交：`f367398`（问答引用定位与显式文件名检索修复后）
 - Java：`/actuator/health` 返回 `{"status":"UP"}`。
 - Python：`/v1/health` 返回 `LOCAL_ONLY`，chat、vision、embedding、rerank 均 `READY`。
 - Docker：MySQL、Redis、MinIO、Python AI、local LLM、embedding、reranker 均运行；MinIO init 退出码为 0。
@@ -42,9 +42,15 @@
 
 ## 未完成项与阻塞
 
-Chrome 扩展的本地文件上传能力返回 `Not allowed`，原因是当前 Chrome 扩展未开启“Allow access to file URLs”。因此，尚未完成用户要求的“至少 30 个 Chrome UI 上传/解析/入库场景”，也没有把接口级验收冒充为 Chrome 全量验收。
+Chrome 已开启本地文件上传权限，五个真实办公文件已经完成 UI 上传、解析和入库，状态均为“解析成功/成功”。问答实机已验证 Excel 题目能返回问题、负责人、Sheet 和单元格范围；此前同题的定位缺失已修复。尚未完成用户要求的至少 30 个 Chrome UI 场景，当前不能把已完成的接口级覆盖冒充为 Chrome 全量验收。
 
-解除该浏览器权限后，应继续覆盖：失败重试、刷新期间状态、仅图片/空文件/损坏文件、重复上传、详情查看、跨项目隔离，以及 Excel/PPT 问答引用；每个独立问答先新建会话。
+仍需继续覆盖：失败重试、刷新期间状态、仅图片/空文件/损坏文件、重复上传、详情查看、跨项目隔离、CSV/PPT/PPTX/Excel 问答引用；每个独立问答先新建会话。
+
+## 本轮修复
+
+- Java 将 RAG `location.page/slide/sheet/cellRange` 通用映射到模型证据，不依赖特定文件或问题。
+- Python 模型上下文显式携带页码、幻灯片和表格位置；本地词法检索对用户明确点名的文件名加权，避免向量结果把目标文件挤出候选集。
+- 自动化回归：Java `353 tests, failures=0, errors=0`；前端 `90 passed`；前端构建通过；Linux Python 容器 `363 passed`。
 
 ## 日志结论
 
