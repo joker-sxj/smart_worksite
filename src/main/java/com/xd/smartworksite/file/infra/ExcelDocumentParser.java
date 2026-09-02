@@ -56,7 +56,7 @@ public class ExcelDocumentParser implements DocumentParser {
 
     @Override
     public PreparedDocument parse(FileObject fileObject, byte[] content) {
-        if ("csv".equals(normalize(fileObject.getFileExt()))) {
+        if (isCsv(fileObject)) {
             return parseCsv(fileObject, content);
         }
         try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(content))) {
@@ -249,7 +249,7 @@ public class ExcelDocumentParser implements DocumentParser {
                 Cell cell = row.getCell(column, Row.MissingCellPolicy.RETURN_BLANK_AS_NULL);
                 String displayed = cell == null ? "" : displayedValue(cell, formatter);
                 values.add(displayed);
-                if (!displayed.isBlank() || cell != null) {
+                if (!displayed.isBlank()) {
                     hasValue = true;
                     cellCount++;
                     if (cellCount > remainingCells) {
@@ -317,6 +317,14 @@ public class ExcelDocumentParser implements DocumentParser {
         return EXTENSIONS.contains(ext) ? ext : "xlsx";
     }
 
+    private boolean isCsv(FileObject fileObject) {
+        String ext = normalize(fileObject.getFileExt());
+        String contentType = normalize(fileObject.getContentType());
+        return "csv".equals(ext) || "tsv".equals(ext)
+                || "text/csv".equals(contentType)
+                || "text/tab-separated-values".equals(contentType);
+    }
+
     private String normalize(String value) {
         if (value == null || value.isBlank()) {
             return "";
@@ -333,7 +341,6 @@ public class ExcelDocumentParser implements DocumentParser {
                                 int cellCount, int firstRow, int lastRow,
                                 int firstColumn, int lastColumn) {
     }
-
     private record CsvRow(int lineNumber, List<String> values) {
     }
 }

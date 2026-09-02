@@ -273,6 +273,8 @@ class KnowledgeBaseApplicationServiceTest {
     void createIndexTaskCreatesQueuedTaskAndMarksDocumentIndexing() {
         var knowledgeBase = service.createKnowledgeBase(1L, createRequest("安全规范"));
         KnowledgeDocument document = knowledgeDocumentRepository.insert(document(1L, knowledgeBase.getKnowledgeBaseId(), "安全手册"));
+        when(fileParseApplicationService.getLatestSuccessfulFileParseRecordForSystem(99L, 1L)).thenReturn(parseRecord());
+        when(fileParseApplicationService.getParseContentForSystem(700L)).thenReturn(parseContent("可入库内容"));
 
         var response = service.createIndexTask(document.getId());
 
@@ -285,6 +287,19 @@ class KnowledgeBaseApplicationServiceTest {
                         && "QUEUED".equals(task.getStatus())));
         verify(taskOutboxApplicationService).enqueueTask(argThat(task -> Long.valueOf(500L).equals(task.getId())),
                 org.mockito.ArgumentMatchers.eq("knowledge document index requested"));
+    }
+
+    @Test
+    void createIndexTaskRejectsDocumentWithoutSuccessfulParseBeforeQueueing() {
+        var knowledgeBase = service.createKnowledgeBase(1L, createRequest("安全规范"));
+        KnowledgeDocument document = knowledgeDocumentRepository.insert(document(1L, knowledgeBase.getKnowledgeBaseId(), "未解析手册"));
+
+        assertThatThrownBy(() -> service.createIndexTask(document.getId()))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(ErrorCode.CONFLICT.getCode());
+                    assertThat(ex.getMessage()).contains("successful parse");
+                });
+        assertThat(document.getIndexStatus()).isEqualTo("PENDING");
     }
 
     @Test

@@ -39,6 +39,35 @@ class ExcelDocumentParserTest {
     }
 
     @Test
+    void explainsThatAWorkbookWithOnlyBlankCellsRequiresOcr() throws Exception {
+        byte[] content;
+        try (XSSFWorkbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            workbook.createSheet("格式模板").createRow(0).createCell(0);
+            workbook.write(output);
+            content = output.toByteArray();
+        }
+
+        assertThatThrownBy(() -> new ExcelDocumentParser(properties(100, 1000, 20))
+                .parse(fileObject(7L, 20L, "blank.xlsx", "xlsx"), content))
+                .hasMessage("未发现可解析文本，需使用 OCR");
+    }
+
+    @Test
+    void parsesCsvWhenOnlyContentTypeIdentifiesTheInputFormat() {
+        FileObject file = fileObject(7L, 21L, "uploaded-data", "");
+        file.setContentType("text/csv; charset=utf-8");
+
+        PreparedDocument document = new ExcelDocumentParser(properties(100, 1000, 20))
+                .parse(file, "日期,问题\n2026-08-01,临边防护缺口\n".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(document.getInputFormat()).isEqualTo("csv");
+        assertThat(document.getBlocks()).singleElement()
+                .extracting(DocumentBlock::getText)
+                .asString().contains("临边防护缺口");
+    }
+
+    @Test
     void parsesUtf8CsvAsRowsWithSourceCoordinates() {
         ExcelDocumentParser parser = new ExcelDocumentParser(properties(100, 1000, 20));
 

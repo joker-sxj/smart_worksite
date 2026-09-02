@@ -77,6 +77,19 @@ class FileObjectApplicationServiceTest {
     }
 
     @Test
+    void uploadAcceptsCsvAndTsvContentTypes() {
+        FileObjectRepository repository = new UploadFileObjectRepository();
+        FileObjectApplicationService service = newService(repository, new CapturingStorageAdapter(),
+                List.of("text/csv", "text/tab-separated-values"));
+        FileUploadRequest request = new FileUploadRequest();
+        request.setProjectId(1L);
+        request.setBizType("KNOWLEDGE_DOC");
+        request.setFile(new MockMultipartFile("file", "risk.csv", "text/csv", "date,risk".getBytes()));
+
+        assertThat(service.upload(request).getContentType()).isEqualTo("text/csv");
+    }
+
+    @Test
     void openFileContentChecksExpectedOwnershipAndReturnsClosableStream() throws Exception {
         FileObject fileObject = new FileObject();
         fileObject.setId(20L);
@@ -106,6 +119,37 @@ class FileObjectApplicationServiceTest {
 
     private FileObjectApplicationService newService() {
         return newService(new EmptyFileObjectRepository(), new CapturingStorageAdapter());
+    }
+
+    private FileObjectApplicationService newService(List<String> allowedContentTypes) {
+        return newService(new EmptyFileObjectRepository(), new CapturingStorageAdapter(), allowedContentTypes);
+    }
+
+    private FileObjectApplicationService newService(FileObjectRepository repository, StorageAdapter storageAdapter,
+                                                    List<String> allowedContentTypes) {
+        FileProperties properties = new FileProperties();
+        properties.setAllowedContentTypes(allowedContentTypes);
+        return new FileObjectApplicationService(
+                repository,
+                storageAdapter,
+                properties,
+                new ObjectMapper(),
+                new ProjectAccessApplicationService(projectRepository(), new EmptyProjectMemberMapper())
+        );
+    }
+
+    private static class UploadFileObjectRepository extends EmptyFileObjectRepository {
+        private FileObject saved;
+
+        @Override public FileObject insert(FileObject fileObject) {
+            fileObject.setId(99L);
+            saved = fileObject;
+            return fileObject;
+        }
+
+        @Override public Optional<FileObject> findById(Long fileId) {
+            return saved != null && saved.getId().equals(fileId) ? Optional.of(saved) : Optional.empty();
+        }
     }
 
     private FileObjectApplicationService newService(FileObjectRepository repository, StorageAdapter storageAdapter) {

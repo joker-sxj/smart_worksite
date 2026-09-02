@@ -219,6 +219,18 @@ public class KnowledgeBaseApplicationService {
         if (KnowledgeDocumentIndexStatus.INDEXING.name().equals(document.getIndexStatus())) {
             throw new BusinessException(ErrorCode.CONFLICT, "knowledge document is already indexing");
         }
+        try {
+            FileParseRecordResponse parseRecord = fileParseApplicationService.getLatestSuccessfulFileParseRecordForSystem(
+                    document.getFileId(), document.getProjectId());
+            FileParseContentResponse content = fileParseApplicationService.getParseContentForSystem(parseRecord.getRecordId());
+            if (content == null || normalizeParsedContent(content.getContent()).isBlank()) {
+                throw new BusinessException(ErrorCode.CONFLICT, "knowledge document has no successful parse content");
+            }
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new BusinessException(ErrorCode.CONFLICT, "knowledge document has no successful parse result");
+        }
         GenerateTask task = new GenerateTask();
         task.setProjectId(document.getProjectId());
         task.setTaskType(TASK_TYPE_KNOWLEDGE_INDEXING);
