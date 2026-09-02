@@ -1,4 +1,4 @@
-const PARSEABLE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'ppt', 'pptx']);
+const PARSEABLE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'tsv', 'ppt', 'pptx']);
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp']);
 const PARSEABLE_CONTENT_TYPES = new Set([
   'image/png',

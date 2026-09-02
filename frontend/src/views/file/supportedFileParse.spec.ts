@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { isParseableFileName, parseTargetFormatForFileName } from './supportedFileParse';
 
 describe('supported file parsing', () => {
-  it.each(['risk.xlsx', 'legacy.xls', 'risk.csv', 'briefing.pptx', 'legacy.ppt'])('accepts %s', (fileName) => {
+  it.each(['risk.xlsx', 'legacy.xls', 'risk.csv', 'progress.tsv', 'briefing.pptx', 'legacy.ppt'])('accepts %s', (fileName) => {
     expect(isParseableFileName(fileName)).toBe(true);
     expect(parseTargetFormatForFileName(fileName)).toBe('MARKDOWN');
   });

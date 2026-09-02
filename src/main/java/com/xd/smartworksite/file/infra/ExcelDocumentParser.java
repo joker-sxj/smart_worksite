@@ -35,7 +35,7 @@ import java.util.Set;
 @Component
 public class ExcelDocumentParser implements DocumentParser {
 
-    private static final Set<String> EXTENSIONS = Set.of("xls", "xlsx", "csv");
+    private static final Set<String> EXTENSIONS = Set.of("xls", "xlsx", "csv", "tsv");
     private static final Set<String> CONTENT_TYPES = Set.of(
             "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -111,6 +111,7 @@ public class ExcelDocumentParser implements DocumentParser {
     }
 
     private PreparedDocument parseCsv(FileObject fileObject, byte[] content) {
+        String inputFormat = delimitedInputFormat(fileObject);
         String source = decodeCsv(content);
         List<List<String>> rows = parseDelimited(source, detectDelimiter(source));
         List<CsvRow> nonBlankRows = new ArrayList<>();
@@ -150,16 +151,21 @@ public class ExcelDocumentParser implements DocumentParser {
         String range = new CellRangeAddress(0, lastLine - 1, 0, maxColumns - 1).formatAsString();
         Map<String, Object> structuredData = new LinkedHashMap<>();
         structuredData.put("sheetIndex", 0);
-        structuredData.put("sourceType", "CSV_TABLE");
+        structuredData.put("sourceType", inputFormat.toUpperCase(Locale.ROOT) + "_TABLE");
         structuredData.put("hidden", false);
         structuredData.put("rows", nonBlankRows.stream().map(CsvRow::values).toList());
         structuredData.put("rowMetadata", rowMetadata);
         structuredData.put("mergedRegions", List.of());
         structuredData.put("formulas", Map.of());
-        DocumentBlock block = DocumentBlock.table("csv!" + range, text.toString(), structuredData,
+        DocumentBlock block = DocumentBlock.table(inputFormat + "!" + range, text.toString(), structuredData,
                 DocumentLocation.sheet(fileObject.getFileName(), range));
-        return PreparedDocument.forFile(fileObject.getProjectId(), fileObject.getId(), "csv", List.of(block),
+        return PreparedDocument.forFile(fileObject.getProjectId(), fileObject.getId(), inputFormat, List.of(block),
                 0, false, fileProperties.getParse().getMaxInputChars());
+    }
+
+    private String delimitedInputFormat(FileObject fileObject) {
+        return "tsv".equals(normalize(fileObject.getFileExt()))
+                || "text/tab-separated-values".equals(normalize(fileObject.getContentType())) ? "tsv" : "csv";
     }
 
     private String decodeCsv(byte[] content) {

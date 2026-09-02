@@ -87,6 +87,9 @@ class FileObjectApplicationServiceTest {
         request.setFile(new MockMultipartFile("file", "risk.csv", "text/csv", "date,risk".getBytes()));
 
         assertThat(service.upload(request).getContentType()).isEqualTo("text/csv");
+
+        request.setFile(new MockMultipartFile("file", "progress.tsv", "application/octet-stream", "date\tstatus".getBytes()));
+        assertThat(service.upload(request).getContentType()).isEqualTo("text/tab-separated-values");
     }
 
     @Test

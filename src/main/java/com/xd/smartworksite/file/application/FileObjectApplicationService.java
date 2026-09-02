@@ -74,7 +74,7 @@ public class FileObjectApplicationService {
         FileBizType bizType = parseBizType(request.getBizType());
         String originalFilename = normalizeFilename(file.getOriginalFilename());
         String fileExt = extractFileExt(originalFilename);
-        String contentType = normalizeContentType(file.getContentType());
+        String contentType = normalizeUploadContentType(file.getContentType(), fileExt);
         validateContentType(contentType);
         String metadata = normalizeMetadata(request.getMetadata());
         String fileHash = calculateSha256(file);
@@ -361,6 +361,14 @@ public class FileObjectApplicationService {
             return "application/octet-stream";
         }
         return contentType.split(";", 2)[0].trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeUploadContentType(String contentType, String fileExt) {
+        String normalized = normalizeContentType(contentType);
+        if ("application/octet-stream".equals(normalized) && "tsv".equals(fileExt)) {
+            return "text/tab-separated-values";
+        }
+        return normalized;
     }
 
     private boolean isPreviewSupported(String contentType) {

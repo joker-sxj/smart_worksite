@@ -24,6 +24,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ExcelDocumentParserTest {
 
     @Test
+    void supportsAndParsesTsvByFileExtension() {
+        ExcelDocumentParser parser = new ExcelDocumentParser(properties(100, 1000, 20));
+        byte[] content = "日期\t区域\t状态\n2026-09-03\t裙房\t待验收\n".getBytes(StandardCharsets.UTF_8);
+
+        assertThat(parser.supports("tsv", "application/octet-stream")).isTrue();
+        PreparedDocument document = parser.parse(fileObject(7L, 22L, "progress.tsv", "tsv"), content);
+        assertThat(document.getInputFormat()).isEqualTo("tsv");
+        assertThat(document.getBlocks()).singleElement().satisfies(block -> {
+            assertThat(block.getLocation().getSheet()).isEqualTo("progress.tsv");
+            assertThat(block.getLocation().getCellRange()).isEqualTo("A1:C2");
+            assertThat(block.getText()).contains("2026-09-03", "裙房", "待验收");
+        });
+    }
+
+    @Test
     void explainsThatAWorkbookWithoutNativeTextRequiresOcr() throws Exception {
         byte[] content;
         try (XSSFWorkbook workbook = new XSSFWorkbook();

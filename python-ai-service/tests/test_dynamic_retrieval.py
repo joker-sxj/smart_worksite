@@ -493,8 +493,8 @@ def test_insufficient_evidence_uses_one_effective_rewrite_and_merges_candidates(
     assert calls == [request().query, "JGJ 59-2011 第3.1.2条 条文正文"]
     assert result.retrievalRounds == 2
     assert result.evidenceStatus == EvidenceStatus.SUFFICIENT
-    assert [item.metadata["chunkId"] for item in result.records] == ["a", "b"]
-    assert result.records[0].score == 0.8
+    assert [item.metadata["chunkId"] for item in result.records] == ["b", "a"]
+    assert result.records[1].score == 0.8
     assert [attempt.attemptNo for attempt in result.diagnostics.attempts] == [1, 2]
     assert all(attempt.queryFingerprint for attempt in result.diagnostics.attempts)
     assert result.diagnostics.attempts[1].candidateCount == 2

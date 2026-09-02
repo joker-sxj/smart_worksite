@@ -290,7 +290,7 @@ public class FileParseApplicationService {
 
     private boolean isSpreadsheet(FileObject fileObject) {
         return SPREADSHEET_TYPES.contains(normalizeContentType(fileObject.getContentType()))
-                || Set.of("xls", "xlsx", "csv").contains(normalizeExt(fileObject.getFileExt()));
+                || Set.of("xls", "xlsx", "csv", "tsv").contains(normalizeExt(fileObject.getFileExt()));
     }
 
     private boolean isPresentation(FileObject fileObject) {
