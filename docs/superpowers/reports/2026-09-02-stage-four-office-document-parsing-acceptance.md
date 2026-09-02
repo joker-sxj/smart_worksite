@@ -11,7 +11,7 @@
 - 前端 Vitest：90 passed。
 - 前端 production build：通过。
 - `git diff --check`：通过。
-- Python 服务：Linux 当前安装环境缺少 pytest，未能在本机执行 Python pytest；容器健康检查和本地模型 smoke check 通过。
+- Python 服务：Linux 本机环境缺少 pytest，但使用项目 Docker 运行环境执行 `363 passed`；容器健康检查和本地模型 smoke check 通过。
 
 ## Linux 实机版本
 
@@ -43,6 +43,8 @@
 ## 未完成项与阻塞
 
 Chrome 已开启本地文件上传权限，五个真实办公文件已经完成 UI 上传、解析和入库，状态均为“解析成功/成功”。问答实机已验证 Excel 题目能返回问题、负责人、Sheet 和单元格范围；此前同题的定位缺失已修复。尚未完成用户要求的至少 30 个 Chrome UI 场景，当前不能把已完成的接口级覆盖冒充为 Chrome 全量验收。
+
+问答实机补充验证：PPTX 点名检索返回 `Edge protection`、`Zhang San` 和幻灯片 1 定位；此前目标 PPTX 被无关 PDF 挤出候选集的问题已修复。
 
 仍需继续覆盖：失败重试、刷新期间状态、仅图片/空文件/损坏文件、重复上传、详情查看、跨项目隔离、CSV/PPT/PPTX/Excel 问答引用；每个独立问答先新建会话。
 

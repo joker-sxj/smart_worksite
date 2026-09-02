@@ -300,7 +300,8 @@ def future_effective_from(records: list[RagRecord]) -> list[str]:
 
 def sort_by_validity_version(records: list[RagRecord]) -> list[RagRecord]:
     def key(item: RagRecord):
-        return validity_value(item) == "CURRENT", *version_key(item)
+        # Apply validity/version policy first, then retain the search relevance order.
+        return validity_value(item) == "CURRENT", *version_key(item), item.score
     return sorted(records, key=key, reverse=True)
 
 

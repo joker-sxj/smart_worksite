@@ -85,6 +85,20 @@ def test_query_fingerprint_is_stable_for_scope_order_and_format_only_changes():
     assert query_fingerprint(request(projectId=8)) != first
 
 
+def test_dynamic_retrieval_preserves_relevance_within_same_validity_and_version():
+    async def search(_request):
+        return RagSearchData(records=[
+            record("distractor", content="无关资料", score=0.1),
+            record("named-office-source", content="Risk Owner Edge protection Zhang San", score=1.5),
+        ]), {"candidateCount": 2, "selectedCount": 2}
+
+    result, _ = asyncio.run(RetrievalOrchestrator(search).retrieve(request(
+        query="safety_review.pptx 第1页表格中的风险和负责人是什么？", topK=1
+    )))
+
+    assert result.records[0].metadata["chunkId"] == "named-office-source"
+
+
 def test_query_fingerprint_preserves_semantic_character_order():
     assert query_fingerprint(request(query="甲方允许乙方施工吗")) != query_fingerprint(
         request(query="乙方允许甲方施工吗")
