@@ -21,6 +21,10 @@ export function isKnowledgeDocumentIndexReady(indexStatus: string | undefined, r
   return ['PENDING', 'FAILED'].includes((indexStatus || '').toUpperCase()) && isDocumentParseReady(record);
 }
 
+export function documentProcessingMessage(indexMessage: string | undefined, record?: FileParseRecord) {
+  return record?.errorMessage?.trim() || indexMessage?.trim() || '';
+}
+
 export function hasActiveDocumentParses(records: DocumentParseRecords) {
   return hasActiveFileParse(Object.values(records));
 }

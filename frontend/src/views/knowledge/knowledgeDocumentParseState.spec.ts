@@ -3,6 +3,7 @@ import type { FileParseRecord } from '../../api/file';
 import type { KnowledgeDocument } from '../../api/types';
 import {
   documentParseActionText,
+  documentProcessingMessage,
   documentParseRecord,
   hasActiveDocumentParses,
   isDocumentParseReady,
@@ -30,6 +31,12 @@ describe('knowledge document parse state', () => {
     expect(isKnowledgeDocumentIndexReady('FAILED', record('PARSED'))).toBe(true);
     expect(isKnowledgeDocumentIndexReady('PENDING', record('FAILED'))).toBe(false);
     expect(isKnowledgeDocumentIndexReady('SUCCESS', record('SUCCESS'))).toBe(false);
+  });
+
+  it('prefers the actionable parse error over the indexing error', () => {
+    expect(documentProcessingMessage('入库失败', { ...record('FAILED'), errorMessage: '未发现可解析文本，需使用 OCR' }))
+      .toBe('未发现可解析文本，需使用 OCR');
+    expect(documentProcessingMessage('向量服务不可用', record('SUCCESS'))).toBe('向量服务不可用');
   });
   it('stores and retrieves the latest parse record by document id', () => {
     const records = setDocumentParseRecord({}, 10, record('PENDING'));
