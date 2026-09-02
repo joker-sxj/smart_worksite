@@ -14,6 +14,7 @@ import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -21,6 +22,22 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ExcelDocumentParserTest {
+
+    @Test
+    void parsesUtf8CsvAsRowsWithSourceCoordinates() {
+        ExcelDocumentParser parser = new ExcelDocumentParser(properties(100, 1000, 20));
+
+        PreparedDocument document = parser.parse(
+                fileObject(7L, 17L, "risk.csv", "csv"),
+                "日期,区域,风险等级\n2026-08-01,1号塔楼,中风险\n".getBytes(StandardCharsets.UTF_8));
+
+        assertThat(document.getInputFormat()).isEqualTo("csv");
+        assertThat(document.getBlocks()).hasSize(1);
+        assertThat(document.getBlocks().get(0).getLocation().getSheet()).isEqualTo("risk.csv");
+        assertThat(document.getBlocks().get(0).getLocation().getCellRange()).isEqualTo("A1:C2");
+        assertThat(document.getBlocks().get(0).getStructuredData().get("rowMetadata").toString())
+                .contains("rowNumber=2", "1号塔楼", "中风险");
+    }
 
     @Test
     void preservesSheetsRangesMergedCellsDisplayedValuesAndCachedFormulaResults() throws Exception {

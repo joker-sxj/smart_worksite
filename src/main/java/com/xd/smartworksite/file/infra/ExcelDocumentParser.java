@@ -20,6 +20,11 @@ import org.apache.poi.ss.util.CellReference;
 import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayInputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,10 +35,12 @@ import java.util.Set;
 @Component
 public class ExcelDocumentParser implements DocumentParser {
 
-    private static final Set<String> EXTENSIONS = Set.of("xls", "xlsx");
+    private static final Set<String> EXTENSIONS = Set.of("xls", "xlsx", "csv");
     private static final Set<String> CONTENT_TYPES = Set.of(
             "application/vnd.ms-excel",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "text/csv",
+            "text/tab-separated-values"
     );
 
     private final FileProperties fileProperties;
@@ -49,6 +56,9 @@ public class ExcelDocumentParser implements DocumentParser {
 
     @Override
     public PreparedDocument parse(FileObject fileObject, byte[] content) {
+        if ("csv".equals(normalize(fileObject.getFileExt()))) {
+            return parseCsv(fileObject, content);
+        }
         try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(content))) {
             List<DocumentBlock> blocks = new ArrayList<>();
             int totalRows = 0;
@@ -97,6 +107,107 @@ public class ExcelDocumentParser implements DocumentParser {
         } catch (Exception ex) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "spreadsheet parsing failed");
         }
+    }
+
+    private PreparedDocument parseCsv(FileObject fileObject, byte[] content) {
+        String source = decodeCsv(content);
+        List<List<String>> rows = parseDelimited(source, detectDelimiter(source));
+        List<List<String>> nonBlankRows = rows.stream()
+                .filter(row -> row.stream().anyMatch(value -> !value.isBlank()))
+                .toList();
+        if (nonBlankRows.isEmpty()) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "spreadsheet contains no readable cells");
+        }
+        if (nonBlankRows.size() > fileProperties.getParse().getMaxSpreadsheetRows()) {
+            throw limitError("spreadsheet row limit exceeded");
+        }
+        int maxColumns = nonBlankRows.stream().mapToInt(List::size).max().orElse(0);
+        long cells = nonBlankRows.stream().mapToLong(List::size).sum();
+        if (maxColumns > fileProperties.getParse().getMaxSpreadsheetColumnSpan()) {
+            throw limitError("spreadsheet column span limit exceeded");
+        }
+        if (cells > fileProperties.getParse().getMaxSpreadsheetCells()
+                || cells > fileProperties.getParse().getMaxSpreadsheetExpandedCells()) {
+            throw limitError("spreadsheet cell limit exceeded");
+        }
+        List<Map<String, Object>> rowMetadata = new ArrayList<>();
+        StringBuilder text = new StringBuilder();
+        for (int index = 0; index < nonBlankRows.size(); index++) {
+            List<String> values = nonBlankRows.get(index);
+            rowMetadata.add(Map.of("rowNumber", index + 1, "firstColumn", 1, "values", values));
+            if (text.length() > 0) {
+                text.append('\n');
+            }
+            text.append(String.join("\t", values));
+        }
+        String range = new CellRangeAddress(0, nonBlankRows.size() - 1, 0, maxColumns - 1).formatAsString();
+        Map<String, Object> structuredData = new LinkedHashMap<>();
+        structuredData.put("sheetIndex", 0);
+        structuredData.put("hidden", false);
+        structuredData.put("rows", nonBlankRows);
+        structuredData.put("rowMetadata", rowMetadata);
+        structuredData.put("mergedRegions", List.of());
+        structuredData.put("formulas", Map.of());
+        DocumentBlock block = DocumentBlock.table("csv!" + range, text.toString(), structuredData,
+                DocumentLocation.sheet(fileObject.getFileName(), range));
+        return PreparedDocument.forFile(fileObject.getProjectId(), fileObject.getId(), "csv", List.of(block),
+                0, false, fileProperties.getParse().getMaxInputChars());
+    }
+
+    private String decodeCsv(byte[] content) {
+        int offset = content.length >= 3 && (content[0] & 0xff) == 0xef
+                && (content[1] & 0xff) == 0xbb && (content[2] & 0xff) == 0xbf ? 3 : 0;
+        ByteBuffer bytes = ByteBuffer.wrap(content, offset, content.length - offset);
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(bytes).toString();
+        } catch (CharacterCodingException ignored) {
+            return Charset.forName("GB18030").decode(ByteBuffer.wrap(content, offset, content.length - offset)).toString();
+        }
+    }
+
+    private char detectDelimiter(String source) {
+        String firstLine = source.lines().filter(line -> !line.isBlank()).findFirst().orElse("");
+        return firstLine.chars().filter(value -> value == '\t').count()
+                > firstLine.chars().filter(value -> value == ',').count() ? '\t' : ',';
+    }
+
+    private List<List<String>> parseDelimited(String source, char delimiter) {
+        List<List<String>> rows = new ArrayList<>();
+        List<String> row = new ArrayList<>();
+        StringBuilder value = new StringBuilder();
+        boolean quoted = false;
+        for (int index = 0; index < source.length(); index++) {
+            char current = source.charAt(index);
+            if (current == '"') {
+                if (quoted && index + 1 < source.length() && source.charAt(index + 1) == '"') {
+                    value.append('"');
+                    index++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (current == delimiter && !quoted) {
+                row.add(value.toString().trim());
+                value.setLength(0);
+            } else if ((current == '\n' || current == '\r') && !quoted) {
+                if (current == '\r' && index + 1 < source.length() && source.charAt(index + 1) == '\n') {
+                    index++;
+                }
+                row.add(value.toString().trim());
+                value.setLength(0);
+                rows.add(List.copyOf(row));
+                row.clear();
+            } else {
+                value.append(current);
+            }
+        }
+        if (value.length() > 0 || !row.isEmpty()) {
+            row.add(value.toString().trim());
+            rows.add(List.copyOf(row));
+        }
+        return rows;
     }
 
     private SheetContent readSheet(Sheet sheet, DataFormatter formatter, int remainingCells) {
