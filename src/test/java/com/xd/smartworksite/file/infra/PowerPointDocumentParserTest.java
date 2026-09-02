@@ -24,6 +24,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class PowerPointDocumentParserTest {
 
     @Test
+    void explainsThatAPresentationWithoutNativeTextRequiresOcr() throws Exception {
+        byte[] content;
+        try (XMLSlideShow show = new XMLSlideShow();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            show.createSlide();
+            show.write(output);
+            content = output.toByteArray();
+        }
+
+        assertThatThrownBy(() -> new PowerPointDocumentParser(new FileProperties())
+                .parse(fileObject(7L, 29L), content))
+                .hasMessage("未发现可解析文本，需使用 OCR");
+    }
+
+    @Test
     void readsTwoColumnSlidesDownTheLeftColumnBeforeTheRightColumn() throws Exception {
         byte[] content;
         try (XMLSlideShow show = new XMLSlideShow();
@@ -86,8 +101,11 @@ class PowerPointDocumentParserTest {
         assertThat(document.getBlocks()).allSatisfy(block ->
                 assertThat(block.getLocation().getSlide()).isEqualTo(1));
         assertThat(document.getBlocks().get(2).getStructuredData()).containsEntry("rowCount", 2);
+        assertThat(document.getBlocks().get(2).getStructuredData()).containsEntry("sourceType", "PPT_TABLE");
         assertThat(document.getBlocks().get(2).getStructuredData().get("rows")).isInstanceOf(java.util.List.class);
         assertThat(document.getBlocks().get(3).getStructuredData()).containsEntry("notes", true);
+        assertThat(document.getBlocks().get(3).getStructuredData()).containsEntry("sourceType", "PPT_NOTES");
+        assertThat(document.getBlocks().get(0).getStructuredData()).containsEntry("sourceType", "PPT_TEXT");
         assertThat(document.getBlocks().get(0).getStructuredData()).containsEntry("readingOrder", 0);
     }
 

@@ -84,6 +84,7 @@ public class ExcelDocumentParser implements DocumentParser {
                         parsed.firstColumn(), parsed.lastColumn()).formatAsString();
                 Map<String, Object> structuredData = new LinkedHashMap<>();
                 structuredData.put("sheetIndex", sheetIndex);
+                structuredData.put("sourceType", "EXCEL_SHEET");
                 structuredData.put("hidden", workbook.isSheetHidden(sheetIndex)
                         || workbook.isSheetVeryHidden(sheetIndex));
                 structuredData.put("rows", parsed.rows());
@@ -98,7 +99,7 @@ public class ExcelDocumentParser implements DocumentParser {
                 ));
             }
             if (blocks.isEmpty()) {
-                throw new BusinessException(ErrorCode.PARAM_ERROR, "spreadsheet contains no readable cells");
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "未发现可解析文本，需使用 OCR");
             }
             return PreparedDocument.forFile(fileObject.getProjectId(), fileObject.getId(),
                     inputFormat(fileObject), blocks, 0, false, fileProperties.getParse().getMaxInputChars());
@@ -143,6 +144,7 @@ public class ExcelDocumentParser implements DocumentParser {
         String range = new CellRangeAddress(0, nonBlankRows.size() - 1, 0, maxColumns - 1).formatAsString();
         Map<String, Object> structuredData = new LinkedHashMap<>();
         structuredData.put("sheetIndex", 0);
+        structuredData.put("sourceType", "CSV_TABLE");
         structuredData.put("hidden", false);
         structuredData.put("rows", nonBlankRows);
         structuredData.put("rowMetadata", rowMetadata);

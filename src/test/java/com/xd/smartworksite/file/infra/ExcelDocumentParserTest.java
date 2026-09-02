@@ -24,6 +24,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ExcelDocumentParserTest {
 
     @Test
+    void explainsThatAWorkbookWithoutNativeTextRequiresOcr() throws Exception {
+        byte[] content;
+        try (XSSFWorkbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            workbook.createSheet("扫描件");
+            workbook.write(output);
+            content = output.toByteArray();
+        }
+
+        assertThatThrownBy(() -> new ExcelDocumentParser(properties(100, 1000, 20))
+                .parse(fileObject(7L, 18L, "scan.xlsx", "xlsx"), content))
+                .hasMessage("未发现可解析文本，需使用 OCR");
+    }
+
+    @Test
     void parsesUtf8CsvAsRowsWithSourceCoordinates() {
         ExcelDocumentParser parser = new ExcelDocumentParser(properties(100, 1000, 20));
 
@@ -74,6 +89,7 @@ class ExcelDocumentParserTest {
         assertThat(riskTable.getLocation().getSheet()).isEqualTo("风险台账");
         assertThat(riskTable.getLocation().getCellRange()).isEqualTo("A1:C2");
         assertThat(riskTable.getStructuredData()).containsEntry("hidden", false);
+        assertThat(riskTable.getStructuredData()).containsEntry("sourceType", "EXCEL_SHEET");
         assertThat(riskTable.getStructuredData().get("mergedRegions")).isEqualTo(List.of("A1:B1"));
         assertThat(riskTable.getText()).contains("风险等级", "一级", "2", "4");
         assertThat(document.getBlocks().get(1).getStructuredData()).containsEntry("hidden", true);

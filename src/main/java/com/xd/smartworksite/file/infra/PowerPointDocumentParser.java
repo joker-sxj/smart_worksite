@@ -77,7 +77,7 @@ public class PowerPointDocumentParser implements DocumentParser {
                 }
             }
             if (blocks.isEmpty()) {
-                throw new BusinessException(ErrorCode.PARAM_ERROR, "presentation contains no readable content");
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "未发现可解析文本，需使用 OCR");
             }
             return PreparedDocument.forFile(fileObject.getProjectId(), fileObject.getId(),
                     inputFormat(fileObject), blocks, slideCount, false, fileProperties.getParse().getMaxInputChars());
@@ -106,6 +106,7 @@ public class PowerPointDocumentParser implements DocumentParser {
                 cellCount += tableContent.cellCount();
                 if (!tableContent.text().isBlank()) {
                     Map<String, Object> data = shapeMetadata(shape, readingOrder);
+                    data.put("sourceType", "PPT_TABLE");
                     data.put("rows", tableContent.rows());
                     data.put("rowCount", tableContent.rows().size());
                     blocks.add(DocumentBlock.table(
@@ -119,7 +120,7 @@ public class PowerPointDocumentParser implements DocumentParser {
                             "slide-" + slideNumber + "-shape-" + readingOrder,
                             DocumentBlock.Type.TEXT,
                             text,
-                            shapeMetadata(shape, readingOrder),
+                            textMetadata(shape, readingOrder),
                             location(slideNumber, shape)
                     ));
                 }
@@ -260,7 +261,7 @@ public class PowerPointDocumentParser implements DocumentParser {
                     "slide-" + slideNumber + "-notes",
                     DocumentBlock.Type.TEXT,
                     text,
-                    Map.of("notes", true, "readingOrder", readingOrder),
+                    Map.of("notes", true, "readingOrder", readingOrder, "sourceType", "PPT_NOTES"),
                     DocumentLocation.slide(slideNumber)
             ));
         }
@@ -274,6 +275,12 @@ public class PowerPointDocumentParser implements DocumentParser {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("readingOrder", readingOrder);
         data.put("shapeType", shape.getClass().getSimpleName());
+        return data;
+    }
+
+    private Map<String, Object> textMetadata(Shape<?, ?> shape, int readingOrder) {
+        Map<String, Object> data = shapeMetadata(shape, readingOrder);
+        data.put("sourceType", "PPT_TEXT");
         return data;
     }
 
