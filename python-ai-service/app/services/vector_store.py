@@ -323,7 +323,7 @@ class LocalJsonVectorStore:
                 continue
             if not matches_library_type(record, library_types):
                 continue
-            score = text_match_score(query, record.content)
+            score = text_match_score(query, record.content) + title_match_score(query, record.title)
             if score > 0:
                 scored.append((record, score))
         scored.sort(key=lambda item: item[1], reverse=True)
@@ -805,6 +805,15 @@ def text_match_score(query: str, content: str) -> float:
     content_clauses = extract_clause_numbers(content_compact)
     clause_hits = len(clauses & content_clauses)
     return overlap + clause_hits * 2.0
+
+
+def title_match_score(query: str, title: str) -> float:
+    """Keep a source explicitly named by the user in the lexical candidate set."""
+    query_compact = compact_search_text(query)
+    title_compact = compact_search_text(title)
+    if not query_compact or not title_compact or title_compact not in query_compact:
+        return 0.0
+    return min(3.0, max(1.0, len(title_compact) / 12.0))
 
 
 def same_document_scope(left: ChunkRecord, right: ChunkRecord) -> bool:

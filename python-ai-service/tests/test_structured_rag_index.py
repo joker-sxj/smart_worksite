@@ -303,6 +303,32 @@ def test_local_text_search_recalls_exact_policy_evidence_outside_vector_top_k(tm
     assert [record.id for record, _ in results] == ["clause-7-2"]
 
 
+def test_local_text_search_recalls_document_named_in_question(tmp_path):
+    from app.services.vector_store import ChunkRecord, LocalJsonVectorStore
+
+    store = LocalJsonVectorStore(str(tmp_path))
+    store._write([
+        ChunkRecord(
+            id="office-table", projectId=1, knowledgeBaseId=5, documentId="40",
+            title="safety_review.pptx", content="Risk Owner Edge protection Zhang San",
+            sourceType="DOCUMENT", sourceId="40", metadata={"unitIndex": 0, "chunkIndex": 0},
+            embedding=[1.0, 0.0],
+        ),
+        ChunkRecord(
+            id="distractor", projectId=1, knowledgeBaseId=5, documentId="41",
+            title="other.pdf", content="施工风险负责人应接受安全培训",
+            sourceType="DOCUMENT", sourceId="41", metadata={"unitIndex": 0, "chunkIndex": 0},
+            embedding=[0.0, 1.0],
+        ),
+    ])
+
+    results = asyncio.run(store.search_text(
+        "safety_review.pptx 第1页表格中的风险和负责人是什么？", 1, [5], 1
+    ))
+
+    assert [record.id for record, _ in results] == ["office-table"]
+
+
 def test_rag_search_merges_text_candidates_before_reranking(tmp_path):
     from app.services.vector_store import ChunkRecord, LocalJsonVectorStore
 
