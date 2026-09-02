@@ -13,7 +13,7 @@ import type { ID, KnowledgeBase, KnowledgeDocument } from '../../api/types';
 import { createFileParsePolling } from '../file/fileParsePolling';
 import { fileParseStatusText } from '../file/fileParseStatus';
 import { fileExtension, isParseableFileName, parseTargetFormatForFileName } from '../file/supportedFileParse';
-import { documentParseActionText, documentParseRecord, isDocumentParseReady, isParseableKnowledgeDocument, knowledgeDocumentParseTargetFormat, setDocumentParseRecord, type DocumentParseRecords } from './knowledgeDocumentParseState';
+import { documentParseActionText, documentParseRecord, isDocumentParseReady, isKnowledgeDocumentIndexReady, isParseableKnowledgeDocument, knowledgeDocumentParseTargetFormat, setDocumentParseRecord, type DocumentParseRecords } from './knowledgeDocumentParseState';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -38,7 +38,6 @@ const form = reactive({ knowledgeBaseId: '', name: '', domain: '', description: 
 const activeBase = computed(() => bases.value.find((item) => String(item.knowledgeBaseId) === String(activeBaseId.value)) || null);
 const canManageKnowledge = computed(() => userStore.hasPermission('knowledge:manage'));
 const knowledgeManageTip = '当前账号没有知识库管理权限';
-const indexableStatuses = new Set(['PENDING', 'FAILED']);
 const uploadableExts = new Set(['png', 'jpg', 'jpeg', 'webp', 'pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'csv']);
 let docsRefreshTimer: number | undefined;
 
@@ -51,7 +50,7 @@ function normalizeStatus(status?: string) {
 }
 
 function canSubmitIndex(row: KnowledgeDocument) {
-  return canManageKnowledge.value && indexableStatuses.has(normalizeStatus(row.indexStatus));
+  return canManageKnowledge.value && isKnowledgeDocumentIndexReady(row.indexStatus, latestParse(row));
 }
 
 

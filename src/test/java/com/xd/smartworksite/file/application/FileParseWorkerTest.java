@@ -32,6 +32,36 @@ import static org.mockito.Mockito.when;
 class FileParseWorkerTest {
 
     @Test
+    void rejectsEmptyModelResultBeforeWritingAFalseSuccessfulParse() {
+        FileParseRecord record = new FileParseRecord();
+        record.setId(12L);
+        record.setProjectId(7L);
+        record.setFileId(22L);
+        record.setResultFormat("MARKDOWN");
+        FileObject file = new FileObject();
+        file.setId(22L);
+        file.setProjectId(7L);
+        FileParseRecordRepository records = mock(FileParseRecordRepository.class);
+        FileObjectRepository files = mock(FileObjectRepository.class);
+        DocumentPreparationService preparation = mock(DocumentPreparationService.class);
+        DocumentParseModelAdapter parser = mock(DocumentParseModelAdapter.class);
+        StorageAdapter storage = mock(StorageAdapter.class);
+        when(records.findById(12L)).thenReturn(Optional.of(record));
+        when(files.findById(22L)).thenReturn(Optional.of(file));
+        when(preparation.prepare(file)).thenReturn(PreparedDocument.text("xlsx", "有效原生文本", 0, false)
+                .withSource(7L, 22L));
+        when(parser.parse(any())).thenReturn(new ParsedDocument("", "MARKDOWN", "local-parser", "{}"));
+        FileParseWorker worker = new FileParseWorker(files, records, preparation, parser, storage,
+                new FileProperties(), new ObjectMapper());
+
+        worker.parseAsync(12L);
+
+        verify(storage, never()).upload(any(), any(), any(Long.class), any());
+        verify(records).updateFailed(eq(12L), eq("FAILED"), eq("document parse result is empty"));
+        verify(records, never()).updateSucceeded(any());
+    }
+
+    @Test
     void persistsStructuredEvidenceAndAuthoritativeSourceIdentityInMetadata() throws Exception {
         FileParseRecord record = new FileParseRecord();
         record.setId(11L);
@@ -80,6 +110,7 @@ class FileParseWorkerTest {
         assertThat(metadata.path("provider").asText()).isEqualTo("LOCAL_DOCUMENT");
         assertThat(metadata.path("model").asText()).isEqualTo("local-parser");
         assertThat(metadata.path("documentId").asLong()).isEqualTo(22L);
+        assertThat(metadata.path("fileId").asLong()).isEqualTo(22L);
         assertThat(metadata.path("blocks").get(0).path("blockId").asText()).isEqualTo("risk-row-2");
         assertThat(metadata.path("blocks").get(0).path("type").asText()).isEqualTo("TABLE");
         assertThat(metadata.path("blocks").get(0).path("location").path("sheet").asText()).isEqualTo("风险");

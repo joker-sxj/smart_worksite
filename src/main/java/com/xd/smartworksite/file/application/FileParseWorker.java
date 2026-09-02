@@ -73,7 +73,10 @@ public class FileParseWorker {
             ParsedDocument parsedDocument = documentParseModelAdapter.parse(toModelRequest(record, fileObject, preparedDocument));
 
             update(recordId, FileParseStage.NORMALIZING_RESULT, 80);
-            String resultContent = parsedDocument.getContent().trim();
+            String resultContent = parsedDocument.getContent() == null ? "" : parsedDocument.getContent().trim();
+            if (resultContent.isBlank()) {
+                throw new BusinessException(ErrorCode.CONFLICT, "document parse result is empty");
+            }
             String resultObjectName = buildResultObjectName(record, parsedDocument.getResultFormat());
 
             update(recordId, FileParseStage.STORING_RESULT, 90);

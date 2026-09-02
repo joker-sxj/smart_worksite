@@ -17,6 +17,10 @@ export function isDocumentParseReady(record?: FileParseRecord) {
   return ['PARSED', 'SUCCESS'].includes((record?.status || '').toUpperCase());
 }
 
+export function isKnowledgeDocumentIndexReady(indexStatus: string | undefined, record?: FileParseRecord) {
+  return ['PENDING', 'FAILED'].includes((indexStatus || '').toUpperCase()) && isDocumentParseReady(record);
+}
+
 export function hasActiveDocumentParses(records: DocumentParseRecords) {
   return hasActiveFileParse(Object.values(records));
 }

@@ -6,6 +6,7 @@ import {
   documentParseRecord,
   hasActiveDocumentParses,
   isDocumentParseReady,
+  isKnowledgeDocumentIndexReady,
   isParseableKnowledgeDocument,
   knowledgeDocumentParseTargetFormat,
   setDocumentParseRecord
@@ -22,6 +23,13 @@ describe('knowledge document parse state', () => {
 
   it.each(['PENDING', 'PARSING', 'RUNNING', 'FAILED', undefined])('does not treat %s as ready', (status) => {
     expect(isDocumentParseReady(status ? record(status) : undefined)).toBe(false);
+  });
+
+  it('allows indexing only after a successful parse and from a retryable index state', () => {
+    expect(isKnowledgeDocumentIndexReady('PENDING', record('SUCCESS'))).toBe(true);
+    expect(isKnowledgeDocumentIndexReady('FAILED', record('PARSED'))).toBe(true);
+    expect(isKnowledgeDocumentIndexReady('PENDING', record('FAILED'))).toBe(false);
+    expect(isKnowledgeDocumentIndexReady('SUCCESS', record('SUCCESS'))).toBe(false);
   });
   it('stores and retrieves the latest parse record by document id', () => {
     const records = setDocumentParseRecord({}, 10, record('PENDING'));
