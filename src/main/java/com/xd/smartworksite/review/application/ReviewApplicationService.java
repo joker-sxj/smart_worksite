@@ -350,7 +350,7 @@ public class ReviewApplicationService {
         try {
             return documentTextExtractor.extractLong(fileObjectApplicationService.openFileContentForSystem(template.getFileId(), template.getProjectId(), template.getTemplateId()));
         } catch (BusinessException ex) {
-            return new ReviewDocumentTextExtractor.ExtractedText("", false);
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "审查模板解析失败: " + limitError(ex.getMessage()));
         }
     }
 
@@ -366,7 +366,7 @@ public class ReviewApplicationService {
             return documentTextExtractor.extractLong(fileObjectApplicationService.openFileContent(
                     template.getFileId(), template.getProjectId(), template.getTemplateId()));
         } catch (BusinessException ex) {
-            return new ReviewDocumentTextExtractor.ExtractedText("", false);
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "审查模板解析失败: " + limitError(ex.getMessage()));
         }
     }
 
@@ -409,7 +409,7 @@ public class ReviewApplicationService {
                                                    boolean system) {
         List<ReviewReference> references = reviewReferenceRepository == null
                 ? List.of() : reviewReferenceRepository.findByReviewRecordId(record.getId());
-        if (references.isEmpty() || reviewRuleOrchestrator == null) {
+        if (reviewRuleOrchestrator == null) {
             AgentInvokeResponse response = system
                     ? reviewAiGateway.invokeAgentForSystem(buildAgentRequest(record, template, file, reviewText, templateText))
                     : reviewAiGateway.invokeAgent(buildAgentRequest(record, template, file, reviewText, templateText));
@@ -606,7 +606,7 @@ public class ReviewApplicationService {
         try {
             return ReviewStatus.valueOf(status.trim().toUpperCase(Locale.ROOT)).name();
         } catch (IllegalArgumentException ex) {
-            throw new BusinessException(ErrorCode.PARAM_ERROR, "status must be PENDING, PROCESSING, COMPLETED, FAILED or ARCHIVED");
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "status must be PENDING, PROCESSING, COMPLETED, PARTIAL_SUCCESS, FAILED or ARCHIVED");
         }
     }
 

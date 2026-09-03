@@ -103,7 +103,7 @@
         set status = #{status}, issues_json = #{issuesJson}, result_json = #{resultJson},
             error_message = null, updated_by = #{updatedBy}
         where id = #{recordId}
-          and status = 'PROCESSING'
+          and status in ('PROCESSING', 'PARTIAL_SUCCESS', 'COMPLETED')
           and #{status} in ('COMPLETED', 'PARTIAL_SUCCESS')
           and deleted = 0
     </update>

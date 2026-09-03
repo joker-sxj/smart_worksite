@@ -37,9 +37,10 @@ public class ReviewRuleOrchestrator {
         List<Rule> rules = parseRules(templateText);
         List<RuleResult> results = new ArrayList<>();
         for (Rule rule : rules) {
-            String primaryEvidence = matchingEvidence(primaryText, rule.title());
+            List<String> ruleKeywords = keywords(rule.title() + " " + rule.content());
+            String primaryEvidence = matchingEvidence(primaryText, ruleKeywords);
             List<SourceText> referenceEvidence = references == null ? List.of() : references.stream()
-                    .filter(source -> containsAny(source.sourceName() + " " + source.text(), keywords(rule.title())))
+                    .filter(source -> containsAny(source.sourceName() + " " + source.text(), ruleKeywords))
                     .limit(8)
                     .toList();
             if (primaryEvidence.isBlank() && referenceEvidence.isEmpty()) {
@@ -66,6 +67,9 @@ public class ReviewRuleOrchestrator {
             try {
                 AgentInvokeResponse response = system ? aiGateway.invokeAgentForSystem(request) : aiGateway.invokeAgent(request);
                 Map<String, Object> parsed = parseResult(response);
+                parsed.put("primaryEvidence", List.of(Map.of(
+                        "sourceName", primaryName, "excerpt", primaryEvidence, "sourceRole", "PRIMARY")));
+                parsed.put("referenceEvidence", referenceEvidence.stream().map(SourceText::asEvidence).toList());
                 boolean manual = Boolean.TRUE.equals(parsed.get("manualConfirmationRequired")) || parsed.containsKey("error");
                 results.add(new RuleResult(rule.id(), manual ? "NEEDS_MANUAL_CONFIRMATION" : "COMPLETED", parsed, manual));
             } catch (RuntimeException ex) {
@@ -92,9 +96,9 @@ public class ReviewRuleOrchestrator {
         return rules;
     }
 
-    private String matchingEvidence(String text, String title) {
+    private String matchingEvidence(String text, List<String> ruleKeywords) {
         if (text == null || text.isBlank()) return "";
-        for (String keyword : keywords(title)) {
+        for (String keyword : ruleKeywords) {
             int index = text.indexOf(keyword);
             if (index >= 0) {
                 int start = Math.max(0, index - 300);
@@ -142,6 +146,15 @@ public class ReviewRuleOrchestrator {
     public record SourceText(String sourceName, String text, Long sourceId, String location) {
         String asPromptText() {
             return sourceName + (location == null ? "" : " " + location) + ": " + text;
+        }
+        Map<String, Object> asEvidence() {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("sourceName", sourceName);
+            result.put("sourceId", sourceId);
+            result.put("location", location);
+            result.put("excerpt", text.length() <= MAX_EVIDENCE_CHARS ? text : text.substring(0, MAX_EVIDENCE_CHARS));
+            result.put("sourceRole", "REFERENCE");
+            return result;
         }
     }
 
