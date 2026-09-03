@@ -210,10 +210,40 @@ def test_compliance_review_rule_keeps_primary_and_reference_evidence_separate():
     result = json.loads(data.result)
     assert result["ruleId"] == "RULE-001"
     assert result["issues"][0]["issueId"] == "RULE-001-I001"
+    assert result["issues"][0]["status"] == "OPEN"
+    assert result["issues"][0]["ruleName"] == "临边防护"
+    assert result["issues"][0]["suggestion"] == "按标准设置防护栏杆"
     prompt = json.loads(qwen.messages[-1].content)
     assert prompt["ruleContent"] == "栏杆高度不得低于1.2米。"
     assert prompt["primaryEvidence"] == "第3页：临边没有防护栏杆。"
     assert prompt["referenceEvidence"][0]["sourceName"] == "GB.pdf"
+
+
+def test_compliance_review_rule_fills_required_issue_fields_for_partial_model_output():
+    class PartialQwen:
+        async def json_chat(self, messages, model=None, parameters=None):
+            return {
+                "decision": "NON_COMPLIANT",
+                "issues": [{"description": "栏杆高度不足"}],
+                "confidence": 0.88,
+                "manualConfirmationRequired": False,
+            }, {}
+
+    import asyncio
+    data, _ = asyncio.run(AgentService(PartialQwen()).invoke(AgentInvokeRequest(
+        goal="COMPLIANCE_REVIEW_RULE",
+        parameters={
+            "ruleId": "RULE-001", "ruleName": "临边防护", "ruleContent": "栏杆高度不得低于1.2米。",
+            "primaryFileName": "方案.pdf", "primaryEvidence": "栏杆高度为0.9米。",
+        },
+    )))
+
+    issue = json.loads(data.result)["issues"][0]
+    assert issue == {
+        "issueId": "RULE-001-I001", "severity": "MEDIUM", "location": "方案.pdf",
+        "ruleName": "临边防护", "description": "栏杆高度不足",
+        "suggestion": "请按审查规则整改并留存复核记录。", "status": "OPEN",
+    }
 
 def test_compliance_review_with_unavailable_tools_returns_json_result():
     client = TestClient(app)

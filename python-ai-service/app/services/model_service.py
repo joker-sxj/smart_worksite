@@ -114,6 +114,10 @@ class AgentService:
                 continue
             normalized = dict(issue)
             normalized.setdefault("issueId", f"{rule_id}-I{index:03d}")
+            normalized.setdefault("severity", "MEDIUM")
+            normalized.setdefault("location", str(parameters.get("primaryFileName") or "主文件"))
+            normalized.setdefault("ruleName", str(parameters.get("ruleName") or rule_id))
+            normalized.setdefault("suggestion", "请按审查规则整改并留存复核记录。")
             normalized.setdefault("status", "OPEN")
             issues.append(normalized)
         confidence = result.get("confidence")
