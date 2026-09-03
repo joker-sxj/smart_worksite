@@ -15,6 +15,7 @@ import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, KnowledgeDocument, ReviewRecord, ReviewTemplate, TaskStageLog } from '../../api/types';
 import { isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
+import { exceedsReviewReferenceLimit } from './reviewSubmission';
 
 const router = useRouter();
 const projectStore = useProjectStore();
@@ -140,6 +141,9 @@ async function submit() {
   if (!templates.value.length) return ElMessage.warning(t('当前项目暂无审查模板，请先到模板中心上传审查模板。'));
   if (!selectedTemplateId.value) return ElMessage.warning(t('请选择审查模板'));
   if (!file.value) return ElMessage.warning(t('请先选择审查文件'));
+  if (exceedsReviewReferenceLimit(selectedReferenceDocumentIds.value, referenceFiles.value)) {
+    return ElMessage.warning(t('知识文档和临时参考文件合计不能超过 20 项'));
+  }
   const projectId = projectStore.currentProject?.projectId;
   if (!projectId) return ElMessage.warning(t('请先选择项目'));
   submitting.value = true;

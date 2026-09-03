@@ -9,6 +9,10 @@ export interface ReviewSubmission {
   referenceFiles?: File[];
 }
 
+export function exceedsReviewReferenceLimit(documentIds: ID[], files: unknown[], limit = 20) {
+  return new Set(documentIds.map(String)).size + files.length > limit;
+}
+
 export function buildReviewFormData(data: ReviewSubmission) {
   const form = new FormData();
   form.append('projectId', String(data.projectId));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildReviewFormData } from './reviewSubmission';
+import { buildReviewFormData, exceedsReviewReferenceLimit } from './reviewSubmission';
 
 describe('review submission', () => {
   it('serializes multiple knowledge documents and temporary reference files', () => {
@@ -17,5 +17,17 @@ describe('review submission', () => {
     expect(form.getAll('referenceDocumentIds')).toEqual(['7', '8']);
     expect(form.getAll('referenceFiles')).toEqual([reference]);
     expect(form.get('file')).toBe(main);
+  });
+
+  it('rejects a combined reference selection above the backend limit', () => {
+    expect(exceedsReviewReferenceLimit(
+      Array.from({ length: 11 }, (_, index) => index + 1),
+      new Array(10).fill(null)
+    )).toBe(true);
+
+    expect(exceedsReviewReferenceLimit(
+      Array.from({ length: 10 }, (_, index) => index + 1),
+      new Array(10).fill(null)
+    )).toBe(false);
   });
 });
