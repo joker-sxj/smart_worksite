@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.xd.smartworksite.review.mapper.ReviewRuleResultMapper">
+    <resultMap id="RuleResultMap" type="com.xd.smartworksite.review.domain.ReviewRuleResult">
+        <id property="id" column="id"/>
+        <result property="reviewRecordId" column="review_record_id"/>
+        <result property="projectId" column="project_id"/>
+        <result property="ruleId" column="rule_id"/>
+        <result property="status" column="status"/>
+        <result property="resultJson" column="result_json"/>
+        <result property="confidence" column="confidence"/>
+        <result property="manualConfirmationRequired" column="manual_confirmation_required"/>
+        <result property="errorMessage" column="error_message"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+    <delete id="deleteByReviewRecordId">delete from review_rule_result where review_record_id = #{reviewRecordId}</delete>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        insert into review_rule_result (review_record_id, project_id, rule_id, status, result_json,
+          confidence, manual_confirmation_required, error_message)
+        values (#{reviewRecordId}, #{projectId}, #{ruleId}, #{status}, #{resultJson},
+          #{confidence}, #{manualConfirmationRequired}, #{errorMessage})
+    </insert>
+    <select id="selectByReviewRecordId" resultMap="RuleResultMap">
+        select id, review_record_id, project_id, rule_id, status, result_json, confidence,
+          manual_confirmation_required, error_message, created_at, updated_at
+        from review_rule_result where review_record_id = #{reviewRecordId} order by id
+    </select>
+</mapper>
