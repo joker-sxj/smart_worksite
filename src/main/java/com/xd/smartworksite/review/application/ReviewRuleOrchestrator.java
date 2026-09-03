@@ -6,9 +6,12 @@ import com.xd.smartworksite.ai.dto.AgentInvokeRequest;
 import com.xd.smartworksite.ai.dto.AgentInvokeResponse;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
@@ -68,11 +71,14 @@ public class ReviewRuleOrchestrator {
             request.setParameters(parameters);
             try {
                 AgentInvokeResponse response = system ? aiGateway.invokeAgentForSystem(request) : aiGateway.invokeAgent(request);
-                Map<String, Object> parsed = parseResult(response);
+                Map<String, Object> parsed = new LinkedHashMap<>(parseResult(response));
                 parsed.put("primaryEvidence", List.of(Map.of(
                         "sourceName", primaryName, "excerpt", primaryEvidence, "sourceRole", "PRIMARY")));
                 parsed.put("referenceEvidence", referenceEvidence.stream().map(SourceText::asEvidence).toList());
-                boolean manual = Boolean.TRUE.equals(parsed.get("manualConfirmationRequired")) || parsed.containsKey("error");
+                boolean inconsistent = inconsistentDecision(parsed);
+                if (inconsistent) parsed.put("validationError", "模型判定与问题明细不一致，需人工确认");
+                boolean manual = Boolean.TRUE.equals(parsed.get("manualConfirmationRequired"))
+                        || parsed.containsKey("error") || inconsistent;
                 results.add(new RuleResult(rule.id(), manual ? "NEEDS_MANUAL_CONFIRMATION" : "COMPLETED", parsed, manual));
             } catch (RuntimeException ex) {
                 results.add(new RuleResult(rule.id(), "FAILED", Map.of(
@@ -85,6 +91,14 @@ public class ReviewRuleOrchestrator {
     private List<Rule> parseRules(String templateText) {
         List<Rule> rules = new ArrayList<>();
         if (templateText == null) return rules;
+        Pattern spreadsheetRow = Pattern.compile("^\\s*(\\d+)\\t+([^\\t]+)\\t+(.+)$");
+        for (String line : templateText.split("\\R")) {
+            Matcher row = spreadsheetRow.matcher(line);
+            if (row.matches()) {
+                rules.add(new Rule(ruleId(row.group(1)), row.group(2).trim(), row.group(3).trim()));
+            }
+        }
+        if (!rules.isEmpty()) return rules;
         Matcher matcher = RULE_PATTERN.matcher(templateText);
         List<MatcherRule> matches = new ArrayList<>();
         while (matcher.find()) matches.add(new MatcherRule(matcher.start(), matcher.end(), matcher.group(1), matcher.group(2).trim()));
@@ -92,7 +106,7 @@ public class ReviewRuleOrchestrator {
             MatcherRule current = matches.get(index);
             int contentEnd = index + 1 < matches.size() ? matches.get(index + 1).start() : templateText.length();
             String content = templateText.substring(current.end(), contentEnd).trim();
-            rules.add(new Rule("RULE-" + String.format("%03d", Integer.parseInt(current.number())), current.title(), content));
+            rules.add(new Rule(ruleId(current.number()), current.title(), content));
         }
         if (rules.isEmpty() && !templateText.isBlank()) rules.add(new Rule("RULE-001", templateText.trim(), templateText.trim()));
         return rules;
@@ -104,14 +118,58 @@ public class ReviewRuleOrchestrator {
 
     private String matchingEvidence(String text, List<String> ruleKeywords, int limit) {
         if (text == null || text.isBlank()) return "";
-        for (String keyword : ruleKeywords) {
-            int index = text.indexOf(keyword);
-            if (index >= 0) {
-                int start = Math.max(0, index - 300);
-                return text.substring(start, Math.min(text.length(), start + limit));
-            }
+        List<ScoredLine> candidates = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        String[] lines = text.split("\\R");
+        for (int index = 0; index < lines.length; index++) {
+            String line = lines[index].trim();
+            if (line.isBlank() || !seen.add(line)) continue;
+            int score = relevanceScore(line, ruleKeywords);
+            if (score > 0) candidates.add(new ScoredLine(index, score, focusedWindow(line, ruleKeywords, limit)));
         }
-        return "";
+        candidates.sort(Comparator.comparingInt(ScoredLine::score).reversed()
+                .thenComparingInt(ScoredLine::index));
+        StringBuilder result = new StringBuilder();
+        for (ScoredLine candidate : candidates) {
+            if (result.length() >= limit) break;
+            if (result.length() > 0) result.append('\n');
+            int remaining = limit - result.length();
+            result.append(candidate.text(), 0, Math.min(candidate.text().length(), remaining));
+        }
+        return result.toString();
+    }
+
+    private int relevanceScore(String text, List<String> keywords) {
+        int score = 0;
+        for (String keyword : keywords) {
+            if (keyword.length() > 1 && text.contains(keyword)) score += keyword.length() * keyword.length();
+        }
+        return score;
+    }
+
+    private String focusedWindow(String text, List<String> keywords, int limit) {
+        if (text.length() <= limit) return text;
+        String bestKeyword = keywords.stream()
+                .filter(keyword -> keyword.length() > 1 && text.contains(keyword))
+                .max(Comparator.comparingInt(String::length))
+                .orElse("");
+        int hit = bestKeyword.isBlank() ? 0 : text.indexOf(bestKeyword);
+        int start = Math.max(0, Math.min(text.length() - limit, hit - limit / 3));
+        return text.substring(start, Math.min(text.length(), start + limit));
+    }
+
+    private String ruleId(String number) {
+        return "RULE-" + String.format("%03d", Integer.parseInt(number));
+    }
+
+    private boolean inconsistentDecision(Map<String, Object> result) {
+        String decision = String.valueOf(result.getOrDefault("decision", ""))
+                .replaceAll("[^A-Za-z]", "").toUpperCase();
+        Object rawIssues = result.get("issues");
+        int issueCount = rawIssues instanceof List<?> issues ? issues.size() : 0;
+        boolean nonCompliant = Set.of("NONCOMPLIANT", "FAIL", "FAILED", "VIOLATION").contains(decision);
+        boolean compliant = Set.of("COMPLIANT", "PASS", "PASSED").contains(decision);
+        return (nonCompliant && issueCount == 0) || (compliant && issueCount > 0);
     }
 
     private List<String> keywords(String title) {
@@ -157,6 +215,7 @@ public class ReviewRuleOrchestrator {
 
     private record Rule(String id, String title, String content) {}
     private record MatcherRule(int start, int end, String number, String title) {}
+    private record ScoredLine(int index, int score, String text) {}
 
     public record SourceText(String sourceName, String text, Long sourceId, String location) {
         SourceText withText(String excerpt) { return new SourceText(sourceName, excerpt, sourceId, location); }
