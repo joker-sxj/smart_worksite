@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 public class ReviewRuleOrchestrator {
     private static final Pattern RULE_PATTERN = Pattern.compile("(?m)^\\s*(\\d+)[.、]\\s*(.+?)(?=\\n|$)");
     private static final int MAX_EVIDENCE_CHARS = 6000;
+    private static final int MAX_REFERENCE_CHARS = 3000;
 
     private final ReviewAiGateway aiGateway;
     private final ObjectMapper objectMapper;
@@ -40,7 +41,8 @@ public class ReviewRuleOrchestrator {
             List<String> ruleKeywords = keywords(rule.title() + " " + rule.content());
             String primaryEvidence = matchingEvidence(primaryText, ruleKeywords);
             List<SourceText> referenceEvidence = references == null ? List.of() : references.stream()
-                    .filter(source -> containsAny(source.sourceName() + " " + source.text(), ruleKeywords))
+                    .map(source -> source.withText(referenceExcerpt(source, ruleKeywords)))
+                    .filter(source -> !source.text().isBlank())
                     .limit(8)
                     .toList();
             if (primaryEvidence.isBlank() && referenceEvidence.isEmpty()) {
@@ -97,12 +99,16 @@ public class ReviewRuleOrchestrator {
     }
 
     private String matchingEvidence(String text, List<String> ruleKeywords) {
+        return matchingEvidence(text, ruleKeywords, MAX_EVIDENCE_CHARS);
+    }
+
+    private String matchingEvidence(String text, List<String> ruleKeywords, int limit) {
         if (text == null || text.isBlank()) return "";
         for (String keyword : ruleKeywords) {
             int index = text.indexOf(keyword);
             if (index >= 0) {
                 int start = Math.max(0, index - 300);
-                return text.substring(start, Math.min(text.length(), start + MAX_EVIDENCE_CHARS));
+                return text.substring(start, Math.min(text.length(), start + limit));
             }
         }
         return "";
@@ -121,6 +127,15 @@ public class ReviewRuleOrchestrator {
     private boolean containsAny(String text, List<String> keywords) {
         if (text == null) return false;
         return keywords.stream().filter(keyword -> keyword.length() > 1).anyMatch(text::contains);
+    }
+
+    private String referenceExcerpt(SourceText source, List<String> ruleKeywords) {
+        String excerpt = matchingEvidence(source.text(), ruleKeywords, MAX_REFERENCE_CHARS);
+        if (!excerpt.isBlank()) return excerpt;
+        if (containsAny(source.sourceName(), ruleKeywords) && source.text() != null) {
+            return source.text().substring(0, Math.min(source.text().length(), MAX_REFERENCE_CHARS));
+        }
+        return "";
     }
 
     private Map<String, Object> parseResult(AgentInvokeResponse response) {
@@ -144,6 +159,7 @@ public class ReviewRuleOrchestrator {
     private record MatcherRule(int start, int end, String number, String title) {}
 
     public record SourceText(String sourceName, String text, Long sourceId, String location) {
+        SourceText withText(String excerpt) { return new SourceText(sourceName, excerpt, sourceId, location); }
         String asPromptText() {
             return sourceName + (location == null ? "" : " " + location) + ": " + text;
         }

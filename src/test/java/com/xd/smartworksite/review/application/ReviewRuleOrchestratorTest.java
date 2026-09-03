@@ -64,6 +64,21 @@ class ReviewRuleOrchestratorTest {
                 .containsExactly("FAILED", "COMPLETED");
     }
 
+    @Test
+    void sendsOnlyBoundedRelevantExcerptFromLongReference() {
+        CapturingGateway gateway = new CapturingGateway();
+        ReviewRuleOrchestrator orchestrator = new ReviewRuleOrchestrator(gateway, new ObjectMapper());
+        String longReference = "无关内容".repeat(3000) + "临边应设置防护栏杆" + "附录".repeat(3000);
+
+        orchestrator.review(1L, 3L, 10L, "方案.pdf", "第3页：临边未设置防护栏杆。",
+                "1. 临边防护\n必须设置防护栏杆。",
+                List.of(new ReviewRuleOrchestrator.SourceText("标准.pdf", longReference, 11L, "第5页")));
+
+        String evidence = gateway.requests.get(0).getParameters().get("referenceEvidence").toString();
+        assertThat(evidence).contains("临边应设置防护栏杆");
+        assertThat(evidence.length()).isLessThan(4000);
+    }
+
     private static class CapturingGateway implements ReviewAiGateway {
         private final List<AgentInvokeRequest> requests = new ArrayList<>();
         private String failRuleId;

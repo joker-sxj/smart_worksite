@@ -448,11 +448,20 @@ public class ReviewApplicationService {
                     ? fileObjectApplicationService.openFileContentForSystem(fileId, record.getProjectId(), null)
                     : fileObjectApplicationService.openFileContent(fileId, record.getProjectId(), null);
             ReviewDocumentTextExtractor.ExtractedText extracted = documentTextExtractor.extractLong(content);
-            sources.add(new ReviewRuleOrchestrator.SourceText(reference.getSourceName(), extracted.text(),
-                    reference.getDocumentId() == null ? reference.getFileId() : reference.getDocumentId(), null));
+            Long sourceId = reference.getDocumentId() == null ? reference.getFileId() : reference.getDocumentId();
+            if (extracted.blocks().isEmpty()) {
+                sources.add(new ReviewRuleOrchestrator.SourceText(reference.getSourceName(), extracted.text(), sourceId, null));
+            } else {
+                for (ReviewDocumentTextExtractor.EvidenceBlock block : extracted.blocks()) {
+                    if (block.text() != null && !block.text().isBlank()) {
+                        sources.add(new ReviewRuleOrchestrator.SourceText(reference.getSourceName(), block.text(),
+                                sourceId, locationLabel(block.location())));
+                    }
+                }
+            }
         }
         ReviewRuleOrchestrator.ReviewOutcome outcome = reviewRuleOrchestrator.review(
-                record.getProjectId(), record.getId(), template.getTemplateId(), file.getFileName(), reviewText.text(),
+                record.getProjectId(), record.getId(), template.getTemplateId(), file.getFileName(), evidenceText(reviewText),
                 templateText.text(), sources, system);
         List<Map<String, Object>> issues = new ArrayList<>();
         int manualCount = 0;
@@ -491,6 +500,30 @@ public class ReviewApplicationService {
         Map<String, Object> result = new LinkedHashMap<>();
         source.forEach((key, value) -> result.put(String.valueOf(key), value));
         return result;
+    }
+
+    private String evidenceText(ReviewDocumentTextExtractor.ExtractedText extracted) {
+        if (extracted.blocks().isEmpty()) return extracted.text();
+        StringBuilder result = new StringBuilder();
+        for (ReviewDocumentTextExtractor.EvidenceBlock block : extracted.blocks()) {
+            if (block.text() == null || block.text().isBlank()) continue;
+            String location = locationLabel(block.location());
+            if (location != null) result.append('[').append(location).append("] ");
+            result.append(block.text()).append('\n');
+            if (result.length() >= 120000) return result.substring(0, 120000);
+        }
+        return result.toString();
+    }
+
+    private String locationLabel(Map<String, Object> location) {
+        if (location == null || location.isEmpty()) return null;
+        if (location.get("pageNumber") != null) return "第" + location.get("pageNumber") + "页";
+        if (location.get("slideNumber") != null) return "幻灯片" + location.get("slideNumber");
+        if (location.get("sheetName") != null) {
+            return "Sheet " + location.get("sheetName")
+                    + (location.get("cellRange") == null ? "" : " " + location.get("cellRange"));
+        }
+        return null;
     }
 
     private Map<String, Object> parseAgentResult(AgentInvokeResponse response) {
