@@ -51,6 +51,7 @@ class ReviewAsyncExecutionFailureTest {
 
         when(repository.findById(21L)).thenReturn(Optional.of(record));
         when(repository.markProcessing(21L, 31L, 1L)).thenReturn(1);
+        when(repository.markStage(any(), any(), any(), any())).thenReturn(1);
         when(repository.markCompleted(any(), any(), any(), any())).thenReturn(1);
         when(templateService.getTemplateForSystem(10L)).thenReturn(template);
         when(fileService.getFileForSystem(99L)).thenReturn(file);
@@ -67,6 +68,9 @@ class ReviewAsyncExecutionFailureTest {
 
         service.executeReviewTask(21L, 31L);
 
+        verify(repository).markStage(21L, 31L, "PARSING", 1L);
+        verify(repository).markStage(21L, 31L, "RULES_READY", 1L);
+        verify(repository).markStage(21L, 31L, "REVIEWING", 1L);
         verify(templateService).getTemplateForSystem(10L);
         verify(fileService).getFileForSystem(99L);
         verify(reviewAiGateway).invokeAgentForSystem(any());
@@ -81,6 +85,7 @@ class ReviewAsyncExecutionFailureTest {
         ReviewRecord record = reviewRecord(21L, 31L);
         when(repository.findById(21L)).thenReturn(Optional.of(record));
         when(repository.markProcessing(21L, 31L, 1L)).thenReturn(1);
+        when(repository.markStage(any(), any(), any(), any())).thenReturn(1);
         when(templateService.getTemplateForSystem(10L)).thenThrow(new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "template unavailable"));
         when(repository.markFailed(21L, "template unavailable", 1L)).thenReturn(0);
         ReviewApplicationService service = new ReviewApplicationService(repository, mock(ProjectAccessApplicationService.class),
@@ -108,6 +113,7 @@ class ReviewAsyncExecutionFailureTest {
         file.setFileId(99L); file.setProjectId(1L); file.setFileName("方案.pdf");
         when(repository.findById(21L)).thenReturn(Optional.of(record));
         when(repository.markProcessing(21L, 31L, 1L)).thenReturn(1);
+        when(repository.markStage(any(), any(), any(), any())).thenReturn(1);
         when(repository.markFailed(21L, "审查模板解析失败", 1L)).thenReturn(1);
         when(templateService.getTemplateForSystem(10L)).thenReturn(template);
         when(fileService.getFileForSystem(99L)).thenReturn(file);

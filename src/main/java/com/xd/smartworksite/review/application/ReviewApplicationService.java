@@ -282,12 +282,15 @@ public class ReviewApplicationService {
             throw new BusinessException(ErrorCode.CONFLICT, "review record state is not executable");
         }
         try {
+            requireStage(recordId, taskId, "PARSING", 1L);
             recordProgress(taskId, workerId, leaseSeconds, "REVIEW_EXTRACTING", "正在读取审查模板和待审文件");
             TemplateResponse template = templateApplicationService.getTemplateForSystem(record.getTemplateId());
             FileObjectResponse file = fileObjectApplicationService.getFileForSystem(record.getFileId());
             ReviewDocumentTextExtractor.ExtractedText reviewText = extractReviewFileTextForSystem(record, file);
             ReviewDocumentTextExtractor.ExtractedText templateText = extractTemplateTextForSystem(template);
+            requireStage(recordId, taskId, "RULES_READY", 1L);
             recordProgress(taskId, workerId, leaseSeconds, "REVIEW_AI", "正在调用审查模型");
+            requireStage(recordId, taskId, "REVIEWING", 1L);
             Map<String, Object> result = executeReviewModel(record, template, file, reviewText, templateText, true);
             List<Map<String, Object>> issues = extractIssues(result);
             recordProgress(taskId, workerId, leaseSeconds, "REVIEW_PERSISTING", "正在保存审查结果");
@@ -396,6 +399,12 @@ public class ReviewApplicationService {
         ));
         request.setParameters(parameters);
         return request;
+    }
+
+    private void requireStage(Long recordId, Long taskId, String status, Long updatedBy) {
+        if (reviewRecordRepository.markStage(recordId, taskId, status, updatedBy) == 0) {
+            throw new BusinessException(ErrorCode.CONFLICT, "review record stage changed before " + status);
+        }
     }
 
     private String legacyPromptText(String text) {

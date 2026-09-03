@@ -57,14 +57,16 @@ public class ReviewDocumentTextExtractor {
                 PreparedDocument prepared = extractPdf(content, bytes, ext, contentType);
                 text = prepared.getTextContent();
                 parserTruncated = prepared.isTruncated();
-                blocks = prepared.getBlocks().stream().map(block -> new EvidenceBlock(
-                        block.getBlockId(), block.getText(), locationMap(block.getLocation()))).toList();
+                blocks = evidenceBlocks(prepared);
             } else if ("docx".equals(ext) || "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(contentType)) {
                 text = extractDocx(bytes);
             } else if ("doc".equals(ext) || "application/msword".equals(contentType)) {
                 text = extractDoc(bytes);
             } else {
-                throw new BusinessException(ErrorCode.PARAM_ERROR, "unsupported review document format");
+                PreparedDocument prepared = extractPrepared(content, bytes, ext, contentType);
+                text = prepared.getTextContent();
+                parserTruncated = prepared.isTruncated();
+                blocks = evidenceBlocks(prepared);
             }
             if (text == null || text.isBlank()) {
                 throw new BusinessException(ErrorCode.PARAM_ERROR, "review document text is empty or unsupported");
@@ -88,6 +90,11 @@ public class ReviewDocumentTextExtractor {
 
     private PreparedDocument extractPdf(FileObjectContent content, byte[] bytes,
                                         String ext, String contentType) {
+        return extractPrepared(content, bytes, ext, contentType);
+    }
+
+    private PreparedDocument extractPrepared(FileObjectContent content, byte[] bytes,
+                                              String ext, String contentType) {
         FileObject fileObject = new FileObject();
         fileObject.setId(content.getFileId());
         fileObject.setProjectId(content.getProjectId());
@@ -99,7 +106,7 @@ public class ReviewDocumentTextExtractor {
         return parserRegistry.find(content.getFileName(), ext, contentType)
                 .map(parser -> parser.parse(fileObject, bytes))
                 .orElseThrow(() -> new BusinessException(
-                        ErrorCode.PARAM_ERROR, "pdf parser is unavailable"));
+                        ErrorCode.PARAM_ERROR, "review document parser is unavailable"));
     }
 
     private String extractDocx(byte[] bytes) throws Exception {
@@ -138,6 +145,11 @@ public class ReviewDocumentTextExtractor {
         if (location.getSheet() != null) result.put("sheetName", location.getSheet());
         if (location.getCellRange() != null) result.put("cellRange", location.getCellRange());
         return result;
+    }
+
+    private List<EvidenceBlock> evidenceBlocks(PreparedDocument prepared) {
+        return prepared.getBlocks().stream().map(block -> new EvidenceBlock(
+                block.getBlockId(), block.getText(), locationMap(block.getLocation()))).toList();
     }
 
     public record EvidenceBlock(String blockId, String text, Map<String, Object> location) {}

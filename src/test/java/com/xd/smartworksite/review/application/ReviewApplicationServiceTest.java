@@ -242,6 +242,18 @@ class ReviewApplicationServiceTest {
     }
 
     @Test
+    void submitRequestLimitsTemporaryReferenceFilesToTen() {
+        ReviewSubmitRequest request = submitRequest(1L, 10L);
+        request.setReferenceFiles(java.util.stream.IntStream.range(0, 11)
+                .mapToObj(index -> (org.springframework.web.multipart.MultipartFile) new MockMultipartFile(
+                        "referenceFiles", "standard-" + index + ".pdf", "application/pdf", "rule".getBytes()))
+                .toList());
+
+        assertThatThrownBy(request::validateReferences)
+                .isInstanceOfSatisfying(BusinessException.class, ex -> assertThat(ex.getMessage()).contains("10"));
+    }
+
+    @Test
     void bindsOnlyIndexedKnowledgeDocumentsFromTheReviewProject() {
         when(knowledgeDocumentRepository.findById(7L)).thenReturn(Optional.of(knowledgeDocument(7L, 1L, "SUCCESS")));
         ReviewSubmitRequest request = submitRequest(1L, 10L);

@@ -59,4 +59,26 @@ class ReviewDocumentTextExtractorTest {
 
         assertThat(extractor.extractLong(content).text()).endsWith("关键条款");
     }
+
+    @Test
+    void delegatesSpreadsheetReviewTemplateToSharedParser() {
+        DocumentParser parser = new DocumentParser() {
+            @Override public boolean supports(String fileExt, String contentType) { return "xlsx".equals(fileExt); }
+            @Override public PreparedDocument parse(com.xd.smartworksite.file.domain.FileObject fileObject, byte[] content) {
+                return PreparedDocument.forFile(fileObject.getProjectId(), fileObject.getId(), "xlsx", List.of(
+                        DocumentBlock.table("rules!A1:B2", "规则：临边防护；要求：设置栏杆",
+                                java.util.Map.of(), DocumentLocation.sheet("rules", "A1:B2"))), 1, false);
+            }
+        };
+        ReviewDocumentTextExtractor extractor = new ReviewDocumentTextExtractor(List.of(parser));
+        FileObjectContent content = new FileObjectContent(9L, 7L, null, "rules.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 1,
+                new ByteArrayInputStream(new byte[]{1}));
+
+        var result = extractor.extractLong(content);
+
+        assertThat(result.text()).contains("临边防护");
+        assertThat(result.blocks()).singleElement().satisfies(block ->
+                assertThat(block.location()).containsEntry("sheetName", "rules").containsEntry("cellRange", "A1:B2"));
+    }
 }

@@ -49,6 +49,9 @@ public class ReviewSubmitRequest {
     }
 
     public void validateReferences() {
+        if (referenceFiles != null && referenceFiles.size() > 10) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "temporary review reference files cannot exceed 10");
+        }
         int count = normalizedReferenceDocumentIds().size() + normalizedReferenceFileIds().size()
                 + (referenceFiles == null ? 0 : referenceFiles.size());
         if (count > MAX_REFERENCE_COUNT) {

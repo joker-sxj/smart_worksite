@@ -94,8 +94,15 @@
             error_message = null,
             updated_by = #{updatedBy}
         where id = #{recordId}
-          and status = 'PROCESSING'
+          and status in ('PROCESSING', 'PARSING', 'RULES_READY', 'REVIEWING')
           and deleted = 0
+    </update>
+
+    <update id="markStage">
+        update review_record set status = #{status}, error_message = null, updated_by = #{updatedBy}
+        where id = #{recordId} and task_id = #{taskId}
+          and status in ('PROCESSING', 'PARSING', 'RULES_READY', 'REVIEWING')
+          and #{status} in ('PARSING', 'RULES_READY', 'REVIEWING') and deleted = 0
     </update>
 
     <update id="markFinished">
@@ -103,7 +110,7 @@
         set status = #{status}, issues_json = #{issuesJson}, result_json = #{resultJson},
             error_message = null, updated_by = #{updatedBy}
         where id = #{recordId}
-          and status in ('PROCESSING', 'PARTIAL_SUCCESS', 'COMPLETED')
+          and status in ('PROCESSING', 'PARSING', 'RULES_READY', 'REVIEWING', 'PARTIAL_SUCCESS', 'COMPLETED')
           and #{status} in ('COMPLETED', 'PARTIAL_SUCCESS')
           and deleted = 0
     </update>
@@ -114,7 +121,7 @@
             error_message = #{errorMessage},
             updated_by = #{updatedBy}
         where id = #{recordId}
-          and status in ('PENDING', 'PROCESSING', 'FAILED')
+          and status in ('PENDING', 'PROCESSING', 'PARSING', 'RULES_READY', 'REVIEWING', 'FAILED')
           and deleted = 0
     </update>
 

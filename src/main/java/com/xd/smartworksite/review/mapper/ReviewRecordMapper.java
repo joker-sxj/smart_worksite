@@ -23,6 +23,11 @@ public interface ReviewRecordMapper {
                        @Param("taskId") Long taskId,
                        @Param("updatedBy") Long updatedBy);
 
+    int markStage(@Param("recordId") Long recordId,
+                  @Param("taskId") Long taskId,
+                  @Param("status") String status,
+                  @Param("updatedBy") Long updatedBy);
+
     int markCompleted(@Param("recordId") Long recordId,
                       @Param("issuesJson") String issuesJson,
                       @Param("resultJson") String resultJson,
