@@ -20,6 +20,10 @@ import com.xd.smartworksite.review.dto.ReviewIssueUpdateRequest;
 import com.xd.smartworksite.review.dto.ReviewRecordQueryRequest;
 import com.xd.smartworksite.review.dto.ReviewSubmitRequest;
 import com.xd.smartworksite.review.repository.ReviewRecordRepository;
+import com.xd.smartworksite.review.repository.ReviewReferenceRepository;
+import com.xd.smartworksite.review.domain.ReviewReference;
+import com.xd.smartworksite.knowledge.domain.KnowledgeDocument;
+import com.xd.smartworksite.knowledge.repository.KnowledgeDocumentRepository;
 import com.xd.smartworksite.template.application.TemplateApplicationService;
 import com.xd.smartworksite.template.dto.TemplateResponse;
 import org.junit.jupiter.api.AfterEach;
@@ -44,11 +48,15 @@ class ReviewApplicationServiceTest {
     private InMemoryReviewRecordRepository reviewRecordRepository;
     private StubReviewAiGateway reviewAiGateway;
     private ReviewApplicationService service;
+    private InMemoryReviewReferenceRepository referenceRepository;
+    private KnowledgeDocumentRepository knowledgeDocumentRepository;
 
     @BeforeEach
     void setUp() {
         setCurrentUser(2L, List.of("BUSINESS_USER"));
         reviewRecordRepository = new InMemoryReviewRecordRepository();
+        referenceRepository = new InMemoryReviewReferenceRepository();
+        knowledgeDocumentRepository = mock(KnowledgeDocumentRepository.class);
         reviewAiGateway = new StubReviewAiGateway();
         InMemoryProjectRepository projectRepository = new InMemoryProjectRepository();
         InMemoryProjectMemberMapper memberMapper = new InMemoryProjectMemberMapper();
@@ -72,7 +80,7 @@ class ReviewApplicationServiceTest {
                 templateService,
                 reviewAiGateway,
                 extractor,
-                new ObjectMapper()
+                new ObjectMapper(), null, null, null, referenceRepository, knowledgeDocumentRepository
         );
     }
 
@@ -203,6 +211,68 @@ class ReviewApplicationServiceTest {
                         assertThat(ex.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode()));
     }
 
+    @Test
+    void submitRequestKeepsDistinctReferenceIdsAndRejectsMoreThanTwentySources() {
+        ReviewSubmitRequest request = submitRequest(1L, 10L);
+        request.setReferenceDocumentIds(List.of(7L, 7L, 8L));
+        request.setReferenceFileIds(List.of(9L, 9L));
+
+        assertThat(request.normalizedReferenceDocumentIds()).containsExactly(7L, 8L);
+        assertThat(request.normalizedReferenceFileIds()).containsExactly(9L);
+
+        request.setReferenceDocumentIds(java.util.stream.LongStream.rangeClosed(1, 21).boxed().toList());
+        assertThatThrownBy(request::validateReferences)
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode()));
+    }
+
+    @Test
+    void submitRequestCountsUploadedReferenceFilesInTheBoundedLimit() {
+        ReviewSubmitRequest request = submitRequest(1L, 10L);
+        List<org.springframework.web.multipart.MultipartFile> files = java.util.stream.IntStream.range(0, 21)
+                .mapToObj(index -> (org.springframework.web.multipart.MultipartFile) new MockMultipartFile(
+                        "referenceFiles", "standard-" + index + ".pdf", "application/pdf", "rule".getBytes()))
+                .toList();
+        request.setReferenceFiles(files);
+
+        assertThatThrownBy(request::validateReferences)
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode()));
+    }
+
+    @Test
+    void bindsOnlyIndexedKnowledgeDocumentsFromTheReviewProject() {
+        when(knowledgeDocumentRepository.findById(7L)).thenReturn(Optional.of(knowledgeDocument(7L, 1L, "SUCCESS")));
+        ReviewSubmitRequest request = submitRequest(1L, 10L);
+        request.setReferenceDocumentIds(List.of(7L));
+
+        var response = service.submitReview(request);
+
+        assertThat(response.getReferences()).singleElement().satisfies(reference -> {
+            assertThat(reference.getReferenceType()).isEqualTo("KNOWLEDGE_DOCUMENT");
+            assertThat(reference.getDocumentId()).isEqualTo(7L);
+            assertThat(reference.getProjectId()).isEqualTo(1L);
+        });
+    }
+
+    @Test
+    void rejectsCrossProjectOrUnindexedKnowledgeReference() {
+        when(knowledgeDocumentRepository.findById(8L)).thenReturn(Optional.of(knowledgeDocument(8L, 2L, "SUCCESS")));
+        when(knowledgeDocumentRepository.findById(9L)).thenReturn(Optional.of(knowledgeDocument(9L, 1L, "PENDING")));
+
+        ReviewSubmitRequest crossProject = submitRequest(1L, 10L);
+        crossProject.setReferenceDocumentIds(List.of(8L));
+        assertThatThrownBy(() -> service.submitReview(crossProject))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(ErrorCode.FORBIDDEN.getCode()));
+
+        ReviewSubmitRequest unindexed = submitRequest(1L, 10L);
+        unindexed.setReferenceDocumentIds(List.of(9L));
+        assertThatThrownBy(() -> service.submitReview(unindexed))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(ErrorCode.FORBIDDEN.getCode()));
+    }
+
     private ReviewSubmitRequest submitRequest(Long projectId, Long templateId) {
         ReviewSubmitRequest request = new ReviewSubmitRequest();
         request.setProjectId(projectId);
@@ -238,6 +308,17 @@ class ReviewApplicationServiceTest {
         project.setProjectCode("SITE-" + projectId);
         project.setStatus("ENABLED");
         return project;
+    }
+
+    private KnowledgeDocument knowledgeDocument(Long id, Long projectId, String status) {
+        KnowledgeDocument document = new KnowledgeDocument();
+        document.setId(id);
+        document.setProjectId(projectId);
+        document.setKnowledgeBaseId(100L);
+        document.setFileId(id + 1000);
+        document.setTitle("reference-" + id + ".pdf");
+        document.setIndexStatus(status);
+        return document;
     }
 
     private ProjectMember member(Long projectId, Long userId, String role, String status) {
@@ -356,6 +437,23 @@ class ReviewApplicationServiceTest {
                 record.setUpdatedBy(updatedBy);
                 return 1;
             }).orElse(0);
+        }
+    }
+
+    private static class InMemoryReviewReferenceRepository implements ReviewReferenceRepository {
+        private long nextId = 1L;
+        private final List<ReviewReference> references = new ArrayList<>();
+
+        @Override
+        public int insert(ReviewReference reference) {
+            reference.setId(nextId++);
+            references.add(reference);
+            return 1;
+        }
+
+        @Override
+        public List<ReviewReference> findByReviewRecordId(Long reviewRecordId) {
+            return references.stream().filter(item -> reviewRecordId.equals(item.getReviewRecordId())).toList();
         }
     }
 

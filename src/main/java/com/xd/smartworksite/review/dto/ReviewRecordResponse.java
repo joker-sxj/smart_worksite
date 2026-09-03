@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import com.xd.smartworksite.review.domain.ReviewReference;
 
 public class ReviewRecordResponse {
     private Long recordId;
@@ -15,6 +16,7 @@ public class ReviewRecordResponse {
     private String status;
     private List<Map<String, Object>> issues = new ArrayList<>();
     private Map<String, Object> result = new LinkedHashMap<>();
+    private List<ReviewReference> references = new ArrayList<>();
     private String errorMessage;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -35,6 +37,8 @@ public class ReviewRecordResponse {
     public void setIssues(List<Map<String, Object>> issues) { this.issues = issues; }
     public Map<String, Object> getResult() { return result; }
     public void setResult(Map<String, Object> result) { this.result = result; }
+    public List<ReviewReference> getReferences() { return references; }
+    public void setReferences(List<ReviewReference> references) { this.references = references == null ? new ArrayList<>() : new ArrayList<>(references); }
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
     public LocalDateTime getCreatedAt() { return createdAt; }

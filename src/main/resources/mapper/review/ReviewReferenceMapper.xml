@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.xd.smartworksite.review.mapper.ReviewReferenceMapper">
+    <resultMap id="ReviewReferenceResultMap" type="com.xd.smartworksite.review.domain.ReviewReference">
+        <id property="id" column="id"/>
+        <result property="reviewRecordId" column="review_record_id"/>
+        <result property="projectId" column="project_id"/>
+        <result property="referenceType" column="reference_type"/>
+        <result property="documentId" column="document_id"/>
+        <result property="fileId" column="file_id"/>
+        <result property="sourceName" column="source_name"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        insert into review_reference (
+            review_record_id, project_id, reference_type, document_id, file_id, source_name
+        ) values (
+            #{reviewRecordId}, #{projectId}, #{referenceType}, #{documentId}, #{fileId}, #{sourceName}
+        )
+    </insert>
+    <select id="selectByReviewRecordId" resultMap="ReviewReferenceResultMap">
+        select id, review_record_id, project_id, reference_type, document_id, file_id, source_name, created_at
+        from review_reference
+        where review_record_id = #{reviewRecordId}
+        order by id asc
+    </select>
+</mapper>

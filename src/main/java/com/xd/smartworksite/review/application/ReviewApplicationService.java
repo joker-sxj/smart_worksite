@@ -16,12 +16,16 @@ import com.xd.smartworksite.file.dto.FileObjectResponse;
 import com.xd.smartworksite.file.dto.FileUploadRequest;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
 import com.xd.smartworksite.review.domain.ReviewRecord;
+import com.xd.smartworksite.review.domain.ReviewReference;
 import com.xd.smartworksite.review.domain.ReviewStatus;
 import com.xd.smartworksite.review.dto.ReviewIssueUpdateRequest;
 import com.xd.smartworksite.review.dto.ReviewRecordQueryRequest;
 import com.xd.smartworksite.review.dto.ReviewRecordResponse;
 import com.xd.smartworksite.review.dto.ReviewSubmitRequest;
 import com.xd.smartworksite.review.repository.ReviewRecordRepository;
+import com.xd.smartworksite.review.repository.ReviewReferenceRepository;
+import com.xd.smartworksite.knowledge.domain.KnowledgeDocument;
+import com.xd.smartworksite.knowledge.repository.KnowledgeDocumentRepository;
 import com.xd.smartworksite.template.application.TemplateApplicationService;
 import com.xd.smartworksite.template.dto.TemplateResponse;
 import com.xd.smartworksite.task.application.TaskOutboxApplicationService;
@@ -55,6 +59,8 @@ public class ReviewApplicationService {
     private final TaskRepository taskRepository;
     private final TaskOutboxApplicationService taskOutboxApplicationService;
     private final TaskWorkerApplicationService taskWorkerApplicationService;
+    private final ReviewReferenceRepository reviewReferenceRepository;
+    private final KnowledgeDocumentRepository knowledgeDocumentRepository;
 
     public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
                                     ProjectAccessApplicationService projectAccessApplicationService,
@@ -78,6 +84,23 @@ public class ReviewApplicationService {
                                     TaskRepository taskRepository,
                                     TaskOutboxApplicationService taskOutboxApplicationService,
                                     TaskWorkerApplicationService taskWorkerApplicationService) {
+        this(reviewRecordRepository, projectAccessApplicationService, fileObjectApplicationService, templateApplicationService,
+                reviewAiGateway, documentTextExtractor, objectMapper, taskRepository, taskOutboxApplicationService,
+                taskWorkerApplicationService, null, null);
+    }
+
+    public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
+                                    ProjectAccessApplicationService projectAccessApplicationService,
+                                    FileObjectApplicationService fileObjectApplicationService,
+                                    TemplateApplicationService templateApplicationService,
+                                    ReviewAiGateway reviewAiGateway,
+                                    ReviewDocumentTextExtractor documentTextExtractor,
+                                    ObjectMapper objectMapper,
+                                    TaskRepository taskRepository,
+                                    TaskOutboxApplicationService taskOutboxApplicationService,
+                                    TaskWorkerApplicationService taskWorkerApplicationService,
+                                    ReviewReferenceRepository reviewReferenceRepository,
+                                    KnowledgeDocumentRepository knowledgeDocumentRepository) {
         this.reviewRecordRepository = reviewRecordRepository;
         this.projectAccessApplicationService = projectAccessApplicationService;
         this.fileObjectApplicationService = fileObjectApplicationService;
@@ -88,10 +111,13 @@ public class ReviewApplicationService {
         this.taskRepository = taskRepository;
         this.taskOutboxApplicationService = taskOutboxApplicationService;
         this.taskWorkerApplicationService = taskWorkerApplicationService;
+        this.reviewReferenceRepository = reviewReferenceRepository;
+        this.knowledgeDocumentRepository = knowledgeDocumentRepository;
     }
 
     @Transactional
     public ReviewRecordResponse submitReview(ReviewSubmitRequest request) {
+        request.validateReferences();
         projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
         TemplateResponse template = requireReviewTemplate(request.getProjectId(), request.getTemplateId());
         FileUploadRequest uploadRequest = new FileUploadRequest();
@@ -115,6 +141,9 @@ public class ReviewApplicationService {
         }
         reviewRecordRepository.findById(record.getId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.SYSTEM_ERROR, "review record is not readable"));
+        bindKnowledgeDocumentReferences(record, request.normalizedReferenceDocumentIds());
+        bindFileReferences(record, request.normalizedReferenceFileIds());
+        bindUploadedReferences(record, request.getReferenceFiles());
         if (taskRepository == null || taskOutboxApplicationService == null) {
             executeReview(record.getId());
             return getRecord(record.getId());
@@ -530,10 +559,79 @@ public class ReviewApplicationService {
         response.setStatus(record.getStatus());
         response.setIssues(readList(record.getIssuesJson()));
         response.setResult(readMap(record.getResultJson()));
+        response.setReferences(reviewReferenceRepository == null
+                ? List.of()
+                : reviewReferenceRepository.findByReviewRecordId(record.getId()));
         response.setErrorMessage(record.getErrorMessage());
         response.setCreatedAt(record.getCreatedAt());
         response.setUpdatedAt(record.getUpdatedAt());
         return response;
+    }
+
+    private void bindKnowledgeDocumentReferences(ReviewRecord record, List<Long> documentIds) {
+        if (documentIds.isEmpty()) return;
+        if (knowledgeDocumentRepository == null || reviewReferenceRepository == null) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "review reference service is unavailable");
+        }
+        for (Long documentId : documentIds) {
+            KnowledgeDocument document = knowledgeDocumentRepository.findById(documentId)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "review reference document not found"));
+            if (!record.getProjectId().equals(document.getProjectId())
+                    || !"SUCCESS".equals(document.getIndexStatus())) {
+                throw new BusinessException(ErrorCode.FORBIDDEN, "review reference document is not available for this project");
+            }
+            ReviewReference reference = new ReviewReference();
+            reference.setReviewRecordId(record.getId());
+            reference.setProjectId(record.getProjectId());
+            reference.setReferenceType("KNOWLEDGE_DOCUMENT");
+            reference.setDocumentId(document.getId());
+            reference.setSourceName(document.getTitle());
+            reviewReferenceRepository.insert(reference);
+        }
+    }
+
+    private void bindFileReferences(ReviewRecord record, List<Long> fileIds) {
+        if (fileIds.isEmpty()) return;
+        if (reviewReferenceRepository == null) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "review reference service is unavailable");
+        }
+        for (Long fileId : fileIds) {
+            FileObjectResponse file = fileObjectApplicationService.getFile(fileId);
+            if (!record.getProjectId().equals(file.getProjectId()) || !"REVIEW_REFERENCE".equals(file.getBizType())) {
+                throw new BusinessException(ErrorCode.FORBIDDEN, "review reference file is not available for this project");
+            }
+            ReviewReference reference = new ReviewReference();
+            reference.setReviewRecordId(record.getId());
+            reference.setProjectId(record.getProjectId());
+            reference.setReferenceType("TEMPORARY_FILE");
+            reference.setFileId(file.getFileId());
+            reference.setSourceName(file.getFileName());
+            reviewReferenceRepository.insert(reference);
+        }
+    }
+
+    private void bindUploadedReferences(ReviewRecord record, List<org.springframework.web.multipart.MultipartFile> files) {
+        if (files == null || files.isEmpty()) return;
+        if (reviewReferenceRepository == null) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "review reference service is unavailable");
+        }
+        for (org.springframework.web.multipart.MultipartFile multipartFile : files) {
+            if (multipartFile == null || multipartFile.isEmpty()) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "review reference file must not be empty");
+            }
+            FileUploadRequest uploadRequest = new FileUploadRequest();
+            uploadRequest.setProjectId(record.getProjectId());
+            uploadRequest.setBizType("REVIEW_REFERENCE");
+            uploadRequest.setFile(multipartFile);
+            FileObjectResponse file = fileObjectApplicationService.upload(uploadRequest);
+            ReviewReference reference = new ReviewReference();
+            reference.setReviewRecordId(record.getId());
+            reference.setProjectId(record.getProjectId());
+            reference.setReferenceType("TEMPORARY_FILE");
+            reference.setFileId(file.getFileId());
+            reference.setSourceName(file.getFileName());
+            reviewReferenceRepository.insert(reference);
+        }
     }
 
     private String writeJson(Object value) {
