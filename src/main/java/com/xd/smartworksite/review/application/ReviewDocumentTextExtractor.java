@@ -38,6 +38,14 @@ public class ReviewDocumentTextExtractor {
     }
 
     public ExtractedText extract(FileObjectContent content) {
+        return extractWithLimit(content, MAX_TEXT_CHARS);
+    }
+
+    public ExtractedText extractLong(FileObjectContent content) {
+        return extractWithLimit(content, 120000);
+    }
+
+    private ExtractedText extractWithLimit(FileObjectContent content, int textLimit) {
         try (var inputStream = content.getInputStream()) {
             byte[] bytes = readAll(inputStream);
             String ext = extension(content.getFileName());
@@ -62,8 +70,8 @@ public class ReviewDocumentTextExtractor {
                 throw new BusinessException(ErrorCode.PARAM_ERROR, "review document text is empty or unsupported");
             }
             String normalized = text.replace("\r\n", "\n").replace('\r', '\n').trim();
-            boolean truncated = normalized.length() > MAX_TEXT_CHARS;
-            return new ExtractedText(truncated ? normalized.substring(0, MAX_TEXT_CHARS) : normalized,
+            boolean truncated = normalized.length() > textLimit;
+            return new ExtractedText(truncated ? normalized.substring(0, textLimit) : normalized,
                     parserTruncated || truncated, blocks);
         } catch (BusinessException ex) {
             throw ex;

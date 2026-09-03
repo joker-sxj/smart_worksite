@@ -3,6 +3,7 @@ import request from '../utils/request';
 import { mockReviewRecord, mockReviewTemplates } from '../mocks/review';
 import type { ID, PageQuery, PageResult, ReviewRecord, ReviewTemplate } from './types';
 import { useModuleMock } from './mock';
+import { buildReviewFormData, type ReviewSubmission } from '../views/review/reviewSubmission';
 
 const useReviewRecordMock = useModuleMock('VITE_USE_REVIEW_RECORD_MOCK', false);
 const useReviewTemplateMock = useModuleMock('VITE_USE_REVIEW_TEMPLATE_MOCK', false);
@@ -27,7 +28,7 @@ export async function fetchReviewTemplates(projectId?: ID) {
   return request.get<ReviewTemplate[]>('/review/templates', { params: { projectId, status: 'ENABLED' } });
 }
 
-export async function submitReviewRecord(data: { projectId: ID; templateId: ID; file: File }) {
+export async function submitReviewRecord(data: ReviewSubmission) {
   if (useReviewRecordMock) {
     const now = new Date().toISOString();
     const id = mockId();
@@ -35,10 +36,7 @@ export async function submitReviewRecord(data: { projectId: ID; templateId: ID; 
     mockRecords.unshift(record);
     return { recordId: record.recordId, taskId: record.taskId, status: record.status };
   }
-  const form = new FormData();
-  form.append('projectId', String(data.projectId));
-  form.append('templateId', String(data.templateId));
-  form.append('file', data.file);
+  const form = buildReviewFormData(data);
   return request.post<{ recordId: ID; taskId: ID; status: string }>('/review/records', form);
 }
 

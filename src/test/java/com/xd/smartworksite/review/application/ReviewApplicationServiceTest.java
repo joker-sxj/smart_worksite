@@ -68,6 +68,7 @@ class ReviewApplicationServiceTest {
         when(fileService.getFile(99L)).thenReturn(fileResponse(99L, 1L, "plan.pdf"));
         ReviewDocumentTextExtractor extractor = mock(ReviewDocumentTextExtractor.class);
         when(extractor.extract(any(FileObjectContent.class))).thenReturn(new ReviewDocumentTextExtractor.ExtractedText("施工方案内容：临边未设置防护栏杆。", false));
+        when(extractor.extractLong(any(FileObjectContent.class))).thenReturn(new ReviewDocumentTextExtractor.ExtractedText("施工方案内容：临边未设置防护栏杆。", false));
         when(fileService.openFileContent(99L, 1L, null)).thenReturn(new FileObjectContent(99L, 1L, null, "plan.pdf", "application/pdf", 7L, java.io.InputStream.nullInputStream()));
         TemplateApplicationService templateService = mock(TemplateApplicationService.class);
         when(templateService.getTemplate(10L)).thenReturn(template(10L, 1L, "REVIEW", "ENABLED"));

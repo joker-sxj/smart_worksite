@@ -58,6 +58,8 @@ class ReviewAsyncExecutionFailureTest {
         when(fileService.openFileContentForSystem(77L, 1L, 10L)).thenReturn(fileContent(77L, "审查模板.pdf"));
         when(extractor.extract(any(FileObjectContent.class)))
                 .thenReturn(new ReviewDocumentTextExtractor.ExtractedText("文档正文", false));
+        when(extractor.extractLong(any(FileObjectContent.class)))
+                .thenReturn(new ReviewDocumentTextExtractor.ExtractedText("文档正文", false));
         when(reviewAiGateway.invokeAgentForSystem(any())).thenReturn(aiResponse);
 
         ReviewApplicationService service = new ReviewApplicationService(repository, mock(ProjectAccessApplicationService.class),

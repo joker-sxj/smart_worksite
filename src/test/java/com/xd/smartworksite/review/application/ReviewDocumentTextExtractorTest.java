@@ -43,4 +43,20 @@ class ReviewDocumentTextExtractorTest {
             assertThat(block.location()).containsEntry("pageNumber", 1);
         });
     }
+
+    @Test
+    void longReviewExtractionDoesNotDiscardEvidenceAfterLegacyPromptLimit() {
+        String text = "A".repeat(25000) + "关键条款";
+        DocumentParser parser = new DocumentParser() {
+            @Override public boolean supports(String fileExt, String contentType) { return true; }
+            @Override public PreparedDocument parse(com.xd.smartworksite.file.domain.FileObject fileObject, byte[] content) {
+                return PreparedDocument.text("pdf", text, 1, false);
+            }
+        };
+        ReviewDocumentTextExtractor extractor = new ReviewDocumentTextExtractor(List.of(parser));
+        FileObjectContent content = new FileObjectContent(9L, 7L, null, "long.pdf", "application/pdf", 3,
+                new ByteArrayInputStream(new byte[]{1}));
+
+        assertThat(extractor.extractLong(content).text()).endsWith("关键条款");
+    }
 }

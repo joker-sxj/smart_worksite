@@ -342,20 +342,20 @@ public class ReviewApplicationService {
     }
 
     private ReviewDocumentTextExtractor.ExtractedText extractReviewFileTextForSystem(ReviewRecord record, FileObjectResponse file) {
-        return documentTextExtractor.extract(fileObjectApplicationService.openFileContentForSystem(file.getFileId(), record.getProjectId(), null));
+        return documentTextExtractor.extractLong(fileObjectApplicationService.openFileContentForSystem(file.getFileId(), record.getProjectId(), null));
     }
 
     private ReviewDocumentTextExtractor.ExtractedText extractTemplateTextForSystem(TemplateResponse template) {
         if (template.getFileId() == null) return new ReviewDocumentTextExtractor.ExtractedText("", false);
         try {
-            return documentTextExtractor.extract(fileObjectApplicationService.openFileContentForSystem(template.getFileId(), template.getProjectId(), template.getTemplateId()));
+            return documentTextExtractor.extractLong(fileObjectApplicationService.openFileContentForSystem(template.getFileId(), template.getProjectId(), template.getTemplateId()));
         } catch (BusinessException ex) {
             return new ReviewDocumentTextExtractor.ExtractedText("", false);
         }
     }
 
     private ReviewDocumentTextExtractor.ExtractedText extractReviewFileText(ReviewRecord record, FileObjectResponse file) {
-        return documentTextExtractor.extract(fileObjectApplicationService.openFileContent(file.getFileId(), record.getProjectId(), null));
+        return documentTextExtractor.extractLong(fileObjectApplicationService.openFileContent(file.getFileId(), record.getProjectId(), null));
     }
 
     private ReviewDocumentTextExtractor.ExtractedText extractTemplateText(TemplateResponse template) {
@@ -363,7 +363,7 @@ public class ReviewApplicationService {
             return new ReviewDocumentTextExtractor.ExtractedText("", false);
         }
         try {
-            return documentTextExtractor.extract(fileObjectApplicationService.openFileContent(
+            return documentTextExtractor.extractLong(fileObjectApplicationService.openFileContent(
                     template.getFileId(), template.getProjectId(), template.getTemplateId()));
         } catch (BusinessException ex) {
             return new ReviewDocumentTextExtractor.ExtractedText("", false);
@@ -384,10 +384,10 @@ public class ReviewApplicationService {
         parameters.put("templateType", template.getTemplateType());
         parameters.put("reviewFileId", file.getFileId());
         parameters.put("reviewFileName", file.getFileName());
-        parameters.put("reviewFileContent", reviewText.text());
-        parameters.put("reviewFileContentTruncated", reviewText.truncated());
-        parameters.put("templateContent", templateText.text());
-        parameters.put("templateContentTruncated", templateText.truncated());
+        parameters.put("reviewFileContent", legacyPromptText(reviewText.text()));
+        parameters.put("reviewFileContentTruncated", reviewText.truncated() || reviewText.text().length() > 20000);
+        parameters.put("templateContent", legacyPromptText(templateText.text()));
+        parameters.put("templateContentTruncated", templateText.truncated() || templateText.text().length() > 20000);
         parameters.put("instruction", "请基于审查模板和被审查文件内容进行合规审查，只返回合法JSON对象，不要输出Markdown或解释文字。");
         parameters.put("expectedResultSchema", Map.of(
                 "issues", "array of {issueId,severity,location,ruleName,description,suggestion,status}",
@@ -396,6 +396,10 @@ public class ReviewApplicationService {
         ));
         request.setParameters(parameters);
         return request;
+    }
+
+    private String legacyPromptText(String text) {
+        return text.length() <= 20000 ? text : text.substring(0, 20000);
     }
 
     private Map<String, Object> executeReviewModel(ReviewRecord record, TemplateResponse template,
@@ -434,7 +438,7 @@ public class ReviewApplicationService {
             FileObjectContent content = system
                     ? fileObjectApplicationService.openFileContentForSystem(fileId, record.getProjectId(), null)
                     : fileObjectApplicationService.openFileContent(fileId, record.getProjectId(), null);
-            ReviewDocumentTextExtractor.ExtractedText extracted = documentTextExtractor.extract(content);
+            ReviewDocumentTextExtractor.ExtractedText extracted = documentTextExtractor.extractLong(content);
             sources.add(new ReviewRuleOrchestrator.SourceText(reference.getSourceName(), extracted.text(),
                     reference.getDocumentId() == null ? reference.getFileId() : reference.getDocumentId(), null));
         }

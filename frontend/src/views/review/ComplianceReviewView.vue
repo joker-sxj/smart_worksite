@@ -10,9 +10,10 @@ import StatusTag from '../../components/common/StatusTag.vue';
 import EmptyState from '../../components/common/EmptyState.vue';
 import { fetchReviewRecord, fetchReviewTemplates, submitReviewRecord, updateReviewIssue } from '../../api/review';
 import { fetchTaskStages } from '../../api/task';
+import { fetchKnowledgeBases, fetchKnowledgeDocuments } from '../../api/knowledge';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
-import type { ID, ReviewRecord, ReviewTemplate, TaskStageLog } from '../../api/types';
+import type { ID, KnowledgeDocument, ReviewRecord, ReviewTemplate, TaskStageLog } from '../../api/types';
 import { isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
 
 const router = useRouter();
@@ -27,6 +28,9 @@ const stageNotice = ref('');
 const templates = ref<ReviewTemplate[]>([]);
 const selectedTemplateId = ref<ID>('');
 const file = ref<File | null>(null);
+const referenceFiles = ref<File[]>([]);
+const referenceDocuments = ref<KnowledgeDocument[]>([]);
+const selectedReferenceDocumentIds = ref<ID[]>([]);
 const currentRecord = ref<ReviewRecord | null>(null);
 const submittedInfo = ref<{ recordId?: ID; taskId?: ID; status?: string } | null>(null);
 const logs = ref<TaskStageLog[]>([]);
@@ -36,6 +40,7 @@ const RECORD_POLL_INTERVAL_MS = 2000;
 const canManageReview = computed(() => userStore.hasPermission('review:manage'));
 const reviewManageTip = '当前账号没有合规审查管理权限';
 const canSubmit = computed(() => Boolean(canManageReview.value && templates.value.length && selectedTemplateId.value && file.value && !submitting.value));
+const ruleResults = computed(() => Array.isArray(currentRecord.value?.result?.ruleResults) ? currentRecord.value?.result?.ruleResults as Array<Record<string, unknown>> : []);
 const issueStatusOptions = [
   { label: '待处理', value: 'OPEN' },
   { label: '处理中', value: 'PROCESSING' },
@@ -97,6 +102,14 @@ async function loadTemplates() {
   }
 }
 
+async function loadReferenceDocuments() {
+  const projectId = projectStore.currentProject?.projectId;
+  if (!projectId) { referenceDocuments.value = []; return; }
+  const bases = await fetchKnowledgeBases(projectId, { pageNo: 1, pageSize: 100 });
+  const pages = await Promise.all(bases.map((base) => fetchKnowledgeDocuments(base.knowledgeBaseId, { pageNo: 1, pageSize: 100 })));
+  referenceDocuments.value = pages.flatMap((page) => page.records).filter((document) => String(document.indexStatus).toUpperCase() === 'SUCCESS');
+}
+
 async function loadStages(taskId?: ID) {
   stageNotice.value = '';
   if (!taskId) { logs.value = []; return; }
@@ -133,7 +146,11 @@ async function submit() {
   resultNotice.value = '';
   stageNotice.value = '';
   try {
-    const result = await submitReviewRecord({ projectId, templateId: selectedTemplateId.value, file: file.value });
+    const result = await submitReviewRecord({
+      projectId, templateId: selectedTemplateId.value, file: file.value,
+      referenceDocumentIds: selectedReferenceDocumentIds.value,
+      referenceFiles: referenceFiles.value
+    });
     submittedInfo.value = result;
     ElMessage.success(t('审查任务已提交'));
     persistRecordId(projectId, result.recordId);
@@ -161,6 +178,7 @@ async function changeIssueStatus(issueId: string, status: string, comment?: stri
 
 onMounted(async () => {
   await loadTemplates();
+  await loadReferenceDocuments();
   const projectId = projectStore.currentProject?.projectId;
   if (projectId) await restoreLastRecord(projectId);
 });
@@ -169,8 +187,11 @@ watch(() => projectStore.currentProject?.projectId, async (projectId, previousPr
   stopRecordPolling();
   selectedTemplateId.value = '';
   currentRecord.value = null;
+  selectedReferenceDocumentIds.value = [];
+  referenceFiles.value = [];
   submittedInfo.value = null;
   await loadTemplates();
+  await loadReferenceDocuments();
   await restoreLastRecord(projectId);
 });
 onUnmounted(stopRecordPolling);
@@ -227,6 +248,17 @@ onUnmounted(stopRecordPolling);
         <div class="upload-title required-label">2. 上传待审文件</div>
         <AppUpload v-if="canManageReview" :model-value="file ? [file] : []" accept=".doc,.docx,.pdf" :max-size-mb="100" :multiple="false" :uploading="submitting" @update:model-value="file = $event[0] || null" />
         <p class="upload-tip">支持 Word、PDF。选择模板和文件后，点击“发起审查”。</p>
+        <div class="reference-panel">
+          <div class="upload-title">3. 选择参考资料（可选，最多 20 项）</div>
+          <el-select v-model="selectedReferenceDocumentIds" multiple filterable collapse-tags style="width: 100%" placeholder="选择当前项目已入库的知识文档">
+            <el-option v-for="item in referenceDocuments" :key="item.documentId" :label="item.title" :value="item.documentId">
+              <span>{{ item.title }}</span><small class="reference-meta">{{ item.fileExt || item.contentType || '文档' }} · 已入库</small>
+            </el-option>
+          </el-select>
+          <div class="upload-title optional-upload">或上传本次审查使用的临时参考文件</div>
+          <AppUpload v-if="canManageReview" :model-value="referenceFiles" accept=".doc,.docx,.pdf" :max-size-mb="100" :multiple="true" :uploading="submitting" @update:model-value="referenceFiles = $event.slice(0, 10)" />
+          <p class="upload-tip">参考资料只作为审查依据，不会被当成待审文件中的问题。临时文件最多 10 个。</p>
+        </div>
       </template>
     </el-card>
     <el-card v-if="submittedInfo && !currentRecord" class="work-card"><h3 class="panel-title">{{ t('已提交任务') }}</h3><p>recordId: {{ submittedInfo.recordId || '-' }}</p><p>taskId: {{ submittedInfo.taskId || '-' }}</p><p>status: {{ submittedInfo.status || '-' }}</p></el-card>
@@ -248,6 +280,18 @@ onUnmounted(stopRecordPolling);
         </el-card>
         <JsonViewer :value="currentRecord" :title="t('审查 JSON 结果')" />
       </div>
+      <el-card v-if="currentRecord.references?.length || ruleResults.length" class="work-card evidence-card">
+        <h3 class="panel-title">审查依据与规则结果</h3>
+        <div v-if="currentRecord.references?.length" class="reference-chips">
+          <el-tag v-for="item in currentRecord.references" :key="String(item.id)" effect="plain">{{ item.sourceName }}</el-tag>
+        </div>
+        <el-collapse v-if="ruleResults.length">
+          <el-collapse-item v-for="item in ruleResults" :key="String(item.ruleId)" :title="`${item.ruleId} · ${item.status}`">
+            <el-alert v-if="item.manualConfirmationRequired" title="证据不足或结果不确定，需要人工确认" type="warning" show-icon :closable="false" />
+            <JsonViewer :value="item.result || item" title="规则证据与结论" />
+          </el-collapse-item>
+        </el-collapse>
+      </el-card>
     </template>
   </div>
 </template>
@@ -285,6 +329,11 @@ onUnmounted(stopRecordPolling);
 .guide-step p { margin: 0; color: var(--sw-muted); line-height: 1.6; }
 .upload-title { margin: 4px 0 10px; font-weight: 700; }
 .upload-tip { margin: 10px 0 0; color: var(--sw-muted); font-size: 13px; }
+.reference-panel { margin-top: 22px; padding-top: 18px; border-top: 1px dashed var(--sw-border); }
+.optional-upload { margin-top: 16px; }
+.reference-meta { float: right; margin-left: 20px; color: var(--sw-muted); }
+.reference-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.evidence-card { margin-top: 16px; }
 @media (max-width: 900px) {
   .review-guide { grid-template-columns: 1fr; }
 }

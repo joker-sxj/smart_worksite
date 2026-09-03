@@ -1,6 +1,6 @@
 import type { ID, ReviewRecord, TaskStageLog } from '../../api/types';
 
-const TERMINAL_STATUSES = new Set(['SUCCESS', 'COMPLETED', 'FAILED', 'CANCELED', 'ARCHIVED']);
+const TERMINAL_STATUSES = new Set(['SUCCESS', 'COMPLETED', 'PARTIAL_SUCCESS', 'FAILED', 'CANCELED', 'ARCHIVED']);
 const STORAGE_PREFIX = 'smart-worksite:review:last-record:';
 const DEFAULT_RUNNING_PROGRESS = 10;
 const STAGE_PROGRESS: Record<string, number> = {
@@ -27,7 +27,7 @@ export function progressFromReviewState(
   logs: Array<Pick<TaskStageLog, 'stageCode'>> = []
 ) {
   const status = String(record.status).toUpperCase();
-  if (status === 'SUCCESS' || status === 'COMPLETED' || status === 'ARCHIVED') return 100;
+  if (status === 'SUCCESS' || status === 'COMPLETED' || status === 'PARTIAL_SUCCESS' || status === 'ARCHIVED') return 100;
 
   return logs.reduce((progress, log) => {
     const stageProgress = STAGE_PROGRESS[String(log.stageCode || '').toUpperCase()];

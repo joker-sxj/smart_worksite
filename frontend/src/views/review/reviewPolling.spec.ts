@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
 
 describe('review polling', () => {
+  it('treats partial success as a terminal downloadable review result', () => {
+    expect(isReviewTerminal({ status: 'PARTIAL_SUCCESS' })).toBe(true);
+    expect(progressFromReviewState({ status: 'PARTIAL_SUCCESS' })).toBe(100);
+  });
   it('recognizes terminal states', () => {
     expect(isReviewTerminal({ status: 'COMPLETED' } as never)).toBe(true);
     expect(isReviewTerminal({ status: 'FAILED' } as never)).toBe(true);

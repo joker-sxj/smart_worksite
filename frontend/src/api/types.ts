@@ -252,9 +252,30 @@ export interface ReviewRecord {
   status: Status;
   issues: ReviewIssue[];
   result?: Record<string, unknown>;
+  references?: ReviewReference[];
+  ruleResults?: ReviewRuleResult[];
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ReviewReference {
+  id: ID;
+  reviewRecordId: ID;
+  projectId: ID;
+  referenceType: 'KNOWLEDGE_DOCUMENT' | 'TEMPORARY_FILE';
+  documentId?: ID;
+  fileId?: ID;
+  sourceName: string;
+}
+
+export interface ReviewRuleResult {
+  ruleId: string;
+  status: 'COMPLETED' | 'NEEDS_MANUAL_CONFIRMATION' | 'FAILED' | string;
+  result?: Record<string, unknown>;
+  confidence?: number;
+  manualConfirmationRequired?: boolean;
+  errorMessage?: string;
 }
 
 export interface ReportItem {
