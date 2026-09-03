@@ -90,6 +90,7 @@ class AgentService:
         prompt = {
             "ruleId": parameters.get("ruleId"),
             "ruleName": parameters.get("ruleName"),
+            "ruleContent": parameters.get("ruleContent") or "",
             "primaryFileName": parameters.get("primaryFileName"),
             "primaryEvidence": parameters.get("primaryEvidence") or "",
             "referenceEvidence": parameters.get("referenceEvidence") or [],

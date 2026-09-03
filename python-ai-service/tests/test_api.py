@@ -201,7 +201,7 @@ def test_compliance_review_rule_keeps_primary_and_reference_evidence_separate():
     data, _ = asyncio.run(AgentService(qwen).invoke(AgentInvokeRequest(
         goal="COMPLIANCE_REVIEW_RULE",
         parameters={
-            "ruleId": "RULE-001", "ruleName": "临边防护",
+            "ruleId": "RULE-001", "ruleName": "临边防护", "ruleContent": "栏杆高度不得低于1.2米。",
             "primaryFileName": "方案.pdf", "primaryEvidence": "第3页：临边没有防护栏杆。",
             "referenceEvidence": [{"sourceName": "GB.pdf", "content": "临边应设置防护栏杆。"}],
         },
@@ -211,6 +211,7 @@ def test_compliance_review_rule_keeps_primary_and_reference_evidence_separate():
     assert result["ruleId"] == "RULE-001"
     assert result["issues"][0]["issueId"] == "RULE-001-I001"
     prompt = json.loads(qwen.messages[-1].content)
+    assert prompt["ruleContent"] == "栏杆高度不得低于1.2米。"
     assert prompt["primaryEvidence"] == "第3页：临边没有防护栏杆。"
     assert prompt["referenceEvidence"][0]["sourceName"] == "GB.pdf"
 
