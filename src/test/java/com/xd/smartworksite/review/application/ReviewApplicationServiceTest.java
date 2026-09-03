@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -210,6 +211,13 @@ class ReviewApplicationServiceTest {
         assertThatThrownBy(() -> service.submitReview(submitRequest(1L, 30L)))
                 .isInstanceOfSatisfying(BusinessException.class, ex ->
                         assertThat(ex.getCode()).isEqualTo(ErrorCode.PARAM_ERROR.getCode()));
+    }
+
+    @Test
+    void allRuleFailuresKeepReviewFailedInsteadOfCompleted() {
+        String status = ReflectionTestUtils.invokeMethod(service, "finalStatus", java.util.Map.of("finalStatus", "FAILED"));
+
+        assertThat(status).isEqualTo("FAILED");
     }
 
     @Test

@@ -486,7 +486,11 @@ public class ReviewApplicationService {
     }
 
     private String finalStatus(Map<String, Object> result) {
-        return "PARTIAL_SUCCESS".equals(result.get("finalStatus")) ? "PARTIAL_SUCCESS" : "COMPLETED";
+        Object requestedStatus = result.get("finalStatus");
+        if ("PARTIAL_SUCCESS".equals(requestedStatus) || "FAILED".equals(requestedStatus)) {
+            return requestedStatus.toString();
+        }
+        return "COMPLETED";
     }
 
     private int finishRecord(Long recordId, Map<String, Object> result, List<Map<String, Object>> issues, Long updatedBy) {
