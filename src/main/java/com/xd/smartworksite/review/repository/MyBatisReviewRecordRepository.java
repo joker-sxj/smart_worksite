@@ -55,6 +55,11 @@ public class MyBatisReviewRecordRepository implements ReviewRecordRepository {
     }
 
     @Override
+    public int markFinished(Long recordId, String status, String issuesJson, String resultJson, Long updatedBy) {
+        return mapper.markFinished(recordId, status, issuesJson, resultJson, updatedBy);
+    }
+
+    @Override
     public int markFailed(Long recordId, String errorMessage, Long updatedBy) {
         return mapper.markFailed(recordId, errorMessage, updatedBy);
     }

@@ -178,6 +178,42 @@ def test_compliance_review_agent_reviews_uploaded_document_content_as_json():
     assert qwen.parameters == {"response_format": {"type": "json_object"}}
     assert usage["prompt_tokens"] == 3
 
+def test_compliance_review_rule_keeps_primary_and_reference_evidence_separate():
+    class FakeQwen:
+        def __init__(self):
+            self.messages = None
+
+        async def json_chat(self, messages, model=None, parameters=None):
+            self.messages = messages
+            return {
+                "ruleId": "RULE-001",
+                "decision": "NON_COMPLIANT",
+                "issues": [{
+                    "severity": "HIGH", "location": "第3页", "ruleName": "临边防护",
+                    "description": "主文件未设置防护栏杆", "suggestion": "按标准设置防护栏杆",
+                }],
+                "confidence": 0.91,
+                "manualConfirmationRequired": False,
+            }, {"prompt_tokens": 8}
+
+    import asyncio
+    qwen = FakeQwen()
+    data, _ = asyncio.run(AgentService(qwen).invoke(AgentInvokeRequest(
+        goal="COMPLIANCE_REVIEW_RULE",
+        parameters={
+            "ruleId": "RULE-001", "ruleName": "临边防护",
+            "primaryFileName": "方案.pdf", "primaryEvidence": "第3页：临边没有防护栏杆。",
+            "referenceEvidence": [{"sourceName": "GB.pdf", "content": "临边应设置防护栏杆。"}],
+        },
+    )))
+
+    result = json.loads(data.result)
+    assert result["ruleId"] == "RULE-001"
+    assert result["issues"][0]["issueId"] == "RULE-001-I001"
+    prompt = json.loads(qwen.messages[-1].content)
+    assert prompt["primaryEvidence"] == "第3页：临边没有防护栏杆。"
+    assert prompt["referenceEvidence"][0]["sourceName"] == "GB.pdf"
+
 def test_compliance_review_with_unavailable_tools_returns_json_result():
     client = TestClient(app)
 

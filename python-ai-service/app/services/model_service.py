@@ -64,6 +64,8 @@ class AgentService:
     async def invoke(self, request: AgentInvokeRequest) -> tuple[AgentInvokeData, dict]:
         if str(request.goal).upper() == "COMPLIANCE_REVIEW":
             return await self._invoke_compliance_review(request)
+        if str(request.goal).upper() == "COMPLIANCE_REVIEW_RULE":
+            return await self._invoke_compliance_review_rule(request)
         if request.tools:
             return await ToolCallingAgent(self.qwen, self.registry).invoke(request)
         system = "你是智慧工地智能体。请进行任务拆解，给出简洁可执行结果，并在信息不足时给出主动追问。"
@@ -77,6 +79,52 @@ class AgentService:
             followUpQuestions=[] if "?" not in answer and "？" not in answer else ["请补充任务所需的关键业务条件。"],
         )
         return data, usage
+
+    async def _invoke_compliance_review_rule(self, request: AgentInvokeRequest) -> tuple[AgentInvokeData, dict]:
+        parameters = request.parameters or {}
+        system = (
+            "你是智慧工地规则级合规审查智能体。主文件证据是被审查对象，参考依据只能用于解释规则，"
+            "不得把参考资料中的描述误判为主文件问题。只能返回JSON对象，包含ruleId、decision、issues、"
+            "confidence、manualConfirmationRequired。证据不足时必须要求人工确认，不得编造。"
+        )
+        prompt = {
+            "ruleId": parameters.get("ruleId"),
+            "ruleName": parameters.get("ruleName"),
+            "primaryFileName": parameters.get("primaryFileName"),
+            "primaryEvidence": parameters.get("primaryEvidence") or "",
+            "referenceEvidence": parameters.get("referenceEvidence") or [],
+        }
+        result, usage = await self.qwen.json_chat(
+            [Message(role="system", content=system), Message(role="user", content=json.dumps(prompt, ensure_ascii=False))],
+            parameters={"response_format": {"type": "json_object"}},
+        )
+        normalized = self._normalize_compliance_rule_result(result, parameters)
+        return AgentInvokeData(
+            result=json.dumps(normalized, ensure_ascii=False),
+            steps=[AgentStep(step="COMPLIANCE_REVIEW_RULE_JSON", result="已完成单条规则审查")],
+            followUpQuestions=[],
+        ), usage or {}
+
+    def _normalize_compliance_rule_result(self, result: dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]:
+        rule_id = str(parameters.get("ruleId") or result.get("ruleId") or "RULE-UNKNOWN")
+        issues = []
+        for index, issue in enumerate(result.get("issues") if isinstance(result.get("issues"), list) else [], start=1):
+            if not isinstance(issue, dict):
+                continue
+            normalized = dict(issue)
+            normalized.setdefault("issueId", f"{rule_id}-I{index:03d}")
+            normalized.setdefault("status", "OPEN")
+            issues.append(normalized)
+        confidence = result.get("confidence")
+        confidence = float(confidence) if isinstance(confidence, (int, float)) else 0.0
+        manual = bool(result.get("manualConfirmationRequired")) or not parameters.get("primaryEvidence")
+        return {
+            "ruleId": rule_id,
+            "decision": str(result.get("decision") or ("NEEDS_MANUAL_CONFIRMATION" if manual else "UNKNOWN")),
+            "issues": issues,
+            "confidence": max(0.0, min(1.0, confidence)),
+            "manualConfirmationRequired": manual,
+        }
 
 
     async def _invoke_compliance_review(self, request: AgentInvokeRequest) -> tuple[AgentInvokeData, dict]:

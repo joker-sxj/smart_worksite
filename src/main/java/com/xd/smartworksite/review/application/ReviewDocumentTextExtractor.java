@@ -20,6 +20,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 @Service
 public class ReviewDocumentTextExtractor {
@@ -43,10 +44,13 @@ public class ReviewDocumentTextExtractor {
             String contentType = normalizeContentType(content.getContentType());
             String text;
             boolean parserTruncated = false;
+            List<EvidenceBlock> blocks = List.of();
             if ("pdf".equals(ext) || "application/pdf".equals(contentType)) {
                 PreparedDocument prepared = extractPdf(content, bytes, ext, contentType);
                 text = prepared.getTextContent();
                 parserTruncated = prepared.isTruncated();
+                blocks = prepared.getBlocks().stream().map(block -> new EvidenceBlock(
+                        block.getBlockId(), block.getText(), locationMap(block.getLocation()))).toList();
             } else if ("docx".equals(ext) || "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(contentType)) {
                 text = extractDocx(bytes);
             } else if ("doc".equals(ext) || "application/msword".equals(contentType)) {
@@ -60,7 +64,7 @@ public class ReviewDocumentTextExtractor {
             String normalized = text.replace("\r\n", "\n").replace('\r', '\n').trim();
             boolean truncated = normalized.length() > MAX_TEXT_CHARS;
             return new ExtractedText(truncated ? normalized.substring(0, MAX_TEXT_CHARS) : normalized,
-                    parserTruncated || truncated);
+                    parserTruncated || truncated, blocks);
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -119,5 +123,20 @@ public class ReviewDocumentTextExtractor {
         return dot < 0 ? "" : fileName.substring(dot + 1).toLowerCase(Locale.ROOT);
     }
 
-    public record ExtractedText(String text, boolean truncated) {}
+    private Map<String, Object> locationMap(com.xd.smartworksite.file.domain.DocumentLocation location) {
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        if (location.getPage() != null) result.put("pageNumber", location.getPage());
+        if (location.getSlide() != null) result.put("slideNumber", location.getSlide());
+        if (location.getSheet() != null) result.put("sheetName", location.getSheet());
+        if (location.getCellRange() != null) result.put("cellRange", location.getCellRange());
+        return result;
+    }
+
+    public record EvidenceBlock(String blockId, String text, Map<String, Object> location) {}
+
+    public record ExtractedText(String text, boolean truncated, List<EvidenceBlock> blocks) {
+        public ExtractedText(String text, boolean truncated) {
+            this(text, truncated, List.of());
+        }
+    }
 }

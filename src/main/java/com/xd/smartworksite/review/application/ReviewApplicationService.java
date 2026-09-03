@@ -12,6 +12,7 @@ import com.xd.smartworksite.common.result.ErrorCode;
 import com.xd.smartworksite.common.result.PageResult;
 import com.xd.smartworksite.common.security.SecurityUtils;
 import com.xd.smartworksite.file.application.FileObjectApplicationService;
+import com.xd.smartworksite.file.application.FileObjectContent;
 import com.xd.smartworksite.file.dto.FileObjectResponse;
 import com.xd.smartworksite.file.dto.FileUploadRequest;
 import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
@@ -61,6 +62,10 @@ public class ReviewApplicationService {
     private final TaskWorkerApplicationService taskWorkerApplicationService;
     private final ReviewReferenceRepository reviewReferenceRepository;
     private final KnowledgeDocumentRepository knowledgeDocumentRepository;
+    @Autowired(required = false)
+    private ReviewRuleOrchestrator reviewRuleOrchestrator;
+    @Autowired(required = false)
+    private ReviewRuleResultWriter reviewRuleResultWriter;
 
     public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
                                     ProjectAccessApplicationService projectAccessApplicationService,
@@ -73,7 +78,6 @@ public class ReviewApplicationService {
                 reviewAiGateway, documentTextExtractor, objectMapper, null, null, null);
     }
 
-    @Autowired
     public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
                                     ProjectAccessApplicationService projectAccessApplicationService,
                                     FileObjectApplicationService fileObjectApplicationService,
@@ -89,6 +93,7 @@ public class ReviewApplicationService {
                 taskWorkerApplicationService, null, null);
     }
 
+    @Autowired
     public ReviewApplicationService(ReviewRecordRepository reviewRecordRepository,
                                     ProjectAccessApplicationService projectAccessApplicationService,
                                     FileObjectApplicationService fileObjectApplicationService,
@@ -283,13 +288,10 @@ public class ReviewApplicationService {
             ReviewDocumentTextExtractor.ExtractedText reviewText = extractReviewFileTextForSystem(record, file);
             ReviewDocumentTextExtractor.ExtractedText templateText = extractTemplateTextForSystem(template);
             recordProgress(taskId, workerId, leaseSeconds, "REVIEW_AI", "正在调用审查模型");
-            AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgentForSystem(buildAgentRequest(record, template, file, reviewText, templateText));
-            Map<String, Object> result = parseAgentResult(aiResponse);
-            result.put("providerTraceId", aiResponse.getProviderTraceId());
-            if (aiResponse.getSteps() != null && !aiResponse.getSteps().isEmpty()) result.put("steps", aiResponse.getSteps());
+            Map<String, Object> result = executeReviewModel(record, template, file, reviewText, templateText, true);
             List<Map<String, Object>> issues = extractIssues(result);
             recordProgress(taskId, workerId, leaseSeconds, "REVIEW_PERSISTING", "正在保存审查结果");
-            if (reviewRecordRepository.markCompleted(recordId, writeJson(issues), writeJson(result), 1L) == 0) {
+            if (finishRecord(recordId, result, issues, 1L) == 0) {
                 throw new BusinessException(ErrorCode.CONFLICT, "review record complete state changed");
             }
         } catch (RuntimeException ex) {
@@ -323,14 +325,9 @@ public class ReviewApplicationService {
             FileObjectResponse file = fileObjectApplicationService.getFile(record.getFileId());
             ReviewDocumentTextExtractor.ExtractedText reviewText = extractReviewFileText(record, file);
             ReviewDocumentTextExtractor.ExtractedText templateText = extractTemplateText(template);
-            AgentInvokeResponse aiResponse = reviewAiGateway.invokeAgent(buildAgentRequest(record, template, file, reviewText, templateText));
-            Map<String, Object> result = parseAgentResult(aiResponse);
-            result.put("providerTraceId", aiResponse.getProviderTraceId());
-            if (aiResponse.getSteps() != null && !aiResponse.getSteps().isEmpty()) {
-                result.put("steps", aiResponse.getSteps());
-            }
+            Map<String, Object> result = executeReviewModel(record, template, file, reviewText, templateText, false);
             List<Map<String, Object>> issues = extractIssues(result);
-            int completed = reviewRecordRepository.markCompleted(recordId, writeJson(issues), writeJson(result), SecurityUtils.getCurrentUserId());
+            int completed = finishRecord(recordId, result, issues, SecurityUtils.getCurrentUserId());
             if (completed == 0) {
                 throw new BusinessException(ErrorCode.CONFLICT, "review record complete state changed");
             }
@@ -399,6 +396,88 @@ public class ReviewApplicationService {
         ));
         request.setParameters(parameters);
         return request;
+    }
+
+    private Map<String, Object> executeReviewModel(ReviewRecord record, TemplateResponse template,
+                                                   FileObjectResponse file,
+                                                   ReviewDocumentTextExtractor.ExtractedText reviewText,
+                                                   ReviewDocumentTextExtractor.ExtractedText templateText,
+                                                   boolean system) {
+        List<ReviewReference> references = reviewReferenceRepository == null
+                ? List.of() : reviewReferenceRepository.findByReviewRecordId(record.getId());
+        if (references.isEmpty() || reviewRuleOrchestrator == null) {
+            AgentInvokeResponse response = system
+                    ? reviewAiGateway.invokeAgentForSystem(buildAgentRequest(record, template, file, reviewText, templateText))
+                    : reviewAiGateway.invokeAgent(buildAgentRequest(record, template, file, reviewText, templateText));
+            Map<String, Object> result = parseAgentResult(response);
+            result.put("providerTraceId", response.getProviderTraceId());
+            if (response.getSteps() != null && !response.getSteps().isEmpty()) result.put("steps", response.getSteps());
+            return result;
+        }
+        List<ReviewRuleOrchestrator.SourceText> sources = new ArrayList<>();
+        for (ReviewReference reference : references) {
+            Long fileId = reference.getFileId();
+            if ("KNOWLEDGE_DOCUMENT".equals(reference.getReferenceType())) {
+                KnowledgeDocument document = knowledgeDocumentRepository.findById(reference.getDocumentId())
+                        .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "review reference document not found"));
+                if (!record.getProjectId().equals(document.getProjectId()) || !"SUCCESS".equals(document.getIndexStatus())) {
+                    throw new BusinessException(ErrorCode.FORBIDDEN, "review reference document is no longer available");
+                }
+                fileId = document.getFileId();
+            }
+            FileObjectResponse source = system
+                    ? fileObjectApplicationService.getFileForSystem(fileId)
+                    : fileObjectApplicationService.getFile(fileId);
+            if (!record.getProjectId().equals(source.getProjectId())) {
+                throw new BusinessException(ErrorCode.FORBIDDEN, "review reference file project mismatch");
+            }
+            FileObjectContent content = system
+                    ? fileObjectApplicationService.openFileContentForSystem(fileId, record.getProjectId(), null)
+                    : fileObjectApplicationService.openFileContent(fileId, record.getProjectId(), null);
+            ReviewDocumentTextExtractor.ExtractedText extracted = documentTextExtractor.extract(content);
+            sources.add(new ReviewRuleOrchestrator.SourceText(reference.getSourceName(), extracted.text(),
+                    reference.getDocumentId() == null ? reference.getFileId() : reference.getDocumentId(), null));
+        }
+        ReviewRuleOrchestrator.ReviewOutcome outcome = reviewRuleOrchestrator.review(
+                record.getProjectId(), record.getId(), template.getTemplateId(), file.getFileName(), reviewText.text(),
+                templateText.text(), sources, system);
+        List<Map<String, Object>> issues = new ArrayList<>();
+        int manualCount = 0;
+        for (ReviewRuleOrchestrator.RuleResult rule : outcome.ruleResults()) {
+            Object rawIssues = rule.result().get("issues");
+            if (rawIssues instanceof List<?> values) {
+                for (Object value : values) if (value instanceof Map<?, ?> map) issues.add(copyStringMap(map));
+            }
+            if (rule.manualConfirmationRequired()) manualCount++;
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("summary", "已完成 " + outcome.ruleResults().size() + " 条规则审查，其中 " + manualCount + " 条需人工确认。");
+        result.put("score", Math.max(0, 100 - issues.size() * 10 - manualCount * 5));
+        result.put("issues", issues);
+        result.put("ruleResults", outcome.ruleResults());
+        result.put("referenceCount", references.size());
+        if (reviewRuleResultWriter != null) {
+            ReviewRuleResultWriter.WriteSummary summary = reviewRuleResultWriter.replace(record.getId(), record.getProjectId(), outcome);
+            result.put("finalStatus", summary.finalStatus());
+        }
+        return result;
+    }
+
+    private String finalStatus(Map<String, Object> result) {
+        return "PARTIAL_SUCCESS".equals(result.get("finalStatus")) ? "PARTIAL_SUCCESS" : "COMPLETED";
+    }
+
+    private int finishRecord(Long recordId, Map<String, Object> result, List<Map<String, Object>> issues, Long updatedBy) {
+        String status = finalStatus(result);
+        return "COMPLETED".equals(status)
+                ? reviewRecordRepository.markCompleted(recordId, writeJson(issues), writeJson(result), updatedBy)
+                : reviewRecordRepository.markFinished(recordId, status, writeJson(issues), writeJson(result), updatedBy);
+    }
+
+    private Map<String, Object> copyStringMap(Map<?, ?> source) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        source.forEach((key, value) -> result.put(String.valueOf(key), value));
+        return result;
     }
 
     private Map<String, Object> parseAgentResult(AgentInvokeResponse response) {

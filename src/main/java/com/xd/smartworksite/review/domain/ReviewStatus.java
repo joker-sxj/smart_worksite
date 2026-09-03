@@ -4,6 +4,7 @@ public enum ReviewStatus {
     PENDING,
     PROCESSING,
     COMPLETED,
+    PARTIAL_SUCCESS,
     FAILED,
     ARCHIVED
 }

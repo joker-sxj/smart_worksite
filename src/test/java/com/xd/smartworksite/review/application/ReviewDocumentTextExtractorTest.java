@@ -38,5 +38,9 @@ class ReviewDocumentTextExtractorTest {
 
         assertThat(result.text()).isEqualTo("OCR review template");
         assertThat(result.truncated()).isTrue();
+        assertThat(result.blocks()).singleElement().satisfies(block -> {
+            assertThat(block.blockId()).isEqualTo("page-1");
+            assertThat(block.location()).containsEntry("pageNumber", 1);
+        });
     }
 }
