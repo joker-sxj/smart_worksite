@@ -26,6 +26,9 @@ import com.xd.smartworksite.report.domain.ReportStatus;
 import com.xd.smartworksite.report.domain.ReportVersion;
 import com.xd.smartworksite.report.domain.ReportVariableStatus;
 import com.xd.smartworksite.report.domain.ReportVariableValue;
+import com.xd.smartworksite.report.domain.StructuredReportSection;
+import com.xd.smartworksite.report.domain.StructuredReportTable;
+import com.xd.smartworksite.report.domain.ReportStatistics;
 import com.xd.smartworksite.report.dto.ReportCreateRequest;
 import com.xd.smartworksite.report.dto.ReportCreateResponse;
 import com.xd.smartworksite.report.dto.ReportQueryRequest;
@@ -92,6 +95,8 @@ public class ReportGenerationApplicationService {
     private final TaskOutboxApplicationService taskOutboxApplicationService;
     private final StorageAdapter storageAdapter;
     private final ObjectMapper objectMapper;
+    private final ReportTableAnalysisService reportTableAnalysisService = new ReportTableAnalysisService();
+    private final ReportStructuredContentRenderer reportStructuredContentRenderer = new ReportStructuredContentRenderer();
 
     public ReportGenerationApplicationService(ReportRepository reportRepository,
                                               ProjectAccessApplicationService projectAccessApplicationService,
@@ -353,7 +358,7 @@ public class ReportGenerationApplicationService {
         validateTemplateFile(report.getProjectId(), template, templateFile);
 
         VariableGenerationResult generated = generateReportVariables(report, task.getId());
-        byte[] reportBytes = renderDocx(task.getId(), templateFile, generated.values());
+        byte[] reportBytes = renderDocx(task.getId(), templateFile, generated.values(), buildStructuredSections(report));
 
         requireUpdated(reportRepository.updateTaskStatus(task.getId(), TASK_STATUS_PROCESSING, TASK_STAGE_STORING_RESULT, null), "task storing status update failed");
         Long wordFileId = saveGeneratedWord(report, reportBytes);
@@ -439,7 +444,8 @@ public class ReportGenerationApplicationService {
     private record VariableGenerationResult(Map<String, String> values, int failedCount,
                                             List<String> failedVariables) { }
 
-    private byte[] renderDocx(Long taskId, FileObjectRecord templateFile, Map<String, String> variables) {
+    private byte[] renderDocx(Long taskId, FileObjectRecord templateFile, Map<String, String> variables,
+                              List<StructuredReportSection> sections) {
         requireUpdated(reportRepository.updateTaskStatus(taskId, TASK_STATUS_PROCESSING, TASK_STAGE_TEMPLATE_RENDERING, null), "task rendering status update failed");
         try (InputStream inputStream = storageAdapter.openObject(templateFile.getObjectName());
              XWPFDocument document = new XWPFDocument(inputStream);
@@ -456,6 +462,7 @@ public class ReportGenerationApplicationService {
                         "报告变量未生成: " + String.join(",", missing));
             }
             replaceVariables(document, variables);
+            reportStructuredContentRenderer.append(document, sections);
             document.write(outputStream);
             byte[] bytes = outputStream.toByteArray();
             if (bytes.length == 0) {
@@ -469,6 +476,37 @@ public class ReportGenerationApplicationService {
         } catch (RuntimeException ex) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "报告模板文件读取失败: " + ex.getMessage());
         }
+    }
+
+    private List<StructuredReportSection> buildStructuredSections(Report report) {
+        List<StructuredReportSection> sections = new ArrayList<>();
+        for (ReportVariableValue variable : reportRepository.findVariablesByReportId(report.getId())) {
+            if (!ReportVariableStatus.SUCCESS.name().equals(variable.getStatus())
+                    || variable.getReferencesJson() == null || variable.getReferencesJson().isBlank()) {
+                continue;
+            }
+            try {
+                List<Map<String, Object>> references = objectMapper.readValue(variable.getReferencesJson(),
+                        new TypeReference<>() {});
+                for (Map<String, Object> reference : references) {
+                    if (!"DATABASE".equalsIgnoreCase(String.valueOf(reference.get("type")))) {
+                        continue;
+                    }
+                    List<String> columns = objectMapper.convertValue(reference.get("columns"), new TypeReference<>() {});
+                    List<Map<String, Object>> rows = objectMapper.convertValue(reference.get("rows"), new TypeReference<>() {});
+                    StructuredReportTable table = reportTableAnalysisService.normalize(
+                            columns, rows, "数据源 " + String.valueOf(reference.getOrDefault("dataSourceId", "")));
+                    ReportStatistics statistics = reportTableAnalysisService.statistics(table);
+                    sections.add(new StructuredReportSection(variable.getVariableName(),
+                            variable.getVariableDescription(), variable.getVariableDescription(), table, statistics,
+                            reportTableAnalysisService.standardConclusion(statistics), false, null));
+                    break;
+                }
+            } catch (JsonProcessingException | IllegalArgumentException ignored) {
+                // Keep the original variable text when an old reference cannot be upgraded.
+            }
+        }
+        return sections;
     }
 
     private Set<String> extractVariables(XWPFDocument document) {
