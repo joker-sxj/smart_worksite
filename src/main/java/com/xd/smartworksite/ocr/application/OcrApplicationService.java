@@ -343,6 +343,8 @@ public class OcrApplicationService {
         field.setEvidence(stringValue(map.get("evidence")));
         Object revised = map.get("revised");
         field.setRevised(revised instanceof Boolean value ? value : Boolean.FALSE);
+        Object manualConfirmation = map.get("manualConfirmationRequired");
+        field.setManualConfirmationRequired(manualConfirmation instanceof Boolean value ? value : Boolean.FALSE);
         return field;
     }
 

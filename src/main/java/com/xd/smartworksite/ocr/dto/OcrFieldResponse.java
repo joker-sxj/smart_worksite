@@ -10,6 +10,7 @@ public class OcrFieldResponse {
     private Integer pageNo;
     private String evidence;
     private Boolean revised;
+    private Boolean manualConfirmationRequired;
 
     public String getFieldKey() { return fieldKey; }
     public void setFieldKey(String fieldKey) { this.fieldKey = fieldKey; }
@@ -29,4 +30,6 @@ public class OcrFieldResponse {
     public void setEvidence(String evidence) { this.evidence = evidence; }
     public Boolean getRevised() { return revised; }
     public void setRevised(Boolean revised) { this.revised = revised; }
+    public Boolean getManualConfirmationRequired() { return manualConfirmationRequired; }
+    public void setManualConfirmationRequired(Boolean value) { manualConfirmationRequired = value; }
 }

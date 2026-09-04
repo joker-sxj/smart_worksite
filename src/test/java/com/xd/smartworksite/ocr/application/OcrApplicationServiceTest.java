@@ -40,6 +40,7 @@ class OcrApplicationServiceTest {
         OcrRecordResponse response = fixture.service.get(1L);
 
         assertThat(response.getFields().get(0).getFieldValue()).isEqualTo("370202********1234");
+        assertThat(response.getFields().get(0).getManualConfirmationRequired()).isFalse();
         assertThat(response.getRawResult().toString()).doesNotContain("370202199001011234");
     }
 
