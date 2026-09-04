@@ -270,7 +270,9 @@ public class OcrApplicationService {
     }
 
     private int progress(String status) {
-        if (OcrStatus.SUCCESS.name().equals(status) || OcrStatus.FAILED.name().equals(status)) {
+        if (OcrStatus.SUCCESS.name().equals(status)
+                || OcrStatus.PARTIAL_SUCCESS.name().equals(status)
+                || OcrStatus.FAILED.name().equals(status)) {
             return 100;
         }
         if (OcrStatus.PROCESSING.name().equals(status)) {
