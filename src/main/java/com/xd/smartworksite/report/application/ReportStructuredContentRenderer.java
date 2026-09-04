@@ -7,11 +7,16 @@ import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
+import org.apache.poi.util.Units;
 
 import java.util.List;
 import java.util.Map;
+import java.io.ByteArrayInputStream;
+
+import static org.apache.poi.xwpf.usermodel.Document.PICTURE_TYPE_PNG;
 
 public class ReportStructuredContentRenderer {
+    private final ReportChartRenderer chartRenderer = new ReportChartRenderer();
     public void append(XWPFDocument document, List<StructuredReportSection> sections) {
         for (StructuredReportSection section : sections == null ? List.<StructuredReportSection>of() : sections) {
             appendParagraph(document, section.title());
@@ -22,6 +27,7 @@ public class ReportStructuredContentRenderer {
             if (table != null && table.totalRows() > 0) {
                 appendTable(document, table);
             }
+            appendChart(document, section);
             appendParagraph(document, "数据结论：" + safe(section.conclusion()));
             if (table != null) {
                 String source = "来源：" + safe(table.source());
@@ -30,6 +36,22 @@ public class ReportStructuredContentRenderer {
                 }
                 appendParagraph(document, source);
             }
+        }
+    }
+
+    private void appendChart(XWPFDocument document, StructuredReportSection section) {
+        if (section.statistics() == null || section.statistics().groupCounts().isEmpty()) {
+            return;
+        }
+        Map<String, Integer> values = section.statistics().groupCounts().values().iterator().next();
+        try {
+            byte[] chart = chartRenderer.render("BAR", values);
+            XWPFParagraph paragraph = document.createParagraph();
+            paragraph.createRun().setText("数据图表：分类统计");
+            paragraph.createRun().addPicture(new ByteArrayInputStream(chart), PICTURE_TYPE_PNG,
+                    "分类统计", Units.toEMU(500), Units.toEMU(280));
+        } catch (Exception ignored) {
+            appendParagraph(document, "数据图表：当前数据无法绘制");
         }
     }
 
