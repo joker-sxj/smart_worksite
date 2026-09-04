@@ -118,7 +118,10 @@ class OcrService:
         expected_type = str(options.get("invoiceType") or "").strip().upper()
         actual_type = fields[by_key["invoiceType"]].fieldValue if "invoiceType" in by_key else ""
         expected_label = {"VAT_SPECIAL": "专用", "VAT_NORMAL": "普通"}.get(expected_type)
-        type_consistent = bool(expected_label and expected_label in actual_type)
+        type_consistent = bool(
+            expected_type
+            and (actual_type.strip().upper() == expected_type or (expected_label and expected_label in actual_type))
+        )
         if "invoiceType" in by_key and not type_consistent:
             index = by_key["invoiceType"]
             fields[index] = fields[index].model_copy(update={"manualConfirmationRequired": True})
