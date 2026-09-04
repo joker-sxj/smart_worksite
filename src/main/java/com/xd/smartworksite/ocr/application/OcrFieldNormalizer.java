@@ -14,15 +14,14 @@ public class OcrFieldNormalizer {
         double confidence = confidenceValue(source.get("confidence"));
         boolean recognized = !rawValue.isBlank();
 
-        result.put("fieldValue", maskSensitive && isSensitive(key)
-                ? maskValue(key, rawValue) : rawValue);
+        result.put("fieldValue", rawValue);
+        if (isSensitive(key)) {
+            result.put("displayValue", maskSensitive ? maskValue(key, rawValue) : rawValue);
+        }
         result.put("confidence", confidence);
         result.put("recognized", recognized);
         result.put("manualConfirmationRequired", !recognized
                 || confidence < MANUAL_CONFIRMATION_THRESHOLD);
-        if (maskSensitive && isSensitive(key) && recognized) {
-            result.put("rawFieldValue", rawValue);
-        }
         return result;
     }
 

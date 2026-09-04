@@ -290,8 +290,9 @@ public class OcrApplicationService {
         response.setOcrType(record.getOcrType());
         response.setStatus(record.getStatus());
         response.setProgress(progress(record.getStatus()));
-        response.setFields(parseFields(root.get("fields")));
-        response.setRawResult(root);
+        boolean maskSensitive = !SecurityUtils.isPlatformAdmin() && !SecurityUtils.hasRole("OCR_MANAGER");
+        response.setFields(parseFields(root.get("fields"), maskSensitive));
+        response.setRawResult(maskSensitive ? maskedResult(root) : root);
         response.setErrorMessage(record.getErrorMessage());
         response.setCreatedAt(record.getCreatedAt());
         response.setUpdatedAt(record.getUpdatedAt());
@@ -311,20 +312,31 @@ public class OcrApplicationService {
     }
 
     private List<OcrFieldResponse> parseFields(Object value) {
+        return parseFields(value, false);
+    }
+
+    private List<OcrFieldResponse> parseFields(Object value, boolean maskSensitive) {
         if (!(value instanceof List<?> list)) {
             return new ArrayList<>();
         }
         return list.stream()
                 .filter(item -> item instanceof Map<?, ?>)
-                .map(item -> toFieldResponse(castMap(item)))
+                .map(item -> toFieldResponse(castMap(item), maskSensitive))
                 .toList();
     }
 
     private OcrFieldResponse toFieldResponse(Map<String, Object> map) {
+        return toFieldResponse(map, false);
+    }
+
+    private OcrFieldResponse toFieldResponse(Map<String, Object> map, boolean maskSensitive) {
+        map = fieldNormalizer.normalize(map, maskSensitive);
         OcrFieldResponse field = new OcrFieldResponse();
         field.setFieldKey(stringValue(map.get("fieldKey")));
         field.setFieldName(stringValue(map.get("fieldName")));
-        field.setFieldValue(stringValue(map.get("fieldValue")));
+        field.setFieldValue(stringValue(maskSensitive && map.containsKey("displayValue")
+                ? map.get("displayValue") : map.get("fieldValue")));
+        field.setDisplayValue(stringValue(map.get("displayValue")));
         field.setConfidence(doubleValue(map.get("confidence")));
         field.setLocation(stringValue(map.get("location")));
         field.setPageNo(intValue(map.get("pageNo")));
@@ -332,6 +344,26 @@ public class OcrApplicationService {
         Object revised = map.get("revised");
         field.setRevised(revised instanceof Boolean value ? value : Boolean.FALSE);
         return field;
+    }
+
+    private Map<String, Object> maskedResult(Map<String, Object> root) {
+        Map<String, Object> masked = new LinkedHashMap<>(root);
+        Object fields = root.get("fields");
+        if (fields instanceof List<?> list) {
+            masked.put("fields", list.stream()
+                    .filter(item -> item instanceof Map<?, ?>)
+                    .map(item -> {
+                        Map<String, Object> field = fieldNormalizer.normalize(castMap(item), true);
+                        if (field.containsKey("displayValue")) {
+                            field.put("fieldValue", field.get("displayValue"));
+                        }
+                        field.remove("displayValue");
+                        return field;
+                    })
+                    .toList());
+        }
+        masked.put("raw", Map.of("redacted", true));
+        return masked;
     }
 
     @SuppressWarnings("unchecked")

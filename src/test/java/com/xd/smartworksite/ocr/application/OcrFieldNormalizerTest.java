@@ -45,15 +45,16 @@ class OcrFieldNormalizerTest {
     }
 
     @Test
-    void masksSensitiveDisplayValueWhileRetainingRawValueForAuthorizedUse() {
+    void providesMaskedDisplayValueWithoutDuplicatingSensitiveRawValue() {
         Map<String, Object> field = normalizer.normalize(Map.of(
                 "fieldKey", "idNumber",
                 "fieldName", "身份证号",
                 "fieldValue", "370202199001011234",
                 "confidence", 0.95), true);
 
-        assertThat(field).containsEntry("fieldValue", "370202********1234")
-                .containsEntry("rawFieldValue", "370202199001011234")
+        assertThat(field).containsEntry("fieldValue", "370202199001011234")
+                .containsEntry("displayValue", "370202********1234")
+                .doesNotContainKey("rawFieldValue")
                 .containsEntry("recognized", true);
     }
 }

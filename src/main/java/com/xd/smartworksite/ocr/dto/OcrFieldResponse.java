@@ -4,6 +4,7 @@ public class OcrFieldResponse {
     private String fieldKey;
     private String fieldName;
     private String fieldValue;
+    private String displayValue;
     private Double confidence;
     private String location;
     private Integer pageNo;
@@ -16,6 +17,8 @@ public class OcrFieldResponse {
     public void setFieldName(String fieldName) { this.fieldName = fieldName; }
     public String getFieldValue() { return fieldValue; }
     public void setFieldValue(String fieldValue) { this.fieldValue = fieldValue; }
+    public String getDisplayValue() { return displayValue; }
+    public void setDisplayValue(String displayValue) { this.displayValue = displayValue; }
     public Double getConfidence() { return confidence; }
     public void setConfidence(Double confidence) { this.confidence = confidence; }
     public String getLocation() { return location; }
