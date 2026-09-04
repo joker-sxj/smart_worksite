@@ -120,7 +120,7 @@ class OcrRecognitionWorkerTest {
     }
 
     @Test
-    void completesAndOrdersIdCardFieldsBeforePersistence() throws Exception {
+    void ordersIdCardFieldsAndFlagsMissingValuesBeforePersistence() throws Exception {
         OcrRepository repository = mock(OcrRepository.class);
         FileObjectApplicationService fileService = mock(FileObjectApplicationService.class);
         OcrPythonServiceClient pythonClient = mock(OcrPythonServiceClient.class);
@@ -160,7 +160,8 @@ class OcrRecognitionWorkerTest {
                 .recognize(3L);
 
         ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
-        verify(repository).updateRecordSuccess(eq(3L), jsonCaptor.capture());
+        verify(repository).updateRecordPartialSuccess(eq(3L), jsonCaptor.capture(),
+                eq("OCR字段不完整，需人工确认"));
         Map<String, Object> result = objectMapper.readValue(jsonCaptor.getValue(), new TypeReference<>() {});
         List<Map<String, Object>> fields = (List<Map<String, Object>>) result.get("fields");
 
@@ -210,6 +211,46 @@ class OcrRecognitionWorkerTest {
                 .recognize(5L);
 
         verify(repository).updateRecordPartialSuccess(eq(5L), any(),
+                eq("OCR字段不完整，需人工确认"));
+    }
+
+    @Test
+    void marksMostlyMissingStandardFieldsForManualConfirmation() {
+        OcrRepository repository = mock(OcrRepository.class);
+        FileObjectApplicationService fileService = mock(FileObjectApplicationService.class);
+        OcrPythonServiceClient pythonClient = mock(OcrPythonServiceClient.class);
+        StorageAdapter storage = mock(StorageAdapter.class);
+        ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
+
+        OcrRecord record = new OcrRecord();
+        record.setId(6L);
+        record.setProjectId(10L);
+        record.setFileId(25L);
+        record.setTaskId(35L);
+        record.setOcrType("ID_CARD");
+        when(repository.findRecordById(6L)).thenReturn(Optional.of(record));
+
+        FileObjectResponse file = new FileObjectResponse();
+        file.setFileId(25L);
+        file.setProjectId(10L);
+        file.setFileName("non-id-document.pdf");
+        file.setObjectName("projects/10/OCR/non-id-document.pdf");
+        file.setContentType("image/jpeg");
+        when(fileService.getFileForSystem(25L)).thenReturn(file);
+        when(storage.openObject(file.getObjectName()))
+                .thenReturn(new ByteArrayInputStream("fake-image".getBytes(StandardCharsets.UTF_8)));
+
+        AiProviderResponse response = new AiProviderResponse();
+        response.setSuccess(true);
+        response.setData(Map.of("ocrType", "ID_CARD", "fields", List.of(
+                Map.of("fieldKey", "hasWatermark", "fieldName", "是否有水印",
+                        "fieldValue", "否", "confidence", 0.8))));
+        when(pythonClient.recognize(eq(10L), any())).thenReturn(response);
+
+        new OcrRecognitionWorker(repository, fileService, storage, pythonClient, projectAccess, new ObjectMapper())
+                .recognize(6L);
+
+        verify(repository).updateRecordPartialSuccess(eq(6L), any(),
                 eq("OCR字段不完整，需人工确认"));
     }
 

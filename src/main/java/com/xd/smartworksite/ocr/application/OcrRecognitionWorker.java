@@ -70,6 +70,8 @@ public class OcrRecognitionWorker {
                     new FieldDefinition("amountWithoutTax", "不含税金额", List.of()),
                     new FieldDefinition("taxAmount", "税额", List.of()),
                     new FieldDefinition("totalAmount", "价税合计", List.of())));
+    private static final Map<String, Set<String>> AUXILIARY_FIELDS = Map.of(
+            "ID_CARD", Set.of("haswatermark"));
 
     private final OcrRepository ocrRepository;
     private final FileObjectApplicationService fileObjectApplicationService;
@@ -113,11 +115,13 @@ public class OcrRecognitionWorker {
             OcrProviderRequest request = buildProviderRequest(record, file, prepareDataUrls(file));
             AiProviderResponse providerResponse = ocrPythonServiceClient.recognize(record.getProjectId(), request);
 
-            String fieldsJson = buildFieldsJson(record, providerResponse, System.currentTimeMillis() - started);
-            if (isEmptyRecognition(providerResponse)) {
-                ocrRepository.updateRecordPartialSuccess(recordId, fieldsJson, "OCR字段不完整，需人工确认");
+            RecognitionResult result = buildRecognitionResult(
+                    record, providerResponse, System.currentTimeMillis() - started);
+            if (result.manualConfirmationRequired()) {
+                ocrRepository.updateRecordPartialSuccess(
+                        recordId, result.fieldsJson(), "OCR字段不完整，需人工确认");
             } else {
-                ocrRepository.updateRecordSuccess(recordId, fieldsJson);
+                ocrRepository.updateRecordSuccess(recordId, result.fieldsJson());
             }
             ocrRepository.updateTaskStatus(record.getTaskId(), TASK_STATUS_SUCCESS, "FINISH", null);
             saveStageLog(record, TASK_STATUS_SUCCESS, null, "OCR识别完成", null, System.currentTimeMillis() - started);
@@ -128,12 +132,6 @@ public class OcrRecognitionWorker {
             ocrRepository.updateTaskStatus(record.getTaskId(), TASK_STATUS_FAILED, STAGE_OCR_RECOGNITION, message);
             saveStageLog(record, TASK_STATUS_FAILED, null, null, message, System.currentTimeMillis() - started);
         }
-    }
-
-    private boolean isEmptyRecognition(AiProviderResponse providerResponse) {
-        if (providerResponse == null || providerResponse.getData() == null) return true;
-        Object fields = providerResponse.getData().get("fields");
-        return !(fields instanceof List<?> list) || list.isEmpty();
     }
 
     private OcrProviderRequest buildProviderRequest(OcrRecord record,
@@ -210,7 +208,9 @@ public class OcrRecognitionWorker {
         return "data:" + contentType + ";base64," + Base64.getEncoder().encodeToString(bytes);
     }
 
-    private String buildFieldsJson(OcrRecord record, AiProviderResponse providerResponse, long elapsedMs) {
+    private RecognitionResult buildRecognitionResult(OcrRecord record,
+                                                      AiProviderResponse providerResponse,
+                                                      long elapsedMs) {
         Map<String, Object> data = providerResponse.getData() == null
                 ? new LinkedHashMap<>()
                 : new LinkedHashMap<>(providerResponse.getData());
@@ -235,7 +235,30 @@ public class OcrRecognitionWorker {
         result.put("fields", reconciliation.fields());
         result.put("extras", extras);
         result.put("raw", data.getOrDefault("raw", Map.of()));
-        return writeJson(result);
+        return new RecognitionResult(writeJson(result), requiresManualConfirmation(record, reconciliation.fields()));
+    }
+
+    private boolean requiresManualConfirmation(OcrRecord record, List<Map<String, Object>> fields) {
+        String ocrType = record.getOcrType() == null ? "" : record.getOcrType().trim().toUpperCase();
+        if ("CONTRACT".equals(ocrType)) {
+            ocrType = "CUSTOM";
+        }
+        if ("CUSTOM".equals(ocrType)) {
+            return fields.stream().noneMatch(this::hasRecognizedValue);
+        }
+        for (Map<String, Object> field : fields) {
+            String fieldKey = matchToken(field.get("fieldKey"));
+            if (!AUXILIARY_FIELDS.getOrDefault(ocrType, Set.of()).contains(fieldKey)
+                    && !hasRecognizedValue(field)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasRecognizedValue(Map<String, Object> field) {
+        return !stringValue(field.get("fieldValue")).isBlank()
+                && !Boolean.FALSE.equals(field.get("recognized"));
     }
 
     private List<FieldDefinition> requiredFieldDefinitions(OcrRecord record) {
@@ -402,6 +425,8 @@ public class OcrRecognitionWorker {
     private record FieldDefinition(String fieldKey, String fieldName, List<String> aliases) {}
 
     private record FieldReconciliation(List<Map<String, Object>> fields, List<Object> unmappedFields) {}
+
+    private record RecognitionResult(String fieldsJson, boolean manualConfirmationRequired) {}
     private Map<String, Object> parseJsonObject(String json) {
         try {
             Object value = objectMapper.readValue(json, Object.class);
