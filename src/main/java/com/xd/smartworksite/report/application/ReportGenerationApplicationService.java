@@ -869,6 +869,7 @@ public class ReportGenerationApplicationService {
         response.setStartedAt(variable.getStartedAt());
         response.setFinishedAt(variable.getFinishedAt());
         response.setUpdatedAt(variable.getUpdatedAt());
+        response.setReferencesJson(variable.getReferencesJson());
         return response;
     }
 }

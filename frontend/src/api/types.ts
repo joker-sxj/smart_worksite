@@ -312,6 +312,7 @@ export interface ReportVariableItem {
   startedAt?: string;
   finishedAt?: string;
   updatedAt?: string;
+  referencesJson?: string;
 }
 
 export interface UserItem {

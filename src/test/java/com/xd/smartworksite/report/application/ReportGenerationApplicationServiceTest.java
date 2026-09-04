@@ -357,11 +357,13 @@ class ReportGenerationApplicationServiceTest {
     @Test
     void getReportVariablesReturnsPersistedProgressAfterAccessCheck() {
         ReportCreateResponse created = context.service.createReport(request());
+        context.repository.variables.get(0).setReferencesJson("[{\"type\":\"DATABASE\",\"rows\":[{\"risk\":\"一级\"}]}]");
 
         var records = context.service.getReportVariables(created.getReportId());
 
         assertThat(records).hasSize(2);
         assertThat(records.get(0).getVariableName()).isEqualTo("var_summary");
+        assertThat(records.get(0).getReferencesJson()).contains("DATABASE", "一级");
         verify(context.access).requireProjectAccess(1L);
     }
 

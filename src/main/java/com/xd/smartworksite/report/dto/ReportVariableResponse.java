@@ -16,6 +16,7 @@ public class ReportVariableResponse {
     private LocalDateTime startedAt;
     private LocalDateTime finishedAt;
     private LocalDateTime updatedAt;
+    private String referencesJson;
 
     public Long getVariableId() { return variableId; }
     public void setVariableId(Long variableId) { this.variableId = variableId; }
@@ -43,4 +44,6 @@ public class ReportVariableResponse {
     public void setFinishedAt(LocalDateTime finishedAt) { this.finishedAt = finishedAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public String getReferencesJson() { return referencesJson; }
+    public void setReferencesJson(String referencesJson) { this.referencesJson = referencesJson; }
 }

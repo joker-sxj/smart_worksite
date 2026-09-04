@@ -180,6 +180,15 @@ onBeforeUnmount(() => {
               <span v-else class="variable-empty">等待生成</span>
             </template>
           </el-table-column>
+          <el-table-column label="数据依据" min-width="180">
+            <template #default="{ row }">
+              <el-popover v-if="row.referencesJson && row.referencesJson !== '[]'" placement="left" width="520" trigger="click">
+                <pre class="reference-json">{{ row.referencesJson }}</pre>
+                <template #reference><el-button link type="primary">查看真实查询与数据</el-button></template>
+              </el-popover>
+              <span v-else class="variable-empty">无数据库引用</span>
+            </template>
+          </el-table-column>
         </el-table>
         <EmptyState v-else description="暂无报告变量记录" />
       </el-card>
@@ -204,4 +213,5 @@ onBeforeUnmount(() => {
 .variable-value { white-space: pre-wrap; line-height: 1.65; }
 .variable-error { color: var(--el-color-danger); }
 .variable-empty { color: var(--sw-muted); }
+.reference-json { max-height: 360px; overflow: auto; margin: 0; white-space: pre-wrap; font-size: 12px; }
 </style>
