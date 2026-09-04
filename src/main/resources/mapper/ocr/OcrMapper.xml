@@ -81,6 +81,16 @@
           and deleted = 0
     </update>
 
+    <update id="updateRecordPartialSuccess">
+        update ocr_record
+        set status = 'PARTIAL_SUCCESS',
+            fields_json = #{fieldsJson},
+            error_message = #{errorMessage},
+            updated_by = 1
+        where id = #{recordId}
+          and deleted = 0
+    </update>
+
     <update id="updateRecordFields">
         update ocr_record
         set fields_json = #{fieldsJson},

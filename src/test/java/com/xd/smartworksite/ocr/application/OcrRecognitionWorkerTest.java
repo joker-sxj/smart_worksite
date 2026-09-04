@@ -176,6 +176,44 @@ class OcrRecognitionWorkerTest {
     }
 
     @Test
+    void marksIncompleteStandardRecognitionForManualConfirmationInsteadOfSuccess() {
+        OcrRepository repository = mock(OcrRepository.class);
+        FileObjectApplicationService fileService = mock(FileObjectApplicationService.class);
+        OcrPythonServiceClient pythonClient = mock(OcrPythonServiceClient.class);
+        StorageAdapter storage = mock(StorageAdapter.class);
+        ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
+
+        OcrRecord record = new OcrRecord();
+        record.setId(5L);
+        record.setProjectId(10L);
+        record.setFileId(24L);
+        record.setTaskId(34L);
+        record.setOcrType("ID_CARD");
+        when(repository.findRecordById(5L)).thenReturn(Optional.of(record));
+
+        FileObjectResponse file = new FileObjectResponse();
+        file.setFileId(24L);
+        file.setProjectId(10L);
+        file.setFileName("id-card.jpg");
+        file.setObjectName("projects/10/OCR/id-card.jpg");
+        file.setContentType("image/jpeg");
+        when(fileService.getFileForSystem(24L)).thenReturn(file);
+        when(storage.openObject(file.getObjectName()))
+                .thenReturn(new ByteArrayInputStream("fake-image".getBytes(StandardCharsets.UTF_8)));
+
+        AiProviderResponse response = new AiProviderResponse();
+        response.setSuccess(true);
+        response.setData(Map.of("ocrType", "ID_CARD", "fields", List.of()));
+        when(pythonClient.recognize(eq(10L), any())).thenReturn(response);
+
+        new OcrRecognitionWorker(repository, fileService, storage, pythonClient, projectAccess, new ObjectMapper())
+                .recognize(5L);
+
+        verify(repository).updateRecordPartialSuccess(eq(5L), any(),
+                eq("OCR字段不完整，需人工确认"));
+    }
+
+    @Test
     void completesCustomFieldsFromPersistedDefinitionsBeforePersistence() throws Exception {
         OcrRepository repository = mock(OcrRepository.class);
         FileObjectApplicationService fileService = mock(FileObjectApplicationService.class);

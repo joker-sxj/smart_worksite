@@ -80,9 +80,9 @@ const invoiceTypes = [
   { label: '增值税普通发票', value: 'VAT_NORMAL' }
 ];
 const retryableStatuses = new Set(['FAILED']);
-const downloadableStatuses = new Set(['SUCCESS']);
-const terminalStatuses = new Set(['SUCCESS', 'FAILED', 'CANCELED']);
-const ocrStatuses = ['PENDING', 'PROCESSING', 'SUCCESS', 'FAILED', 'CANCELED'];
+const downloadableStatuses = new Set(['SUCCESS', 'PARTIAL_SUCCESS']);
+const terminalStatuses = new Set(['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'CANCELED']);
+const ocrStatuses = ['PENDING', 'PROCESSING', 'SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'CANCELED'];
 let pollTimer: number | undefined;
 let pollCount = 0;
 
@@ -99,7 +99,7 @@ function canDownloadRecord(item: OcrRecord) {
 }
 
 function canSaveFields() {
-  return Boolean(canManageOcr.value && record.value && normalizeStatus(record.value.status) === 'SUCCESS');
+  return Boolean(canManageOcr.value && record.value && ['SUCCESS', 'PARTIAL_SUCCESS'].includes(normalizeStatus(record.value.status)));
 }
 
 function ocrTypeLabel(type?: string) {

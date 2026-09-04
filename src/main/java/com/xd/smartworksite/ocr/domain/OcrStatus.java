@@ -6,6 +6,7 @@ public enum OcrStatus {
     PENDING,
     PROCESSING,
     SUCCESS,
+    PARTIAL_SUCCESS,
     FAILED,
     CANCELED;
 

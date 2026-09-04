@@ -693,6 +693,8 @@ QA 消息写入规则：问题消息创建后必须持有可读 ID；AI 返回�
 
 ### OCR
 
+OCR 识别通过 Java 异步任务调用 Python 本地智能服务。记录状态包括 `PENDING`、`PROCESSING`、`SUCCESS`、`PARTIAL_SUCCESS`、`FAILED` 和 `CANCELED`；`PARTIAL_SUCCESS` 表示结果已保存但存在需要人工确认的字段，不会被伪装为完整成功。`SUCCESS` 和 `PARTIAL_SUCCESS` 均可查看、下载和修订结果，失败重试受任务上限约束。
+
 当前 OCR Controller 统一要求 `ocr:view` 权限，包括提交识别、字段修订、重试和删除操作。
 
 | 方法 | 路径 | 说明 |

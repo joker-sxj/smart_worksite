@@ -114,7 +114,11 @@ public class OcrRecognitionWorker {
             AiProviderResponse providerResponse = ocrPythonServiceClient.recognize(record.getProjectId(), request);
 
             String fieldsJson = buildFieldsJson(record, providerResponse, System.currentTimeMillis() - started);
-            ocrRepository.updateRecordSuccess(recordId, fieldsJson);
+            if (isEmptyRecognition(providerResponse)) {
+                ocrRepository.updateRecordPartialSuccess(recordId, fieldsJson, "OCR字段不完整，需人工确认");
+            } else {
+                ocrRepository.updateRecordSuccess(recordId, fieldsJson);
+            }
             ocrRepository.updateTaskStatus(record.getTaskId(), TASK_STATUS_SUCCESS, "FINISH", null);
             saveStageLog(record, TASK_STATUS_SUCCESS, null, "OCR识别完成", null, System.currentTimeMillis() - started);
         } catch (Exception ex) {
@@ -124,6 +128,12 @@ public class OcrRecognitionWorker {
             ocrRepository.updateTaskStatus(record.getTaskId(), TASK_STATUS_FAILED, STAGE_OCR_RECOGNITION, message);
             saveStageLog(record, TASK_STATUS_FAILED, null, null, message, System.currentTimeMillis() - started);
         }
+    }
+
+    private boolean isEmptyRecognition(AiProviderResponse providerResponse) {
+        if (providerResponse == null || providerResponse.getData() == null) return true;
+        Object fields = providerResponse.getData().get("fields");
+        return !(fields instanceof List<?> list) || list.isEmpty();
     }
 
     private OcrProviderRequest buildProviderRequest(OcrRecord record,

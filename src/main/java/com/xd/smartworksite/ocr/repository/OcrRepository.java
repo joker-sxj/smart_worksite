@@ -20,6 +20,8 @@ public interface OcrRepository {
 
     void updateRecordSuccess(Long recordId, String fieldsJson);
 
+    void updateRecordPartialSuccess(Long recordId, String fieldsJson, String errorMessage);
+
     void updateRecordFields(Long recordId, String fieldsJson);
 
     void markRecordDeleted(Long recordId);

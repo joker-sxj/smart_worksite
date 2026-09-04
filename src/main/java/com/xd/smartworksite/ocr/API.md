@@ -210,6 +210,8 @@ name, gender, nation, birthDate, address, idNumber,
 issuingAuthority, validPeriod, hasWatermark
 ```
 
+OCR 记录状态为 `PENDING` 时表示已创建任务，`PROCESSING` 表示本地识别进行中，`SUCCESS` 表示字段完整识别完成，`PARTIAL_SUCCESS` 表示已保存部分结果但仍有字段需要人工确认，`FAILED` 表示未能生成有效结果。`PARTIAL_SUCCESS` 和 `SUCCESS` 均允许查看和下载结构化结果；部分结果也允许人工修订。失败重试由任务重试策略限制，不会无限执行。
+
 水印详情预期位于：
 
 ```json

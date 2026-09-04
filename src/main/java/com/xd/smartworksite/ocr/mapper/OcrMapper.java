@@ -26,6 +26,10 @@ public interface OcrMapper {
     int updateRecordSuccess(@Param("recordId") Long recordId,
                             @Param("fieldsJson") String fieldsJson);
 
+    int updateRecordPartialSuccess(@Param("recordId") Long recordId,
+                                   @Param("fieldsJson") String fieldsJson,
+                                   @Param("errorMessage") String errorMessage);
+
     int updateRecordFields(@Param("recordId") Long recordId,
                            @Param("fieldsJson") String fieldsJson);
 

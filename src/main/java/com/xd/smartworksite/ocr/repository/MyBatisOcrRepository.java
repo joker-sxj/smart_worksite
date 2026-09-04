@@ -49,6 +49,11 @@ public class MyBatisOcrRepository implements OcrRepository {
     }
 
     @Override
+    public void updateRecordPartialSuccess(Long recordId, String fieldsJson, String errorMessage) {
+        ocrMapper.updateRecordPartialSuccess(recordId, fieldsJson, errorMessage);
+    }
+
+    @Override
     public void updateRecordFields(Long recordId, String fieldsJson) {
         ocrMapper.updateRecordFields(recordId, fieldsJson);
     }
