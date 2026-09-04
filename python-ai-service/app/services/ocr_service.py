@@ -1,3 +1,5 @@
+from decimal import Decimal, InvalidOperation
+import re
 from typing import Any
 
 from app.models.schemas import OcrRecognizeRequest, OcrRecognizeData, OcrFieldData
@@ -70,6 +72,7 @@ class OcrService:
             request.file.contentType,
         )
         data = self._normalize_response(raw, ocr_type, field_definitions)
+        data = self._apply_type_validation(data, request.options)
         if prepared is not None:
             enhanced_sources = prepared.enhanced_sources
             enhanced_raw, _ = await self.qwen.vision_json_chat(prompt, enhanced_sources, request.file.contentType)
@@ -77,6 +80,79 @@ class OcrService:
             usage = dict(usage)
             usage["ocrPasses"] = 2
         return data, usage
+
+    def _apply_type_validation(self, data: OcrRecognizeData, options: dict[str, Any]) -> OcrRecognizeData:
+        if data.ocrType == "LICENSE_PLATE":
+            return self._validate_license_plate(data)
+        if data.ocrType == "INVOICE":
+            return self._validate_invoice(data, options)
+        return data
+
+    def _validate_license_plate(self, data: OcrRecognizeData) -> OcrRecognizeData:
+        fields = list(data.fields)
+        plate_index = next((index for index, field in enumerate(fields) if field.fieldKey == "plateNumber"), None)
+        if plate_index is None:
+            return data
+        plate = fields[plate_index]
+        normalized = re.sub(r"[\s·•・.\-]", "", plate.fieldValue).upper()
+        pattern = re.compile(
+            r"^[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领]"
+            r"[A-Z](?:[A-HJ-NP-Z0-9]{5}|[DF][A-HJ-NP-Z0-9][0-9]{4}|[0-9]{5}[DF])$"
+        )
+        valid = bool(pattern.fullmatch(normalized))
+        fields[plate_index] = plate.model_copy(update={
+            "fieldValue": normalized,
+            "recognized": bool(normalized),
+            "manualConfirmationRequired": plate.manualConfirmationRequired or not valid,
+        })
+        extras = dict(data.extras)
+        validation = as_dict(extras.get("validation"))
+        validation["plateNumberValid"] = valid
+        validation["plateNumberNormalized"] = normalized
+        extras["validation"] = validation
+        return data.model_copy(update={"fields": fields, "extras": extras})
+
+    def _validate_invoice(self, data: OcrRecognizeData, options: dict[str, Any]) -> OcrRecognizeData:
+        fields = list(data.fields)
+        by_key = {field.fieldKey: index for index, field in enumerate(fields)}
+        expected_type = str(options.get("invoiceType") or "").strip().upper()
+        actual_type = fields[by_key["invoiceType"]].fieldValue if "invoiceType" in by_key else ""
+        expected_label = {"VAT_SPECIAL": "专用", "VAT_NORMAL": "普通"}.get(expected_type)
+        type_consistent = bool(expected_label and expected_label in actual_type)
+        if "invoiceType" in by_key and not type_consistent:
+            index = by_key["invoiceType"]
+            fields[index] = fields[index].model_copy(update={"manualConfirmationRequired": True})
+
+        amount_keys = ("amountWithoutTax", "taxAmount", "totalAmount")
+        amounts = {key: self._money(fields[by_key[key]].fieldValue) for key in amount_keys if key in by_key}
+        amounts_available = len(amounts) == len(amount_keys) and all(value is not None for value in amounts.values())
+        amounts_consistent = bool(
+            amounts_available
+            and abs(amounts["amountWithoutTax"] + amounts["taxAmount"] - amounts["totalAmount"]) <= Decimal("0.01")
+        )
+        if amounts_available and not amounts_consistent:
+            for key in amount_keys:
+                index = by_key[key]
+                fields[index] = fields[index].model_copy(update={"manualConfirmationRequired": True})
+
+        extras = dict(data.extras)
+        validation = as_dict(extras.get("validation"))
+        validation.update({
+            "invoiceTypeConsistent": type_consistent,
+            "amountsAvailable": amounts_available,
+            "amountsConsistent": amounts_consistent if amounts_available else None,
+        })
+        extras["validation"] = validation
+        return data.model_copy(update={"fields": fields, "extras": extras})
+
+    def _money(self, value: str) -> Decimal | None:
+        normalized = re.sub(r"[^0-9.\-]", "", value or "")
+        if not normalized:
+            return None
+        try:
+            return Decimal(normalized)
+        except InvalidOperation:
+            return None
 
     def _merge_dual_pass(self, original: OcrRecognizeData, enhanced: OcrRecognizeData) -> OcrRecognizeData:
         conflicts: list[str] = []
