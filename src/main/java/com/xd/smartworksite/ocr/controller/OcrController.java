@@ -53,6 +53,7 @@ public class OcrController {
     }
 
     @PutMapping("/records/{recordId}/fields")
+    @PreAuthorize("hasAuthority('ocr:manage')")
     public ApiResponse<OcrRecordResponse> updateFields(@PathVariable Long recordId,
                                                        @Valid @RequestBody OcrFieldUpdateRequest request) {
         return ApiResponse.success(ocrApplicationService.updateFields(recordId, request));

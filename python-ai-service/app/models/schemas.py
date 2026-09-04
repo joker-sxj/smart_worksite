@@ -395,6 +395,7 @@ class OcrFieldData(BaseModel):
     location: str | None = None
     pageNo: int | None = None
     evidence: str | None = None
+    manualConfirmationRequired: bool = False
 
 
 class OcrRecognizeData(BaseModel):

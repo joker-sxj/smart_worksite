@@ -3,6 +3,7 @@ from typing import Any
 from app.models.schemas import OcrRecognizeRequest, OcrRecognizeData, OcrFieldData
 from .qwen_client import QwenClient
 from .normalization import as_dict, optional_int, optional_string
+from .id_card_preprocessor import IdCardPreprocessor
 
 
 STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
@@ -54,13 +55,48 @@ class OcrService:
         file_sources = request.file.dataUrls or ([request.file.downloadUrl] if request.file.downloadUrl else [])
         if not file_sources:
             raise ValueError("OCR file requires dataUrls or downloadUrl")
+        first_sources = file_sources
+        prepared = None
+        if ocr_type == "ID_CARD" and all(source.startswith("data:image/") for source in file_sources):
+            try:
+                prepared = IdCardPreprocessor().prepare(file_sources)
+                first_sources = prepared.original_sources
+            except ValueError:
+                # Keep provider compatibility for opaque test/legacy data URLs; real image inputs use both passes.
+                prepared = None
         raw, usage = await self.qwen.vision_json_chat(
             prompt,
-            file_sources,
+            first_sources,
             request.file.contentType,
         )
         data = self._normalize_response(raw, ocr_type, field_definitions)
+        if prepared is not None:
+            enhanced_sources = prepared.enhanced_sources
+            enhanced_raw, _ = await self.qwen.vision_json_chat(prompt, enhanced_sources, request.file.contentType)
+            data = self._merge_dual_pass(data, self._normalize_response(enhanced_raw, ocr_type, field_definitions))
+            usage = dict(usage)
+            usage["ocrPasses"] = 2
         return data, usage
+
+    def _merge_dual_pass(self, original: OcrRecognizeData, enhanced: OcrRecognizeData) -> OcrRecognizeData:
+        conflicts: list[str] = []
+        merged: list[OcrFieldData] = []
+        for left, right in zip(original.fields, enhanced.fields):
+            left_value = left.fieldValue.strip()
+            right_value = right.fieldValue.strip()
+            if left_value and right_value and left_value == right_value:
+                merged.append(left.model_copy(update={"manualConfirmationRequired": False}))
+            elif not left_value and not right_value:
+                merged.append(left.model_copy(update={"manualConfirmationRequired": True}))
+            else:
+                conflicts.append(left.fieldKey)
+                merged.append(left.model_copy(update={
+                    "fieldValue": "", "confidence": 0, "recognized": False,
+                    "manualConfirmationRequired": True,
+                }))
+        extras = dict(original.extras)
+        extras["dualPass"] = {"conflicts": conflicts, "preprocessing": "orientation_contrast_sharpness"}
+        return original.model_copy(update={"fields": merged, "extras": extras})
 
     def _normalize_type(self, ocr_type: str) -> str:
         normalized = (ocr_type or "").upper()
@@ -180,6 +216,7 @@ class OcrService:
                     fieldValue=selected.fieldValue,
                     confidence=selected.confidence,
                     recognized=bool(selected.fieldValue.strip()),
+                    manualConfirmationRequired=selected.confidence < 0.5,
                     location=selected.location,
                     pageNo=selected.pageNo,
                     evidence=selected.evidence,
@@ -191,6 +228,7 @@ class OcrService:
                     fieldValue="",
                     confidence=0,
                     recognized=False,
+                    manualConfirmationRequired=True,
                 ))
 
         extras = as_dict(raw.get("extras"))

@@ -58,7 +58,7 @@ const recordPreviewIsImage = ref(false);
 const recordPreviewError = ref('');
 const query = reactive({ pageNo: 1, pageSize: 10, status: '', ocrType: '' });
 const currentProjectId = computed(() => projectStore.currentProject?.projectId);
-const canManageOcr = computed(() => userStore.hasPermission('ocr:view'));
+const canManageOcr = computed(() => userStore.hasPermission('ocr:manage'));
 const canSubmit = computed(() => Boolean(canManageOcr.value && currentProjectId.value && file.value && !submitting.value));
 const isPreviewImage = computed(() => Boolean(recordPreviewUrl.value ? recordPreviewIsImage.value : file.value?.type.startsWith('image/') && previewUrl.value));
 const activePreviewUrl = computed(() => recordPreviewUrl.value || previewUrl.value);
