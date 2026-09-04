@@ -99,6 +99,16 @@
           and deleted = 0
     </update>
 
+    <insert id="insertFieldRevision" useGeneratedKeys="true" keyProperty="id">
+        insert into ocr_field_revision (
+            project_id, record_id, field_key, old_value, new_value, revised_by,
+            created_by, updated_by, deleted
+        ) values (
+            #{projectId}, #{recordId}, #{fieldKey}, #{oldValue}, #{newValue}, #{revisedBy},
+            #{revisedBy}, #{revisedBy}, 0
+        )
+    </insert>
+
     <update id="markRecordDeleted">
         update ocr_record
         set deleted = 1,

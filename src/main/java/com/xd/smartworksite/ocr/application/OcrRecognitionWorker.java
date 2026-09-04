@@ -79,6 +79,7 @@ public class OcrRecognitionWorker {
     private final OcrPythonServiceClient ocrPythonServiceClient;
     private final ProjectAccessApplicationService projectAccessApplicationService;
     private final ObjectMapper objectMapper;
+    private final OcrFieldNormalizer fieldNormalizer = new OcrFieldNormalizer();
 
     public OcrRecognitionWorker(OcrRepository ocrRepository,
                                 FileObjectApplicationService fileObjectApplicationService,
@@ -258,7 +259,8 @@ public class OcrRecognitionWorker {
 
     private boolean hasRecognizedValue(Map<String, Object> field) {
         return !stringValue(field.get("fieldValue")).isBlank()
-                && !Boolean.FALSE.equals(field.get("recognized"));
+                && !Boolean.FALSE.equals(field.get("recognized"))
+                && !Boolean.TRUE.equals(field.get("manualConfirmationRequired"));
     }
 
     private List<FieldDefinition> requiredFieldDefinitions(OcrRecord record) {
@@ -328,9 +330,7 @@ public class OcrRecognitionWorker {
             selected.put("fieldKey", definition.fieldKey());
             selected.put("fieldName", definition.fieldName());
             selected.put("fieldValue", fieldValue);
-            selected.put("confidence", confidenceValue(selected.get("confidence")));
-            selected.put("recognized", !fieldValue.isBlank());
-            reconciled.add(selected);
+            reconciled.add(fieldNormalizer.normalize(selected, false));
         }
 
         List<Object> unmapped = new ArrayList<>();
@@ -379,7 +379,7 @@ public class OcrRecognitionWorker {
         field.put("fieldValue", "");
         field.put("confidence", 0.0);
         field.put("recognized", false);
-        return field;
+        return fieldNormalizer.normalize(field, false);
     }
 
     private List<Map<String, Object>> normalizeFields(Object fields) {

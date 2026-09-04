@@ -1,6 +1,7 @@
 package com.xd.smartworksite.ocr.mapper;
 
 import com.xd.smartworksite.ocr.domain.OcrRecord;
+import com.xd.smartworksite.ocr.domain.OcrFieldRevision;
 import com.xd.smartworksite.ocr.domain.OcrTask;
 import com.xd.smartworksite.ocr.domain.TaskStageLog;
 import org.apache.ibatis.annotations.Param;
@@ -32,6 +33,8 @@ public interface OcrMapper {
 
     int updateRecordFields(@Param("recordId") Long recordId,
                            @Param("fieldsJson") String fieldsJson);
+
+    int insertFieldRevision(OcrFieldRevision revision);
 
     int markRecordDeleted(@Param("recordId") Long recordId);
 

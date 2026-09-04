@@ -1,6 +1,7 @@
 package com.xd.smartworksite.ocr.repository;
 
 import com.xd.smartworksite.ocr.domain.OcrRecord;
+import com.xd.smartworksite.ocr.domain.OcrFieldRevision;
 import com.xd.smartworksite.ocr.domain.OcrTask;
 import com.xd.smartworksite.ocr.domain.TaskStageLog;
 import com.xd.smartworksite.ocr.mapper.OcrMapper;
@@ -56,6 +57,11 @@ public class MyBatisOcrRepository implements OcrRepository {
     @Override
     public void updateRecordFields(Long recordId, String fieldsJson) {
         ocrMapper.updateRecordFields(recordId, fieldsJson);
+    }
+
+    @Override
+    public void saveFieldRevision(OcrFieldRevision revision) {
+        ocrMapper.insertFieldRevision(revision);
     }
 
     @Override

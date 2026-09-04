@@ -1,6 +1,7 @@
 package com.xd.smartworksite.ocr.repository;
 
 import com.xd.smartworksite.ocr.domain.OcrRecord;
+import com.xd.smartworksite.ocr.domain.OcrFieldRevision;
 import com.xd.smartworksite.ocr.domain.OcrTask;
 import com.xd.smartworksite.ocr.domain.TaskStageLog;
 
@@ -23,6 +24,8 @@ public interface OcrRepository {
     void updateRecordPartialSuccess(Long recordId, String fieldsJson, String errorMessage);
 
     void updateRecordFields(Long recordId, String fieldsJson);
+
+    void saveFieldRevision(OcrFieldRevision revision);
 
     void markRecordDeleted(Long recordId);
 

@@ -16,6 +16,7 @@ import com.xd.smartworksite.auth.domain.ProjectMember;
 import com.xd.smartworksite.auth.mapper.ProjectMemberMapper;
 import com.xd.smartworksite.ocr.domain.InvoiceType;
 import com.xd.smartworksite.ocr.domain.OcrRecord;
+import com.xd.smartworksite.ocr.domain.OcrFieldRevision;
 import com.xd.smartworksite.ocr.domain.OcrStatus;
 import com.xd.smartworksite.ocr.domain.OcrTask;
 import com.xd.smartworksite.ocr.domain.OcrType;
@@ -49,6 +50,7 @@ public class OcrApplicationService {
     private final ProjectMemberMapper projectMemberMapper;
     private final OcrRecognitionWorker ocrRecognitionWorker;
     private final ObjectMapper objectMapper;
+    private final OcrFieldNormalizer fieldNormalizer = new OcrFieldNormalizer();
 
     public OcrApplicationService(OcrRepository ocrRepository,
                                  FileObjectApplicationService fileObjectApplicationService,
@@ -112,11 +114,38 @@ public class OcrApplicationService {
     @Transactional
     public OcrRecordResponse updateFields(Long recordId, OcrFieldUpdateRequest request) {
         OcrRecord record = requireRecord(recordId);
+        if (!OcrStatus.SUCCESS.name().equals(record.getStatus())
+                && !OcrStatus.PARTIAL_SUCCESS.name().equals(record.getStatus())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "OCR识别尚未完成，暂不能修订字段");
+        }
         Map<String, Object> root = parseFieldsJson(record.getFieldsJson());
-        List<Map<String, Object>> fields = request.getFields().stream().map(this::toFieldMap).toList();
+        Map<String, Map<String, Object>> oldFields = new LinkedHashMap<>();
+        parseFields(root.get("fields")).forEach(field -> oldFields.put(field.getFieldKey(),
+                Map.of("fieldValue", field.getFieldValue() == null ? "" : field.getFieldValue())));
+        List<Map<String, Object>> fields = request.getFields().stream()
+                .map(this::toFieldMap)
+                .map(field -> fieldNormalizer.normalize(field, false))
+                .toList();
         root.put("fields", fields);
         root.putIfAbsent("summary", Map.of("ocrType", record.getOcrType()));
         ocrRepository.updateRecordFields(recordId, writeJson(root));
+        Long userId = SecurityUtils.getCurrentUserId();
+        fields.forEach(field -> {
+            String key = stringValue(field.get("fieldKey"));
+            String newValue = stringValue(field.get("fieldValue"));
+            String oldValue = oldFields.containsKey(key)
+                    ? stringValue(oldFields.get(key).get("fieldValue")) : "";
+            if (!oldValue.equals(newValue)) {
+                OcrFieldRevision revision = new OcrFieldRevision();
+                revision.setProjectId(record.getProjectId());
+                revision.setRecordId(recordId);
+                revision.setFieldKey(key);
+                revision.setOldValue(oldValue);
+                revision.setNewValue(newValue);
+                revision.setRevisedBy(userId);
+                ocrRepository.saveFieldRevision(revision);
+            }
+        });
         return get(recordId);
     }
 
