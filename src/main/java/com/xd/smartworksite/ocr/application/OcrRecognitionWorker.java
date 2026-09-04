@@ -245,7 +245,13 @@ public class OcrRecognitionWorker {
             ocrType = "CUSTOM";
         }
         if ("CUSTOM".equals(ocrType)) {
-            return fields.stream().noneMatch(this::hasRecognizedValue);
+            Set<String> requiredKeys = requiredCustomFieldKeys(record);
+            if (requiredKeys.isEmpty()) {
+                return fields.stream().noneMatch(this::hasRecognizedValue);
+            }
+            return requiredKeys.stream().anyMatch(requiredKey -> fields.stream()
+                    .noneMatch(field -> requiredKey.equals(matchToken(field.get("fieldKey")))
+                            && hasRecognizedValue(field)));
         }
         for (Map<String, Object> field : fields) {
             String fieldKey = matchToken(field.get("fieldKey"));
@@ -255,6 +261,24 @@ public class OcrRecognitionWorker {
             }
         }
         return false;
+    }
+
+    private Set<String> requiredCustomFieldKeys(OcrRecord record) {
+        if (record.getCustomFieldsJson() == null || record.getCustomFieldsJson().isBlank()) {
+            return Set.of();
+        }
+        Object value = parseJsonObject(record.getCustomFieldsJson()).get("customFields");
+        if (!(value instanceof List<?> definitions)) {
+            return Set.of();
+        }
+        Set<String> requiredKeys = new HashSet<>();
+        for (Object definition : definitions) {
+            Map<String, Object> field = normalizeMap(definition);
+            if (Boolean.TRUE.equals(field.get("required"))) {
+                requiredKeys.add(matchToken(field.get("fieldKey")));
+            }
+        }
+        return requiredKeys;
     }
 
     private boolean hasRecognizedValue(Map<String, Object> field) {

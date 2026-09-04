@@ -269,7 +269,7 @@ class OcrRecognitionWorkerTest {
         record.setFileId(23L);
         record.setTaskId(33L);
         record.setOcrType("CUSTOM");
-        record.setCustomFieldsJson("{\"customFields\":[{\"fieldKey\":\"partyA\",\"fieldName\":\"甲方\"},{\"fieldKey\":\"partyB\",\"fieldName\":\"乙方\"},{\"fieldKey\":\"amount\",\"fieldName\":\"合同金额\"}]}");
+        record.setCustomFieldsJson("{\"customFields\":[{\"fieldKey\":\"partyA\",\"fieldName\":\"甲方\"},{\"fieldKey\":\"partyB\",\"fieldName\":\"乙方\",\"required\":true},{\"fieldKey\":\"amount\",\"fieldName\":\"合同金额\"}]}");
         when(repository.findRecordById(4L)).thenReturn(Optional.of(record));
 
         FileObjectResponse file = new FileObjectResponse();
@@ -295,7 +295,7 @@ class OcrRecognitionWorkerTest {
                 .recognize(4L);
 
         ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
-        verify(repository).updateRecordSuccess(eq(4L), jsonCaptor.capture());
+        verify(repository).updateRecordPartialSuccess(eq(4L), jsonCaptor.capture(), any());
         Map<String, Object> result = objectMapper.readValue(jsonCaptor.getValue(), new TypeReference<>() {});
         List<Map<String, Object>> fields = (List<Map<String, Object>>) result.get("fields");
 
