@@ -51,6 +51,7 @@ public class OcrApplicationService {
     private final OcrRecognitionWorker ocrRecognitionWorker;
     private final ObjectMapper objectMapper;
     private final OcrFieldNormalizer fieldNormalizer = new OcrFieldNormalizer();
+    private final OcrCustomFieldValidator customFieldValidator;
 
     public OcrApplicationService(OcrRepository ocrRepository,
                                  FileObjectApplicationService fileObjectApplicationService,
@@ -64,6 +65,7 @@ public class OcrApplicationService {
         this.projectMemberMapper = projectMemberMapper;
         this.ocrRecognitionWorker = ocrRecognitionWorker;
         this.objectMapper = objectMapper;
+        this.customFieldValidator = new OcrCustomFieldValidator(objectMapper);
     }
 
     public OcrSubmitResponse submit(OcrSubmitRequest request) {
@@ -210,17 +212,7 @@ public class OcrApplicationService {
     }
 
     private Object parseCustomFields(String customFields) {
-        try {
-            Object value = objectMapper.readValue(customFields, Object.class);
-            if (!(value instanceof List<?> list) || list.isEmpty()) {
-                throw new BusinessException(ErrorCode.PARAM_ERROR, "customFields must be a non-empty JSON array");
-            }
-            return value;
-        } catch (BusinessException ex) {
-            throw ex;
-        } catch (Exception ex) {
-            throw new BusinessException(ErrorCode.PARAM_ERROR, "customFields must be valid json");
-        }
+        return customFieldValidator.parse(customFields);
     }
 
     private OcrRecord requireRecord(Long recordId) {

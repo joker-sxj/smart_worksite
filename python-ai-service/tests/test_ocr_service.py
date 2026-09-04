@@ -149,3 +149,33 @@ def test_invoice_marks_amounts_and_type_for_confirmation_when_checks_conflict():
     assert fields["amountWithoutTax"].manualConfirmationRequired is True
     assert fields["taxAmount"].manualConfirmationRequired is True
     assert fields["totalAmount"].manualConfirmationRequired is True
+
+
+def test_custom_fields_reject_duplicate_keys_and_invalid_schema_before_model_call():
+    class NeverCalled:
+        async def vision_json_chat(self, *args):
+            raise AssertionError("model must not receive invalid field definitions")
+
+    request = OcrRecognizeRequest(
+        projectId=1, recordId=1, ocrType="CUSTOM",
+        options={"customFields": [
+            {"fieldKey": "partyA", "fieldName": "甲方", "valueType": "TEXT"},
+            {"fieldKey": "partyA", "fieldName": "乙方", "valueType": "TEXT"},
+        ]},
+        file=OcrFilePayload(fileId=1, fileName="contract.jpg", contentType="image/jpeg", dataUrls=[_image_url()]),
+    )
+
+    try:
+        asyncio.run(OcrService(NeverCalled()).recognize(request))
+        assert False, "duplicate custom fields must be rejected"
+    except ValueError as exc:
+        assert "duplicate" in str(exc)
+
+
+def test_custom_fields_accept_bounded_types_and_preserve_order():
+    fields = [
+        {"fieldKey": "partyA", "fieldName": "甲方", "description": "合同甲方", "required": True, "valueType": "TEXT"},
+        {"fieldKey": "amount", "fieldName": "金额", "description": "合同金额", "required": False, "valueType": "AMOUNT"},
+    ]
+    data = _recognize("CUSTOM", {"ocrType": "CUSTOM", "fields": [], "extras": {}}, options={"customFields": fields})
+    assert [field.fieldKey for field in data.fields] == ["partyA", "amount"]

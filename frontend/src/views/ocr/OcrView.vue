@@ -11,6 +11,7 @@ import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, OcrRecord, OcrTypeTemplate } from '../../api/types';
 import { createOcrPreviewController } from './ocrPreview';
+import { normalizeCustomFields, serializeCustomFields, type OcrCustomField } from './ocrCustomFields';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -44,11 +45,11 @@ function saveStoredOcrType(value: string) {
 }
 const ocrType = ref(readStoredOcrType());
 const ocrTypes = ref<OcrTypeTemplate[]>([]);
-const customFields = ref(JSON.stringify([
+const customFieldRows = ref<OcrCustomField[]>(normalizeCustomFields([
   { fieldKey: 'partyA', fieldName: '甲方', description: '合同中的甲方名称', required: true, valueType: 'TEXT' },
   { fieldKey: 'partyB', fieldName: '乙方', description: '合同中的乙方名称', required: true, valueType: 'TEXT' },
   { fieldKey: 'contractAmount', fieldName: '合同金额', description: '合同总金额', required: false, valueType: 'AMOUNT' }
-], null, 2));
+]));
 const file = ref<File | null>(null);
 const invoiceType = ref('VAT_SPECIAL');
 const previewUrl = ref('');
@@ -223,8 +224,7 @@ function pollRecord(recordId: ID) {
 
 function validateCustomFields() {
   try {
-    const parsed = JSON.parse(customFields.value);
-    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('customFields must be a non-empty array');
+    customFieldRows.value = normalizeCustomFields(customFieldRows.value);
     return true;
   } catch (err) {
     error.value = err instanceof Error ? `自定义字段 JSON 无效：${err.message}` : '自定义字段 JSON 无效';
@@ -247,7 +247,7 @@ async function startOcr() {
       ocrType: ocrType.value,
       file: file.value,
       invoiceType: ocrType.value === 'INVOICE' ? invoiceType.value : undefined,
-      customFields: ocrType.value === 'CUSTOM' ? customFields.value : undefined
+      customFields: ocrType.value === 'CUSTOM' ? serializeCustomFields(customFieldRows.value) : undefined
     });
     ElMessage.success('OCR 识别任务已提交');
     await loadRecord(result.recordId);
@@ -433,12 +433,18 @@ onUnmounted(() => {
             </el-select>
           </el-form-item>
           <el-form-item v-if="ocrType === 'CUSTOM'" label="自定义字段" required>
-            <el-input
-              v-model="customFields"
-              type="textarea"
-              :rows="8"
-              placeholder="请输入后端要求的 JSON 数组，例如合同编号、甲方、金额等字段定义"
-            />
+            <div class="custom-fields">
+              <div v-for="(item, index) in customFieldRows" :key="index" class="custom-field-row">
+                <el-input v-model="item.fieldKey" placeholder="字段编码，如 partyA" />
+                <el-input v-model="item.fieldName" placeholder="字段名称" maxlength="40" show-word-limit />
+                <el-select v-model="item.valueType"><el-option v-for="type in ['TEXT','DATE','NUMBER','AMOUNT','BOOLEAN']" :key="type" :value="type" /></el-select>
+                <el-checkbox v-model="item.required">必填</el-checkbox>
+                <el-checkbox v-model="item.sensitive">敏感</el-checkbox>
+                <el-button text type="danger" :disabled="customFieldRows.length === 1" @click="customFieldRows.splice(index, 1)">删除</el-button>
+                <el-input v-model="item.description" class="field-description" placeholder="字段说明（最多 200 字）" maxlength="200" show-word-limit />
+              </div>
+              <el-button :disabled="customFieldRows.length >= 30" @click="customFieldRows.push(normalizeCustomFields([{ fieldKey: `field${customFieldRows.length + 1}`, fieldName: `字段${customFieldRows.length + 1}`, valueType: 'TEXT' }])[0])">添加字段</el-button>
+            </div>
           </el-form-item>
           <el-form-item v-if="ocrType === 'INVOICE'" label="发票类型" required>
             <el-select v-model="invoiceType" style="width: 100%">

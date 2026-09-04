@@ -228,6 +228,8 @@ class OcrService:
         return self._normalize_field_definitions(STANDARD_FIELDS[ocr_type])
 
     def _normalize_field_definitions(self, fields: list[Any]) -> list[dict[str, Any]]:
+        if len(fields) > 30:
+            raise ValueError("OCR field definitions cannot exceed 30 fields")
         normalized: list[dict[str, Any]] = []
         seen_keys: set[str] = set()
         seen_names: set[str] = set()
@@ -238,6 +240,13 @@ class OcrService:
             field_name = str(item.get("fieldName") or item.get("name") or "").strip()
             if not field_key or not field_name:
                 raise ValueError("OCR field definition requires fieldKey and fieldName")
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", field_key):
+                raise ValueError("OCR fieldKey must use a safe identifier")
+            if len(field_name) > 40 or len(str(item.get("description") or "").strip()) > 200:
+                raise ValueError("OCR field definition text is too long")
+            value_type = str(item.get("valueType") or "TEXT").strip().upper()
+            if value_type not in {"TEXT", "DATE", "NUMBER", "AMOUNT", "BOOLEAN"}:
+                raise ValueError("unsupported OCR field valueType")
             key_token = self._match_token(field_key)
             name_token = self._match_token(field_name)
             if key_token in seen_keys or name_token in seen_names:
@@ -248,6 +257,7 @@ class OcrService:
             normalized_item = dict(item)
             normalized_item["fieldKey"] = field_key
             normalized_item["fieldName"] = field_name
+            normalized_item["valueType"] = value_type
             normalized_item["aliases"] = [str(alias).strip() for alias in aliases if str(alias).strip()]
             normalized.append(normalized_item)
         return normalized
