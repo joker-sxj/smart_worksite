@@ -503,11 +503,13 @@ public class ReviewApplicationService {
         Map<String, Object> resultValues = new LinkedHashMap<>();
         for (var field : schema.getFields()) {
             if ("DOCUMENT".equals(field.getStage()) || "RESULT".equals(field.getStage())) {
-                Object value = result.get(field.getKey());
-                Map<String, Object> item = new LinkedHashMap<>(); item.put("value", value);
-                item.put("evidence", result.get(field.getKey() + "Evidence"));
-                item.put("confidence", result.get(field.getKey() + "Confidence"));
-                item.put("manuallyRevised", false);
+                Map<String, Object> raw = new LinkedHashMap<>();
+                Object current = result.get(field.getKey());
+                if (current instanceof Map<?, ?> map) map.forEach((key, value) -> raw.put(String.valueOf(key), value));
+                else raw.put("value", current);
+                raw.putIfAbsent("evidence", result.get(field.getKey() + "Evidence"));
+                raw.putIfAbsent("confidence", result.get(field.getKey() + "Confidence"));
+                Map<String, Object> item = ReviewFieldSchemaService.normalizeResult(field, raw);
                 ("DOCUMENT".equals(field.getStage()) ? documentValues : resultValues).put(field.getKey(), item);
             }
         }

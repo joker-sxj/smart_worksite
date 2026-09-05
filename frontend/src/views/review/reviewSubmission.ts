@@ -32,5 +32,13 @@ export function buildReviewFormData(data: ReviewSubmission) {
 export function validateReviewFieldValues(fields: ReviewField[], values: Record<string, unknown>) {
   return fields.filter((field) => field.stage === 'INPUT' && field.required)
     .filter((field) => values[field.key] == null || values[field.key] === '')
-    .map((field) => field.key);
+    .map((field) => field.key).concat(fields.filter((field) => field.type === 'ENUM' && values[field.key] != null && !field.options.includes(String(values[field.key]))).map((field) => field.key));
+}
+
+export function reviewFieldControl(type: ReviewField['type']) {
+  if (type === 'NUMBER') return 'number';
+  if (type === 'BOOLEAN') return 'switch';
+  if (type === 'DATE') return 'date';
+  if (type === 'TEXT') return 'textarea';
+  return 'text';
 }

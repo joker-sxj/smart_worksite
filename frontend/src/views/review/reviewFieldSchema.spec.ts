@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildReviewFormData, validateReviewFieldValues } from './reviewSubmission';
+import { buildReviewFormData, reviewFieldControl, validateReviewFieldValues } from './reviewSubmission';
 
 describe('review field schema', () => {
   it('submits configured input values without using OCR custom fields', () => {
@@ -19,5 +19,14 @@ describe('review field schema', () => {
     expect(validateReviewFieldValues([
       { key: 'project_code', stage: 'INPUT', type: 'STRING', required: true, sort: 1, options: [], validation: {} }
     ], {})).toEqual(['project_code']);
+  });
+
+  it('selects typed controls and validates enum options', () => {
+    expect(reviewFieldControl('NUMBER')).toBe('number');
+    expect(reviewFieldControl('BOOLEAN')).toBe('switch');
+    expect(reviewFieldControl('DATE')).toBe('date');
+    expect(validateReviewFieldValues([
+      { key: 'risk', stage: 'INPUT', type: 'ENUM', required: false, sort: 1, options: ['LOW'], validation: {} }
+    ], { risk: 'HIGH' })).toEqual(['risk']);
   });
 });

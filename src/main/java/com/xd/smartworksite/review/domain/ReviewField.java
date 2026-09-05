@@ -3,7 +3,9 @@ package com.xd.smartworksite.review.domain;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
+@JsonIgnoreProperties(ignoreUnknown = false)
 public class ReviewField {
     private String key;
     private String label;
