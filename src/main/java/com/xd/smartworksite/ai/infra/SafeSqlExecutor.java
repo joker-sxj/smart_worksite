@@ -40,8 +40,9 @@ public class SafeSqlExecutor {
     private static final int GCM_TAG_BITS = 128;
     private static final int GCM_IV_BYTES = 12;
     private static final Pattern SENSITIVE_COLUMN = Pattern.compile(
-            "(^|[_-])(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|id[_-]?card|identity|phone|mobile|tel|email|credential|cookie|session)([_-]|$)",
+            "(^|_)(password|passwd|pwd|secret|token|api_key|access_key|private_key|id_card|identity|phone|phone_number|mobile|mobile_number|tel|telephone|email|credential|cookie)(_|$)",
             Pattern.CASE_INSENSITIVE);
+    private static final Pattern CAMEL_BOUNDARY = Pattern.compile("([a-z0-9])([A-Z])");
 
     private final AiPythonServiceProperties properties;
 
@@ -211,7 +212,7 @@ public class SafeSqlExecutor {
         List<Boolean> sensitiveColumns = new ArrayList<>();
         for (int i = 1; i <= metaData.getColumnCount(); i++) {
             String label = metaData.getColumnLabel(i);
-            columns.add(label);
+            columns.add(stableColumnKey(columns, label));
             sensitiveColumns.add(isSensitiveColumn(label, metaData.getColumnName(i)));
         }
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -219,7 +220,8 @@ public class SafeSqlExecutor {
             Map<String, Object> row = new LinkedHashMap<>();
             for (int i = 0; i < columns.size(); i++) {
                 String column = columns.get(i);
-                row.put(column, sensitiveColumns.get(i) ? MASKED_VALUE : rs.getObject(column));
+                Object value = rs.getObject(i + 1);
+                row.put(column, sensitiveColumns.get(i) && value != null ? MASKED_VALUE : value);
             }
             rows.add(row);
         }
@@ -231,7 +233,27 @@ public class SafeSqlExecutor {
     }
 
     private boolean matchesSensitiveColumn(String name) {
-        return name != null && SENSITIVE_COLUMN.matcher(name).find();
+        if (name == null || name.isBlank()) {
+            return false;
+        }
+        String normalized = CAMEL_BOUNDARY.matcher(name.trim()).replaceAll("$1_$2")
+                .replace('-', '_').toLowerCase(Locale.ROOT);
+        if (normalized.contains("手机号") || normalized.contains("手机号码")
+                || normalized.contains("身份证") || normalized.contains("身份证号")
+                || normalized.contains("密码")) {
+            return true;
+        }
+        return SENSITIVE_COLUMN.matcher(normalized).find();
+    }
+
+    private String stableColumnKey(List<String> existing, String label) {
+        String base = (label == null || label.isBlank()) ? "column" : label;
+        String key = base;
+        int suffix = 2;
+        while (existing.contains(key)) {
+            key = base + "_" + suffix++;
+        }
+        return key;
     }
 
     private String limitClause(int maxRows) {

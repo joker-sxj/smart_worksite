@@ -166,6 +166,55 @@ class SafeSqlExecutorTest {
     }
 
     @Test
+    void readsDuplicateAliasesByIndexAndAssignsStableOutputKeys() throws Exception {
+        String jdbcUrl = "jdbc:h2:mem:database_qa_duplicate_alias;MODE=MySQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(jdbcUrl, "sa", "");
+             Statement statement = connection.createStatement()) {
+            statement.execute("create table account (password varchar(64), project_name varchar(64))");
+            statement.execute("insert into account values ('root-secret', '工程A')");
+        }
+        DataSourceRecord record = h2DataSource(jdbcUrl);
+
+        SafeSqlExecutor.QueryResult result = executor.execute(record,
+                "select password as \"value\", project_name as \"value\" from account");
+
+        assertEquals(List.of("value", "value_2"), result.columns());
+        assertThat(result.rows().get(0))
+                .containsEntry("value", "[MASKED]")
+                .containsEntry("value_2", "工程A")
+                .doesNotContainValue("root-secret");
+    }
+
+    @Test
+    void recognizesCommonSensitiveNamesWithoutMaskingSessionBusinessFields() {
+        DataSourceRecord record = h2DataSource(
+                "jdbc:h2:mem:database_qa_sensitive_names;MODE=MySQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1");
+
+        SafeSqlExecutor.QueryResult result = executor.execute(record,
+                "select 'a' as password_hash, 'b' as \"phoneNumber\", 'c' as \"手机号\", "
+                        + "'d' as \"身份证号\", 'S-100' as session_id, 7 as session_count");
+
+        assertThat(result.rows().get(0))
+                .containsEntry("password_hash", "[MASKED]")
+                .containsEntry("phoneNumber", "[MASKED]")
+                .containsEntry("手机号", "[MASKED]")
+                .containsEntry("身份证号", "[MASKED]")
+                .containsEntry("session_id", "S-100")
+                .containsEntry("session_count", 7);
+    }
+
+    @Test
+    void preservesNullForSensitiveColumns() {
+        DataSourceRecord record = h2DataSource(
+                "jdbc:h2:mem:database_qa_sensitive_null;MODE=MySQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1");
+
+        SafeSqlExecutor.QueryResult result = executor.execute(record,
+                "select cast(null as varchar) as password");
+
+        assertThat(result.rows().get(0)).containsEntry("password", null);
+    }
+
+    @Test
     void describesAvailableTablesAndColumnsForPromptSchema() throws Exception {
         String jdbcUrl = "jdbc:h2:mem:database_qa_schema;MODE=MySQL;DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(jdbcUrl, "sa", "");
@@ -245,6 +294,14 @@ class SafeSqlExecutorTest {
     private DataSourceRecord mysqlDataSource() {
         DataSourceRecord record = new DataSourceRecord();
         record.setDbType("MYSQL");
+        return record;
+    }
+
+    private DataSourceRecord h2DataSource(String jdbcUrl) {
+        DataSourceRecord record = mysqlDataSource();
+        record.setJdbcUrl(jdbcUrl);
+        record.setUsername("sa");
+        configureEncryptedPassword(record, "");
         return record;
     }
 }

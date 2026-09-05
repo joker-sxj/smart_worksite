@@ -7,7 +7,7 @@
 
 ## 1. 结论
 
-审查发现并修复一个真实行为缺口：当前基线的数据库问答结果会原样返回密码、手机号等敏感列。修复在 JDBC `ResultSet` 读取边界同时检查列标签和底层列名，对敏感列统一返回 `[MASKED]`，普通业务列保持原值。该缺口严格按 RED -> GREEN 完成，未修改 Python SQL 生成逻辑或其他阶段功能。
+审查发现并修复结果读取边界缺口：按列标签读取时，重复别名可能取到错误列并覆盖结果；原有脱敏规则也没有覆盖 camelCase/中文常见命名，且会误伤 `session_id/session_count`。修复后 JDBC `ResultSet` 只按列索引读取，重复输出 key 依次使用 `_2`、`_3` 后缀；脱敏同时检查列标签和底层列名，覆盖 snake_case、camelCase 与中文手机号/身份证号等明确敏感标识，但不再把普通 session 业务字段一概掩码。敏感列非 NULL 值返回 `[MASKED]`，NULL 保持 NULL 语义。该缺口严格按 RED -> GREEN 完成，未修改 Python SQL 生成逻辑或其他阶段功能。
 
 其余目标能力已有实现，无生产代码变更：
 
@@ -24,19 +24,19 @@
 
 ### RED
 
-新增真实 JDBC/H2 查询测试 `SafeSqlExecutorTest.masksSensitiveColumnsFromDatabaseQueryResults`，执行：
+新增真实 JDBC/H2 查询测试 `readsDuplicateAliasesByIndexAndAssignsStableOutputKeys`、`recognizesCommonSensitiveNamesWithoutMaskingSessionBusinessFields`、`preservesNullForSensitiveColumns`，执行：
 
 ```powershell
-mvn '-Dtest=SafeSqlExecutorTest#masksSensitiveColumnsFromDatabaseQueryResults' test
+mvn '-Dtest=SafeSqlExecutorTest#readsDuplicateAliasesByIndexAndAssignsStableOutputKeys+recognizesCommonSensitiveNamesWithoutMaskingSessionBusinessFields+preservesNullForSensitiveColumns' test
 ```
 
-结果：`Tests run: 1, Failures: 1`；断言期望 `password=[MASKED]`，实际为 `root-secret`。失败原因正是基线缺少结果脱敏，而非测试配置或语法错误。
+结果：修正测试 SQL 的 H2 保留字引用后，`Tests run: 3, Failures: 3, Errors: 0`。基线分别返回重复 columns `[value, value]`、未掩码的 `phoneNumber`（并误掩码 `session_id/session_count`）、以及将敏感 NULL 改写为 `[MASKED]`；失败均直接对应审查缺陷。
 
 ### GREEN
 
-在 `SafeSqlExecutor.readResult` 中按列标签和底层列名识别 password/passwd/pwd/secret/token/key、身份证、手机号、电话、邮箱、凭据、cookie/session 等敏感列，并在结果进入 Python 总结、QA 证据和前端前替换为 `[MASKED]`。
+在 `SafeSqlExecutor.readResult` 中按 `rs.getObject(i)` 读取每一列，基于原始标签生成稳定且唯一的输出 key。脱敏规则先把 camelCase 和连字符规范化为下划线，再匹配明确的密码、密钥、token、联系方式、身份证等词组；中文手机号/身份证号直接识别，普通 `session_id/session_count` 保留原值。只有敏感非 NULL 值在进入 Python 总结、QA 证据和前端前替换为 `[MASKED]`。
 
-同一命令复跑结果：`Tests run: 1, Failures: 0, Errors: 0`，`BUILD SUCCESS`。
+同一命令复跑结果：`Tests run: 3, Failures: 0, Errors: 0`，`BUILD SUCCESS`。
 
 ## 3. 自动化行为门禁（不能替代实机）
 
@@ -124,7 +124,7 @@ Python 门禁覆盖：结构化证据计划、参数归一化、MySQL 方言约�
 | 3 | empty result | PASS | Java 空行集不调用总结模型，固定说明“未查询到符合条件的数据”并禁止推断；历史真实请求验证空结果语义。 |
 | 4 | partial evidence | PASS | 历史真实混合问答明确区分数据库无对应表与知识库仿真证据；Java mixed-route 测试保留可用数据库证据。 |
 | 5 | no evidence | PASS | 历史真实空库/无表请求没有编造；Python 提示和 Java确定性空结果均禁止补造项目事实。 |
-| 6 | format variants | PASS | MySQL 真实运行；PostgreSQL/Kingbase 驱动、方言和安全校验自动化通过。真实 PostgreSQL/Kingbase DSN 未配置，不宣称其实机通过。 |
+| 6 | format variants | BLOCKED（部分覆盖） | MySQL 有真实运行证据；PostgreSQL/Kingbase 仅完成驱动加载、方言和安全校验自动化。未配置真实 PostgreSQL/Kingbase DSN，因此不能判定完整 PASS。 |
 | 7 | long input | N/A | 数据库详情是有界元数据，数据库问答当前没有独立长文件输入；模型全局上下文预算属于已验收的上下文功能。 |
 | 8 | multi-turn | PASS | 真实库有 3 个 DATABASE 会话、单会话最多 3 条 DATABASE 消息；历史第 28-30 题连续追问通过，Java 会话隔离测试通过。 |
 | 9 | refresh recovery | PASS | QA 消息、SQL/结果摘要和会话均持久化；既有真实 Chrome 报告验证刷新恢复，前端 QA 恢复测试通过。 |
@@ -135,7 +135,7 @@ Python 门禁覆盖：结构化证据计划、参数归一化、MySQL 方言约�
 | 14 | database failure | PASS | SQLState `42*`/3065 才修复；`28*` 认证、`08*` 连接和其他错误不修复；重复 SQL 和总尝试次数有界。真实日志存在成功/失败记录。 |
 | 15 | model failure | PASS | SQL 生成/总结失败显式失败并记录 external call；真实日志有 5/1 次失败，Python 模型失败测试通过。 |
 | 16 | retrieval degradation | N/A | 纯数据库详情/数据库问答不调用向量检索；MIXED 路由降级属于 QA/RAG 验收范围，历史报告已有边界证据。 |
-| 17 | timeout | PASS | JDBC statement 配置查询超时，AI HTTP 有连接/读取超时且 SQL 重试有上限；连接类异常不误修。当前轮没有故意占用真实库制造长查询。 |
+| 17 | timeout | BLOCKED（部分覆盖） | 已验证 JDBC statement 配置查询超时、AI HTTP 有连接/读取超时且 SQL 重试有上限；但本轮未实际触发 JDBC 或模型超时，不能判定完整 PASS。 |
 | 18 | download contents | N/A | 当前数据源/数据库问答公开契约返回 JSON，不生成或下载文件；不存在可验证的文件头/格式。若产品后续要求结果导出，应单独定义格式与权限契约。 |
 | 19 | mobile layout | BLOCKED | 按任务分工不运行 Chrome；主控需在部署本提交后以移动视口检查数据源列表、Schema 对话框、问答结果、SQL、脱敏行和错误提示。 |
 
@@ -158,12 +158,12 @@ Python 门禁覆盖：结构化证据计划、参数归一化、MySQL 方言约�
 
 | 门禁 | 命令 | 最终结果 |
 | --- | --- | --- |
-| Java 定向 | `mvn '-Dtest=DataSourceApplicationServiceTest,JdbcDataSourceInspectorTest,DataSourcePasswordCipherTest,SafeSqlExecutorTest,AiApplicationServiceTest,QaApplicationServiceTest' test` | PASS：80 tests，0 failure/error/skip |
+| Java 定向 | `mvn '-Dtest=DataSourceApplicationServiceTest,JdbcDataSourceInspectorTest,DataSourcePasswordCipherTest,SafeSqlExecutorTest,AiApplicationServiceTest,QaApplicationServiceTest' test` | PASS：83 tests，0 failure/error/skip |
 | Python 全量 | `py -m pytest -q` | PASS：375 passed；2 个既有 Pydantic warning |
 | Python 编译 | `py -m compileall -q app` | PASS：exit 0 |
 | 前端全量 | `npm test -- --run` | PASS：13 files，100 tests |
 | 前端构建 | `npm run build` | PASS：`vue-tsc` 与 Vite build exit 0 |
-| Java 全量/构建 | `mvn test`、`mvn -DskipTests package` | PASS：405 tests，0 failure/error；package exit 0 |
+| Java 全量/构建 | `mvn test`、`mvn -DskipTests package` | PASS：408 tests，0 failure/error；package exit 0 |
 | Diff | `git diff --check` | PASS：无 whitespace 错误 |
 
 ## 8. 遗留阻塞
@@ -171,4 +171,5 @@ Python 门禁覆盖：结构化证据计划、参数归一化、MySQL 方言约�
 - **BLOCKED：新脱敏实现的部署后 Chrome/真实 MySQL 页面证据。** 责任方：主控；输入：本提交、授权账号、只读数据源和可展示的脱敏样例。
 - **BLOCKED：移动端布局证据。** 责任方：主控；输入：部署后的数据源页面和移动视口。
 - **BLOCKED：隔离连接/认证/超时失败的 HTTP/Chrome 证据。** 责任方：主控；需使用可删除的测试数据源，不得改坏现有数据源。
+- **BLOCKED：PostgreSQL/Kingbase format variants 实库证据。** 责任方：主控；需分别配置可访问的只读测试 DSN 后执行仓库已有真实 JDBC 测试。
 - **N/A：下载内容。** 当前数据库详情/问答无文件下载 API；后续若新增导出需求，必须另做权限、格式、内容和移动下载验收。
