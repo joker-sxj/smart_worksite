@@ -29,6 +29,8 @@ import com.xd.smartworksite.template.dto.TemplateVariableDescriptionResponse;
 import com.xd.smartworksite.template.repository.TemplateRepository;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -267,7 +269,7 @@ class ReportGenerationApplicationServiceTest {
 
     @Test
     void rejectsInvalidPdfBytesWithoutPublishingFakePdf() throws Exception {
-        when(context.pdfConverter.convert(any())).thenReturn("not-a-pdf".getBytes());
+        when(context.pdfConverter.convert(any())).thenReturn("%PDF-1.7\ntruncated".getBytes());
 
         ReportCreateResponse created = context.service.createReport(request());
         context.service.executeReportTask(created.getReportId(), created.getTaskId());
@@ -462,6 +464,16 @@ class ReportGenerationApplicationServiceTest {
         }
     }
 
+    private byte[] pdf() {
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            document.addPage(new PDPage());
+            document.save(output);
+            return output.toByteArray();
+        } catch (IOException ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
+
     private class TestContext {
         private final InMemoryReportRepository repository = new InMemoryReportRepository();
         private final ProjectAccessApplicationService access = mock(ProjectAccessApplicationService.class);
@@ -506,7 +518,7 @@ class ReportGenerationApplicationServiceTest {
                 if ("application/pdf".equals(contentType)) generatedPdf = bytes; else generatedDocx = bytes;
                 return new StorageObject(invocation.getArgument(0), "test", contentType, bytes.length);
             });
-            try { when(pdfConverter.convert(any())).thenReturn("%PDF-1.7\nreal".getBytes()); }
+            try { when(pdfConverter.convert(any())).thenReturn(pdf()); }
             catch (Exception ex) { throw new IllegalStateException(ex); }
             when(storage.createAccessUrl(any(), any(Duration.class))).thenReturn("http://127.0.0.1/report.docx");
             when(qa.generateVariableForSystem(any())).thenAnswer(invocation -> {

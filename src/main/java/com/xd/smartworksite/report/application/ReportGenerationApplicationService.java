@@ -50,6 +50,7 @@ import org.apache.poi.xwpf.usermodel.XWPFRun;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.apache.poi.xwpf.usermodel.XWPFTableCell;
 import org.apache.poi.xwpf.usermodel.XWPFTableRow;
+import org.apache.pdfbox.pdmodel.PDDocument;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -652,9 +653,7 @@ public class ReportGenerationApplicationService {
         try {
             Files.write(input, wordBytes);
             byte[] bytes = pdfConverter.convert(input);
-            if (!isPdf(bytes)) {
-                throw new IOException("转换器未返回有效PDF文件");
-            }
+            validatePdf(bytes);
             String objectName = "reports/project-" + report.getProjectId() + "/report-" + report.getId() + "/"
                     + LocalDate.now() + "/" + UUID.randomUUID() + ".pdf";
             StorageObject object = storageAdapter.upload(objectName, new ByteArrayInputStream(bytes), bytes.length, "application/pdf");
@@ -668,9 +667,14 @@ public class ReportGenerationApplicationService {
         } finally { Files.deleteIfExists(input); }
     }
 
-    private boolean isPdf(byte[] bytes) {
-        return bytes != null && bytes.length >= 5
-                && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D' && bytes[3] == 'F' && bytes[4] == '-';
+    private void validatePdf(byte[] bytes) throws IOException {
+        if (bytes == null || bytes.length < 5
+                || bytes[0] != '%' || bytes[1] != 'P' || bytes[2] != 'D' || bytes[3] != 'F' || bytes[4] != '-') {
+            throw new IOException("转换器未返回有效PDF文件");
+        }
+        try (PDDocument ignored = PDDocument.load(bytes)) {
+            if (ignored.getNumberOfPages() == 0) throw new IOException("PDF文件没有页面");
+        }
     }
 
     private ReportVersion saveVersion(Report report, ReportConfig config, Long wordFileId, Long pdfFileId,

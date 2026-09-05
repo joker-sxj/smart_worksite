@@ -71,7 +71,7 @@ function scheduleRefresh() {
   }, 3000);
 }
 
-async function handleDownload() {
+async function handleDownload(format: 'WORD' | 'PDF' = 'WORD') {
   if (!report.value) return;
   if (!canDownloadReport(report.value)) {
     error.value = `当前报告状态为 ${report.value.status}，尚不能下载`;
@@ -80,7 +80,7 @@ async function handleDownload() {
   downloading.value = true;
   error.value = '';
   try {
-    await downloadReport(report.value.reportId, 'WORD', `${report.value.reportName}.docx`);
+    await downloadReport(report.value.reportId, format, `${report.value.reportName}.${format === 'PDF' ? 'pdf' : 'docx'}`);
   } catch (err) {
     error.value = err instanceof Error ? err.message : '报告下载失败，请检查后端下载地址是否可用';
   } finally {
@@ -150,7 +150,15 @@ onBeforeUnmount(() => {
           <p class="page-desc">版本、状态、预览、下载和重新生成。</p>
         </div>
         <el-space>
-          <el-button type="primary" plain :loading="downloading" :disabled="!canDownloadReport(report)" @click="handleDownload">下载报告</el-button>
+          <el-dropdown :disabled="!canDownloadReport(report) || downloading" @command="handleDownload">
+            <el-button type="primary" plain :loading="downloading" :disabled="!canDownloadReport(report)">下载报告<i class="el-icon-arrow-down el-icon--right" /></el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="WORD">下载 Word</el-dropdown-item>
+                <el-dropdown-item command="PDF">下载 PDF</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-button :loading="regenerating" :disabled="!canRegenerateReport(report)" @click="handleRegenerate">重新生成</el-button>
         </el-space>
       </div>

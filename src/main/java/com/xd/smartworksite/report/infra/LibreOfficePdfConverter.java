@@ -23,9 +23,12 @@ public class LibreOfficePdfConverter implements ReportPdfConverter {
             throw new IOException("输入 Word 文件不存在");
         }
         Path outputDirectory = Files.createTempDirectory("report-pdf-output-");
+        Path userProfile = Files.createTempDirectory("report-pdf-profile-");
+        Process process = null;
         try {
-            Process process = new ProcessBuilder(List.of(
-                    executable, "--headless", "--convert-to", "pdf", "--outdir",
+            process = new ProcessBuilder(List.of(
+                    executable, "-env:UserInstallation=" + userProfile.toUri(),
+                    "--headless", "--convert-to", "pdf", "--outdir",
                     outputDirectory.toString(), input.toAbsolutePath().toString()))
                     .redirectErrorStream(true)
                     .start();
@@ -39,8 +42,14 @@ public class LibreOfficePdfConverter implements ReportPdfConverter {
                 throw new IOException("PDF 转换失败，LibreOffice exitCode=" + process.exitValue());
             }
             return Files.readAllBytes(pdf);
+        } catch (InterruptedException ex) {
+            if (process != null) process.destroyForcibly();
+            Thread.currentThread().interrupt();
+            throw ex;
         } finally {
+            if (process != null && process.isAlive()) process.destroyForcibly();
             deleteQuietly(outputDirectory);
+            deleteQuietly(userProfile);
         }
     }
 

@@ -153,12 +153,12 @@ async function submitCreate() {
   }
 }
 
-async function handleDownload(row: ReportItem) {
+async function handleDownload(row: ReportItem, format: 'WORD' | 'PDF' = 'WORD') {
   if (!canDownloadReport(row)) return ElMessage.warning(`当前报告状态为 ${row.status}，尚不能下载`);
   downloadingId.value = row.reportId;
   error.value = '';
   try {
-    await downloadReport(row.reportId, 'WORD', `${row.reportName}.docx`);
+    await downloadReport(row.reportId, format, `${row.reportName}.${format === 'PDF' ? 'pdf' : 'docx'}`);
   } catch (err) {
     error.value = err instanceof Error ? err.message : '报告下载失败';
   } finally {
@@ -222,7 +222,15 @@ onMounted(loadData);
         <el-table-column label="操作" width="260">
           <template #default="{ row }">
             <el-button link type="primary" @click="$router.push(`/report/${row.reportId}`)">详情</el-button>
-            <el-button link :loading="String(downloadingId) === String(row.reportId)" :disabled="!canDownloadReport(row)" @click="handleDownload(row)">下载</el-button>
+            <el-dropdown :disabled="!canDownloadReport(row) || String(downloadingId) === String(row.reportId)" @command="(format: 'WORD' | 'PDF') => handleDownload(row, format)">
+              <el-button link :loading="String(downloadingId) === String(row.reportId)" :disabled="!canDownloadReport(row)">下载</el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="WORD">下载 Word</el-dropdown-item>
+                  <el-dropdown-item command="PDF">下载 PDF</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
         </el-table-column>
       </AppTable>
