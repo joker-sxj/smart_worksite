@@ -35,6 +35,7 @@ import com.xd.smartworksite.report.dto.ReportQueryRequest;
 import com.xd.smartworksite.report.dto.ReportResponse;
 import com.xd.smartworksite.report.dto.ReportVariableResponse;
 import com.xd.smartworksite.report.repository.ReportRepository;
+import com.xd.smartworksite.report.infra.ReportPdfConverter;
 import com.xd.smartworksite.task.application.TaskOutboxApplicationService;
 import com.xd.smartworksite.template.domain.FileObjectRecord;
 import com.xd.smartworksite.template.domain.Template;
@@ -56,6 +57,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
@@ -67,6 +70,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -95,6 +99,7 @@ public class ReportGenerationApplicationService {
     private final TaskOutboxApplicationService taskOutboxApplicationService;
     private final StorageAdapter storageAdapter;
     private final ObjectMapper objectMapper;
+    private final ReportPdfConverter pdfConverter;
     private final ReportTableAnalysisService reportTableAnalysisService = new ReportTableAnalysisService();
     private final ReportStructuredContentRenderer reportStructuredContentRenderer = new ReportStructuredContentRenderer();
 
@@ -106,6 +111,7 @@ public class ReportGenerationApplicationService {
                                               ReportQaApplicationService reportQaApplicationService,
                                               TaskOutboxApplicationService taskOutboxApplicationService,
                                               StorageAdapter storageAdapter,
+                                              ReportPdfConverter pdfConverter,
                                               ObjectMapper objectMapper) {
         this.reportRepository = reportRepository;
         this.projectAccessApplicationService = projectAccessApplicationService;
@@ -115,6 +121,7 @@ public class ReportGenerationApplicationService {
         this.reportQaApplicationService = reportQaApplicationService;
         this.taskOutboxApplicationService = taskOutboxApplicationService;
         this.storageAdapter = storageAdapter;
+        this.pdfConverter = pdfConverter;
         this.objectMapper = objectMapper;
     }
 
@@ -279,16 +286,19 @@ public class ReportGenerationApplicationService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告不存在"));
         projectAccessApplicationService.requireProjectAccess(report.getProjectId());
         String normalizedFormat = format == null || format.isBlank() ? "WORD" : format.trim().toUpperCase(Locale.ROOT);
-        if (!"WORD".equals(normalizedFormat)) {
-            throw new BusinessException(ErrorCode.PARAM_ERROR, "当前版本尚未生成PDF报告");
+        if (!("WORD".equals(normalizedFormat) || "PDF".equals(normalizedFormat))) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "报告格式仅支持WORD或PDF");
         }
         if (!(ReportStatus.COMPLETED.name().equals(report.getStatus())
                 || ReportStatus.PARTIAL_SUCCESS.name().equals(report.getStatus()))) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "报告尚未生成成功");
         }
-        FileObjectRecord file = reportRepository.findCurrentWordFileId(reportId)
+        Optional<Long> fileId = "PDF".equals(normalizedFormat)
+                ? reportRepository.findCurrentPdfFileId(reportId)
+                : reportRepository.findCurrentWordFileId(reportId);
+        FileObjectRecord file = fileId
                 .flatMap(reportRepository::findFileObjectById)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "报告文件不存在"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, normalizedFormat + "报告文件不存在"));
         if (!report.getProjectId().equals(file.getProjectId())
                 || !report.getId().equals(file.getBizId())
                 || !"REPORT_OUTPUT".equals(file.getBizType())) {
@@ -362,13 +372,21 @@ public class ReportGenerationApplicationService {
 
         requireUpdated(reportRepository.updateTaskStatus(task.getId(), TASK_STATUS_PROCESSING, TASK_STAGE_STORING_RESULT, null), "task storing status update failed");
         Long wordFileId = saveGeneratedWord(report, reportBytes);
-        ReportVersion version = saveVersion(report, config, wordFileId, reportBytes);
-        String finalStatus = generated.failedCount() == 0
+        Long pdfFileId = null;
+        String exportError = null;
+        try {
+            pdfFileId = saveGeneratedPdf(report, reportBytes);
+        } catch (Exception ex) {
+            exportError = "PDF导出失败：" + truncateError(ex.getMessage());
+        }
+        ReportVersion version = saveVersion(report, config, wordFileId, pdfFileId, reportBytes, exportError);
+        String finalStatus = generated.failedCount() == 0 && exportError == null
                 ? ReportStatus.COMPLETED.name()
                 : ReportStatus.PARTIAL_SUCCESS.name();
         String partialMessage = generated.failedCount() == 0
                 ? null
                 : "部分变量生成失败，已在报告中标记：" + String.join("、", generated.failedVariables());
+        if (exportError != null) partialMessage = partialMessage == null ? exportError : partialMessage + "；" + exportError;
         requireUpdated(reportRepository.updateReportSuccess(
                 report.getId(), version.getId(), finalStatus, 100, null, partialMessage),
                 "report success status update failed");
@@ -629,12 +647,40 @@ public class ReportGenerationApplicationService {
         return fileObject.getId();
     }
 
-    private ReportVersion saveVersion(Report report, ReportConfig config, Long wordFileId, byte[] reportBytes) {
+    private Long saveGeneratedPdf(Report report, byte[] wordBytes) throws Exception {
+        Path input = Files.createTempFile("report-", ".docx");
+        try {
+            Files.write(input, wordBytes);
+            byte[] bytes = pdfConverter.convert(input);
+            if (!isPdf(bytes)) {
+                throw new IOException("转换器未返回有效PDF文件");
+            }
+            String objectName = "reports/project-" + report.getProjectId() + "/report-" + report.getId() + "/"
+                    + LocalDate.now() + "/" + UUID.randomUUID() + ".pdf";
+            StorageObject object = storageAdapter.upload(objectName, new ByteArrayInputStream(bytes), bytes.length, "application/pdf");
+            FileObjectRecord file = new FileObjectRecord();
+            file.setProjectId(report.getProjectId()); file.setBizType("REPORT_OUTPUT"); file.setBizId(report.getId());
+            file.setFileName(report.getReportName() + ".pdf"); file.setObjectName(object.getObjectName());
+            file.setContentType("application/pdf"); file.setFileSize(bytes.length); file.setStatus("ACTIVE"); file.setMetadata("{}");
+            reportRepository.saveFileObject(file);
+            if (file.getId() == null) throw new BusinessException(ErrorCode.SYSTEM_ERROR, "PDF文件记录保存失败");
+            return file.getId();
+        } finally { Files.deleteIfExists(input); }
+    }
+
+    private boolean isPdf(byte[] bytes) {
+        return bytes != null && bytes.length >= 5
+                && bytes[0] == '%' && bytes[1] == 'P' && bytes[2] == 'D' && bytes[3] == 'F' && bytes[4] == '-';
+    }
+
+    private ReportVersion saveVersion(Report report, ReportConfig config, Long wordFileId, Long pdfFileId,
+                                      byte[] reportBytes, String exportError) {
         ReportVersion version = new ReportVersion();
         version.setProjectId(report.getProjectId());
         version.setReportId(report.getId());
         version.setVersionNo(1);
         version.setWordFileId(wordFileId);
+        version.setPdfFileId(pdfFileId);
         Map<String, Object> sourceSnapshot = new LinkedHashMap<>();
         sourceSnapshot.put("templateId", config.getTemplateId());
         sourceSnapshot.put("templateEngine", ReportEngineType.JAVA_TEMPLATE_AI.name());
@@ -647,6 +693,7 @@ public class ReportGenerationApplicationService {
         )));
         version.setContentHash(sha256(reportBytes));
         version.setStatus("SUCCESS");
+        version.setErrorMessage(exportError);
         reportRepository.saveVersion(version);
         if (version.getId() == null) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "report version id was not generated");

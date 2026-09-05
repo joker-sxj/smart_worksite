@@ -5,13 +5,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
 
 /** Runs the pre-installed office converter in an isolated temporary directory. */
-public class LibreOfficePdfConverter {
+@Component
+public class LibreOfficePdfConverter implements ReportPdfConverter {
     private static final Duration TIMEOUT = Duration.ofSeconds(90);
     private final String executable;
 
-    public LibreOfficePdfConverter(String executable) {
+    public LibreOfficePdfConverter(@Value("${app.report.pdf.converter:libreoffice}") String executable) {
         this.executable = executable == null || executable.isBlank() ? "libreoffice" : executable;
     }
 

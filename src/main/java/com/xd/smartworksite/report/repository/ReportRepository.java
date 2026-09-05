@@ -35,6 +35,7 @@ public interface ReportRepository {
     int updateVersionWordFile(Long versionId, Long wordFileId, String contentHash);
     Optional<ReportConfig> findConfigById(Long configId);
     Optional<Long> findCurrentWordFileId(Long reportId);
+    Optional<Long> findCurrentPdfFileId(Long reportId);
     Optional<Report> findReportById(Long reportId);
     List<Report> findReportPage(Long projectId, List<Long> accessibleProjectIds, String reportType, String status, String keyword);
 }

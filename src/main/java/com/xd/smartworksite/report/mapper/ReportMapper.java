@@ -75,6 +75,7 @@ public interface ReportMapper {
     ReportConfig selectConfigById(@Param("configId") Long configId);
 
     Long selectCurrentWordFileId(@Param("reportId") Long reportId);
+    Long selectCurrentPdfFileId(@Param("reportId") Long reportId);
 
     List<Report> selectReportPage(@Param("projectId") Long projectId,
                                   @Param("accessibleProjectIds") List<Long> accessibleProjectIds,

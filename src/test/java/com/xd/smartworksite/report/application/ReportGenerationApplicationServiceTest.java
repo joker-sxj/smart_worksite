@@ -20,6 +20,7 @@ import com.xd.smartworksite.report.domain.ReportVersion;
 import com.xd.smartworksite.report.dto.ReportCreateRequest;
 import com.xd.smartworksite.report.dto.ReportCreateResponse;
 import com.xd.smartworksite.report.repository.ReportRepository;
+import com.xd.smartworksite.report.infra.ReportPdfConverter;
 import com.xd.smartworksite.task.application.TaskOutboxApplicationService;
 import com.xd.smartworksite.template.application.TemplateVariableApplicationService;
 import com.xd.smartworksite.template.domain.FileObjectRecord;
@@ -37,6 +38,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -222,6 +224,59 @@ class ReportGenerationApplicationServiceTest {
                 .contains("生成内容-var_summary", "生成内容-var_risk");
         verify(context.access, atLeastOnce()).requireProjectAccess(1L);
         verify(context.storage).openObject(generatedFile.getObjectName());
+    }
+
+    @Test
+    void generatesAndStreamsRealPdfAlongsideWord() throws Exception {
+        ReportCreateResponse created = context.service.createReport(request());
+        context.service.executeReportTask(created.getReportId(), created.getTaskId());
+        FileObjectRecord pdfFile = context.repository.files.stream()
+                .filter(file -> "application/pdf".equals(file.getContentType())).findFirst().orElseThrow();
+        when(context.storage.openObject(pdfFile.getObjectName()))
+                .thenReturn(new ByteArrayInputStream(context.generatedPdf));
+
+        FileObjectContent content = context.service.openDownloadFile(created.getReportId(), "PDF");
+
+        assertThat(content.getFileName()).isEqualTo("智慧工地报告.pdf");
+        assertThat(content.getContentType()).isEqualTo("application/pdf");
+        assertThat(content.getInputStream().readAllBytes()).startsWith("%PDF".getBytes());
+    }
+
+    @Test
+    void keepsWordAndMarksPartialSuccessWhenPdfConversionFails() throws Exception {
+        when(context.pdfConverter.convert(any())).thenThrow(new IOException("converter unavailable"));
+
+        ReportCreateResponse created = context.service.createReport(request());
+        context.service.executeReportTask(created.getReportId(), created.getTaskId());
+
+        assertThat(context.repository.reports.get(0).getStatus()).isEqualTo("PARTIAL_SUCCESS");
+        assertThat(context.repository.reports.get(0).getErrorMessage()).contains("PDF导出失败");
+        assertThat(context.repository.versions).singleElement()
+                .satisfies(version -> {
+                    assertThat(version.getWordFileId()).isNotNull();
+                    assertThat(version.getPdfFileId()).isNull();
+                    assertThat(version.getErrorMessage()).contains("PDF导出失败");
+                });
+        assertThat(context.repository.files)
+                .filteredOn(file -> "application/pdf".equals(file.getContentType()))
+                .isEmpty();
+        assertThatThrownBy(() -> context.service.openDownloadFile(created.getReportId(), "PDF"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("PDF报告文件不存在");
+    }
+
+    @Test
+    void rejectsInvalidPdfBytesWithoutPublishingFakePdf() throws Exception {
+        when(context.pdfConverter.convert(any())).thenReturn("not-a-pdf".getBytes());
+
+        ReportCreateResponse created = context.service.createReport(request());
+        context.service.executeReportTask(created.getReportId(), created.getTaskId());
+
+        assertThat(context.repository.reports.get(0).getStatus()).isEqualTo("PARTIAL_SUCCESS");
+        assertThat(context.repository.reports.get(0).getErrorMessage()).contains("PDF导出失败");
+        assertThat(context.repository.files)
+                .filteredOn(file -> "application/pdf".equals(file.getContentType()))
+                .isEmpty();
     }
 
     @Test
@@ -416,9 +471,11 @@ class ReportGenerationApplicationServiceTest {
         private final DataSourceRepository dataSources = mock(DataSourceRepository.class);
         private final TaskOutboxApplicationService outbox = mock(TaskOutboxApplicationService.class);
         private final StorageAdapter storage = mock(StorageAdapter.class);
+        private final ReportPdfConverter pdfConverter = mock(ReportPdfConverter.class);
         private final Map<String, String> answers = new LinkedHashMap<>();
         private final ReportGenerationApplicationService service;
         private byte[] generatedDocx;
+        private byte[] generatedPdf;
         private String failVariable;
 
         private TestContext() {
@@ -444,9 +501,13 @@ class ReportGenerationApplicationServiceTest {
                     new ByteArrayInputStream(docx("摘要：{{ var_summary }}", "风险：{{ var_risk }}")));
             when(storage.upload(any(), any(), anyLong(), any())).thenAnswer(invocation -> {
                 InputStream input = invocation.getArgument(1);
-                generatedDocx = input.readAllBytes();
-                return new StorageObject(invocation.getArgument(0), "test", invocation.getArgument(3), generatedDocx.length);
+                byte[] bytes = input.readAllBytes();
+                String contentType = invocation.getArgument(3);
+                if ("application/pdf".equals(contentType)) generatedPdf = bytes; else generatedDocx = bytes;
+                return new StorageObject(invocation.getArgument(0), "test", contentType, bytes.length);
             });
+            try { when(pdfConverter.convert(any())).thenReturn("%PDF-1.7\nreal".getBytes()); }
+            catch (Exception ex) { throw new IllegalStateException(ex); }
             when(storage.createAccessUrl(any(), any(Duration.class))).thenReturn("http://127.0.0.1/report.docx");
             when(qa.generateVariableForSystem(any())).thenAnswer(invocation -> {
                 ReportVariableQaRequest request = invocation.getArgument(0);
@@ -461,7 +522,8 @@ class ReportGenerationApplicationServiceTest {
                 return response;
             });
             service = new ReportGenerationApplicationService(
-                    repository, access, templates, dataSources, templateVariables, qa, outbox, storage, new ObjectMapper());
+                    repository, access, templates, dataSources, templateVariables, qa, outbox, storage,
+                    pdfConverter, new ObjectMapper());
         }
     }
 
@@ -499,6 +561,7 @@ class ReportGenerationApplicationServiceTest {
         @Override public int updateVersionWordFile(Long versionId, Long wordFileId, String contentHash) { return 1; }
         @Override public Optional<ReportConfig> findConfigById(Long configId) { return configs.stream().filter(value -> configId.equals(value.getId())).findFirst(); }
         @Override public Optional<Long> findCurrentWordFileId(Long reportId) { return versions.stream().filter(value -> reportId.equals(value.getReportId())).map(ReportVersion::getWordFileId).reduce((first, second) -> second); }
+        @Override public Optional<Long> findCurrentPdfFileId(Long reportId) { return versions.stream().filter(value -> reportId.equals(value.getReportId())).map(ReportVersion::getPdfFileId).filter(java.util.Objects::nonNull).reduce((first, second) -> second); }
         @Override public Optional<Report> findReportById(Long reportId) { return reports.stream().filter(value -> reportId.equals(value.getId())).findFirst(); }
         @Override public List<Report> findReportPage(Long projectId, List<Long> accessibleProjectIds, String reportType, String status, String keyword) { return reports; }
 
