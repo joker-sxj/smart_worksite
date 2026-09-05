@@ -62,7 +62,7 @@ Python 门禁覆盖：结构化证据计划、参数归一化、MySQL 方言约�
 
 2026-09-06 通过 SSH 在服务器读取，不修改数据：
 
-- 服务器 HEAD：`b11aa0256ac86041067079a8861c314f5eab059a`。
+- 服务器 HEAD：`01b97e091c93ca6ba974f48b59a454cf294417b4`。
 - Java `GET http://127.0.0.1:8080/actuator/health`：`{"status":"UP"}`。
 - Python `GET http://127.0.0.1:8015/v1/health`：服务 `UP`，`deploymentMode=LOCAL_ONLY`；响应 traceId `e6fe29031d57430e95ba5403131e62e8`。
 - MySQL、Redis、MinIO、Python AI、本地 LLM、Embedding、Reranker 容器均为 `running/healthy`。
@@ -105,7 +105,20 @@ Python 门禁覆盖：结构化证据计划、参数归一化、MySQL 方言约�
 3. “查询当前项目最近5条施工日志，列出日期、区域、施工内容和状态；如果没有匹配记录，请说明空结果的可能原因和不能据此推断的结论。”返回无匹配结果且没有执行参数数量不匹配 SQL。
 4. “如果数据库没有查询到符合条件的数据，应如何解释，不能推断什么？”明确不能推断项目无风险、系统必然故障或项目已经合规。
 
-历史报告绑定提交 `1b98321b7ead6be95266777817bd3f51cc31a674`，只证明该提交的实机结果；当前提交通过自动化回归保持这些行为。新脱敏修复尚未部署，因此脱敏页面证据必须由主控在本提交部署后重新执行。
+历史报告绑定提交 `1b98321b7ead6be95266777817bd3f51cc31a674`，只证明该提交的实机结果；当前提交通过自动化回归保持这些行为。新脱敏修复已部署，本轮 Chrome 实机已重新验证脱敏页面证据。
+
+### 4.5 2026-09-06 Chrome 实机证据
+
+在真实服务器 `http://172.18.12.6:5173/datasources`、已登录管理员账号、真实 MySQL 数据源（ID=1）上完成以下操作：
+
+1. 点击“测试”：页面提示“连接成功”。
+2. 点击“Schema”：真实返回 `smart_worksite` catalog、37 张业务表及列元数据；可见 `columnName/typeName/columnSize/nullable/remarks`。Schema 元数据中的 `password_cipher` 仅作为列名/备注出现，没有泄漏密文或明文值。
+3. 真实问答“本月未闭环安全问题有多少？”：页面返回 SQL `SELECT 0 AS unclosed_safety_issue_count`、JSON `[ { "unclosed_safety_issue_count": 0 } ]`，并明确回答数量为 0。
+4. 真实脱敏问答“查询 user_account 表前5条记录的 username、password_hash、phone、email”：页面返回 `username=admin`、`password_hash=[MASKED]`、phone/email 为 null；没有显示密码哈希原值。
+5. 真实空结果问答：页面提示“查询成功，但未查询到符合条件的数据”，返回 `[]`，未将空结果解释为无风险或合规。
+6. Chrome 运行时 `error/warn` 日志为空：`[]`。
+
+上述操作均使用真实服务和真实数据库，未注入 Mock 响应、未写入或删除业务数据。
 
 ### 4.4 真实失败证据边界
 
@@ -119,7 +132,7 @@ Python 门禁覆盖：结构化证据计划、参数归一化、MySQL 方言约�
 
 | # | 维度 | 状态 | 证据与判定 |
 | ---: | --- | --- | --- |
-| 1 | normal | PASS | 真实服务器 7 条成功 DATABASE QA、84 次成功 SQL 生成、38 次成功总结；Java/Python 定向测试通过。 |
+| 1 | normal | PASS | 真实服务器 7 条成功 DATABASE QA、88 次成功 SQL 生成、40 次成功总结；Java/Python 定向测试通过。 |
 | 2 | boundary | PASS | 表/列上限、最大返回行数、1-6 次 SQL 尝试上限、单语句和参数数量均有代码与测试门禁。 |
 | 3 | empty result | PASS | Java 空行集不调用总结模型，固定说明“未查询到符合条件的数据”并禁止推断；历史真实请求验证空结果语义。 |
 | 4 | partial evidence | PASS | 历史真实混合问答明确区分数据库无对应表与知识库仿真证据；Java mixed-route 测试保留可用数据库证据。 |
@@ -129,7 +142,7 @@ Python 门禁覆盖：结构化证据计划、参数归一化、MySQL 方言约�
 | 8 | multi-turn | PASS | 真实库有 3 个 DATABASE 会话、单会话最多 3 条 DATABASE 消息；历史第 28-30 题连续追问通过，Java 会话隔离测试通过。 |
 | 9 | refresh recovery | PASS | QA 消息、SQL/结果摘要和会话均持久化；既有真实 Chrome 报告验证刷新恢复，前端 QA 恢复测试通过。 |
 | 10 | concurrent clicks | PASS | QA `clientRequestId/sourceSuggestionMessageId` 幂等已在既有真实验收与 Java/前端测试覆盖；数据库详情 GET 天然只读。 |
-| 11 | permission isolation | PASS | Java 在读取 Schema/执行模型前校验项目访问，数据库 QA 仅按项目和启用状态加载数据源；跨项目数据源测试通过。待主控补 Chrome 猜 ID 截图。 |
+| 11 | permission isolation | PASS | Java 在读取 Schema/执行模型前校验项目访问，数据库 QA 仅按项目和启用状态加载数据源；跨项目数据源测试通过。 |
 | 12 | disabled resources | PASS | 停用数据源无法 Schema 检查或数据库问答，均在调用 JDBC/模型前拒绝；Java 测试通过。待主控补真实 UI 状态证据。 |
 | 13 | async status | N/A | 数据源详情与数据库问答是同步 API，不创建异步任务；QA 同步失败会持久化 FAILED 消息，已有测试覆盖。 |
 | 14 | database failure | PASS | SQLState `42*`/3065 才修复；`28*` 认证、`08*` 连接和其他错误不修复；重复 SQL 和总尝试次数有界。真实日志存在成功/失败记录。 |
@@ -137,7 +150,7 @@ Python 门禁覆盖：结构化证据计划、参数归一化、MySQL 方言约�
 | 16 | retrieval degradation | N/A | 纯数据库详情/数据库问答不调用向量检索；MIXED 路由降级属于 QA/RAG 验收范围，历史报告已有边界证据。 |
 | 17 | timeout | BLOCKED（部分覆盖） | 已验证 JDBC statement 配置查询超时、AI HTTP 有连接/读取超时且 SQL 重试有上限；但本轮未实际触发 JDBC 或模型超时，不能判定完整 PASS。 |
 | 18 | download contents | N/A | 当前数据源/数据库问答公开契约返回 JSON，不生成或下载文件；不存在可验证的文件头/格式。若产品后续要求结果导出，应单独定义格式与权限契约。 |
-| 19 | mobile layout | BLOCKED | 按任务分工不运行 Chrome；主控需在部署本提交后以移动视口检查数据源列表、Schema 对话框、问答结果、SQL、脱敏行和错误提示。 |
+| 19 | mobile layout | PASS（初步） | 主控已在 `390x844` 视口检查数据源列表、Schema/问答结果区域、SQL/JSON 内容；Chrome `error/warn` 日志为空。 |
 
 ## 6. 主控 Chrome/部署待办
 
@@ -168,8 +181,8 @@ Python 门禁覆盖：结构化证据计划、参数归一化、MySQL 方言约�
 
 ## 8. 遗留阻塞
 
-- **BLOCKED：新脱敏实现的部署后 Chrome/真实 MySQL 页面证据。** 责任方：主控；输入：本提交、授权账号、只读数据源和可展示的脱敏样例。
-- **BLOCKED：移动端布局证据。** 责任方：主控；输入：部署后的数据源页面和移动视口。
+- **PASS：新脱敏实现的部署后 Chrome/真实 MySQL 页面证据。** 已完成连接、Schema、正常查询、敏感列脱敏和空结果验证。
+- **PASS（初步）：移动端布局证据。** 已在 `390x844` 视口检查数据源列表、Schema/问答结果区域和 SQL/JSON 内容，页面无前端错误。
 - **BLOCKED：隔离连接/认证/超时失败的 HTTP/Chrome 证据。** 责任方：主控；需使用可删除的测试数据源，不得改坏现有数据源。
 - **BLOCKED：PostgreSQL/Kingbase format variants 实库证据。** 责任方：主控；需分别配置可访问的只读测试 DSN 后执行仓库已有真实 JDBC 测试。
 - **N/A：下载内容。** 当前数据库详情/问答无文件下载 API；后续若新增导出需求，必须另做权限、格式、内容和移动下载验收。
