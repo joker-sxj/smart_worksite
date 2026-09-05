@@ -36,6 +36,8 @@ const fieldSchema = ref<ReviewFieldSchema | null>(null);
 const fieldValues = ref<Record<string, unknown>>({});
 const schemaDraft = ref<ReviewField[]>([]);
 const savingSchema = ref(false);
+const schemaError = ref('');
+const schemaLoading = ref(false);
 const currentRecord = ref<ReviewRecord | null>(null);
 const submittedInfo = ref<{ recordId?: ID; taskId?: ID; status?: string } | null>(null);
 const logs = ref<TaskStageLog[]>([]);
@@ -44,7 +46,7 @@ let recordPollTimer: ReturnType<typeof setTimeout> | null = null;
 const RECORD_POLL_INTERVAL_MS = 2000;
 const canManageReview = computed(() => userStore.hasPermission('review:manage'));
 const reviewManageTip = '当前账号没有合规审查管理权限';
-const canSubmit = computed(() => Boolean(canManageReview.value && templates.value.length && selectedTemplateId.value && file.value && !submitting.value));
+const canSubmit = computed(() => Boolean(canManageReview.value && templates.value.length && selectedTemplateId.value && file.value && !submitting.value && !schemaLoading.value && !schemaError.value));
 const ruleResults = computed(() => Array.isArray(currentRecord.value?.result?.ruleResults) ? currentRecord.value?.result?.ruleResults as Array<Record<string, unknown>> : []);
 const issueStatusOptions = [
   { label: '待处理', value: 'OPEN' },
@@ -110,8 +112,14 @@ async function loadTemplates() {
 async function loadFieldSchema() {
   const projectId = projectStore.currentProject?.projectId;
   if (!projectId || !selectedTemplateId.value) { fieldSchema.value = null; return; }
+  schemaLoading.value = true; schemaError.value = '';
   try { fieldSchema.value = await fetchReviewFieldSchema(projectId, selectedTemplateId.value); schemaDraft.value = fieldSchema.value.fields.map((item) => ({ ...item, options: [...item.options], validation: { ...item.validation } })); }
-  catch { fieldSchema.value = null; }
+  catch (err) { fieldSchema.value = null; schemaError.value = err instanceof Error ? err.message : '审查字段配置加载失败，已阻止提交'; }
+  finally { schemaLoading.value = false; }
+}
+
+function setValidation(field: ReviewField, key: string, value: unknown) {
+  field.validation = { ...field.validation, [key]: value === '' ? undefined : value };
 }
 
 function addSchemaField() {
@@ -234,6 +242,7 @@ onUnmounted(stopRecordPolling);
     <el-alert v-if="submitError" :title="submitError" type="error" show-icon :closable="false" style="margin-bottom: 12px" />
     <el-alert v-if="resultNotice" :title="resultNotice" type="info" show-icon :closable="false" style="margin-bottom: 12px" />
     <el-alert v-if="stageNotice" :title="stageNotice" type="warning" show-icon :closable="false" style="margin-bottom: 12px" />
+    <el-alert v-if="schemaError" :title="`审查字段配置加载失败：${schemaError}`" type="error" show-icon :closable="false" style="margin-bottom: 12px" />
     <div class="page-header">
       <div>
         <h2 class="page-title">{{ t('合规审查') }}</h2>
@@ -279,7 +288,10 @@ onUnmounted(stopRecordPolling);
         <el-form v-if="fieldSchema?.fields.some((item) => item.stage === 'INPUT')" label-position="top" class="review-fields">
           <el-form-item v-for="item in fieldSchema.fields.filter((field) => field.stage === 'INPUT')" :key="item.key" :label="`${item.label || item.key}${item.required ? ' *' : ''}`">
             <el-select v-if="item.type === 'ENUM'" v-model="fieldValues[item.key]" style="width: 100%"><el-option v-for="option in item.options" :key="option" :label="option" :value="option" /></el-select>
-            <el-input v-else v-model="fieldValues[item.key]" :type="item.type === 'TEXT' ? 'textarea' : 'text'" />
+            <el-input-number v-else-if="item.type === 'NUMBER'" v-model="fieldValues[item.key] as number" style="width: 100%" />
+            <el-switch v-else-if="item.type === 'BOOLEAN'" v-model="fieldValues[item.key] as boolean" />
+            <el-date-picker v-else-if="item.type === 'DATE'" v-model="fieldValues[item.key]" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+            <el-input v-else v-model="fieldValues[item.key] as string" :type="item.type === 'TEXT' ? 'textarea' : 'text'" />
           </el-form-item>
         </el-form>
         <el-collapse v-if="canManageReview" class="schema-editor">
@@ -290,6 +302,13 @@ onUnmounted(stopRecordPolling);
               <el-select v-model="item.type"><el-option v-for="type in ['STRING','TEXT','NUMBER','BOOLEAN','DATE','ENUM']" :key="type" :label="type" :value="type" /></el-select>
               <el-checkbox v-model="item.required">必填</el-checkbox><el-input-number v-model="item.sort" :min="0" />
               <el-button type="danger" plain @click="schemaDraft.splice(index, 1)">删除</el-button>
+              <el-select v-if="item.type === 'ENUM'" v-model="item.options" multiple filterable allow-create default-first-option placeholder="枚举选项" class="wide-field" />
+              <div class="validation-fields wide-field">
+                <el-input-number v-if="item.type === 'NUMBER'" :model-value="item.validation.min as number" placeholder="最小值" @update:model-value="setValidation(item, 'min', $event)" />
+                <el-input-number v-if="item.type === 'NUMBER'" :model-value="item.validation.max as number" placeholder="最大值" @update:model-value="setValidation(item, 'max', $event)" />
+                <el-input-number v-else :model-value="item.validation.maxLength as number" placeholder="最大长度" @update:model-value="setValidation(item, 'maxLength', $event)" />
+                <el-input :model-value="item.validation.pattern as string" placeholder="正则格式（可选）" @update:model-value="setValidation(item, 'pattern', $event)" />
+              </div>
             </div>
             <div class="schema-actions"><el-button @click="addSchemaField">添加字段</el-button><el-button type="primary" :loading="savingSchema" @click="persistSchema">保存新版本</el-button></div>
           </el-collapse-item>
@@ -385,6 +404,8 @@ onUnmounted(stopRecordPolling);
 .evidence-card { margin-top: 16px; }
 .schema-editor { margin: 18px 0; }
 .schema-row { display: grid; grid-template-columns: 1.2fr 1.2fr 1fr 1fr auto auto auto; gap: 8px; margin-bottom: 10px; align-items: center; }
+.wide-field { grid-column: 1 / -1; width: 100%; }
+.validation-fields { display: flex; gap: 8px; }
 .schema-actions { display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 900px) {
   .review-guide { grid-template-columns: 1fr; }

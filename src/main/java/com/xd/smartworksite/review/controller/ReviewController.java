@@ -19,6 +19,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,6 +40,7 @@ public class ReviewController {
     public ReviewController(ReviewApplicationService reviewApplicationService, ReviewFieldSchemaService reviewFieldSchemaService) {
         this(reviewApplicationService, reviewFieldSchemaService, null, null);
     }
+    @Autowired
     public ReviewController(ReviewApplicationService reviewApplicationService, ReviewFieldSchemaService reviewFieldSchemaService,
                             ProjectAccessApplicationService projectAccessApplicationService, TemplateApplicationService templateApplicationService) {
         this.reviewApplicationService = reviewApplicationService;
