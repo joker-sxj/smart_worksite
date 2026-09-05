@@ -151,6 +151,21 @@ class SafeSqlExecutorTest {
     }
 
     @Test
+    void masksSensitiveColumnsFromDatabaseQueryResults() {
+        DataSourceRecord record = mysqlDataSource();
+        record.setJdbcUrl("jdbc:h2:mem:database_qa_mask;MODE=MySQL;DATABASE_TO_UPPER=false;DB_CLOSE_DELAY=-1");
+        record.setUsername("sa");
+        configureEncryptedPassword(record, "");
+
+        SafeSqlExecutor.QueryResult result = executor.execute(record,
+                "select 'root-secret' as password, '13800138000' as phone, '工程A' as project_name");
+
+        assertEquals("[MASKED]", result.rows().get(0).get("password"));
+        assertEquals("[MASKED]", result.rows().get(0).get("phone"));
+        assertEquals("工程A", result.rows().get(0).get("project_name"));
+    }
+
+    @Test
     void describesAvailableTablesAndColumnsForPromptSchema() throws Exception {
         String jdbcUrl = "jdbc:h2:mem:database_qa_schema;MODE=MySQL;DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(jdbcUrl, "sa", "");
