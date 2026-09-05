@@ -11,6 +11,11 @@
         <result property="status" column="status"/>
         <result property="issuesJson" column="issues_json"/>
         <result property="resultJson" column="result_json"/>
+        <result property="fieldSchemaId" column="field_schema_id"/>
+        <result property="fieldSchemaVersion" column="field_schema_version"/>
+        <result property="inputFieldsJson" column="input_fields_json"/>
+        <result property="documentFieldsJson" column="document_fields_json"/>
+        <result property="resultFieldsJson" column="result_fields_json"/>
         <result property="errorMessage" column="error_message"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
@@ -19,17 +24,20 @@
     </resultMap>
 
     <sql id="ReviewRecordColumns">
-        id, project_id, template_id, file_id, task_id, status, issues_json,
-        result_json, error_message, created_at, updated_at, created_by, updated_by
+        id, project_id, template_id, field_schema_id, field_schema_version, file_id, task_id, status, issues_json,
+        result_json, input_fields_json, document_fields_json, result_fields_json,
+        error_message, created_at, updated_at, created_by, updated_by
     </sql>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         insert into review_record (
-            project_id, template_id, file_id, task_id, status, issues_json,
-            result_json, error_message, created_by, updated_by
+            project_id, template_id, field_schema_id, field_schema_version, file_id, task_id, status, issues_json,
+            result_json, input_fields_json, document_fields_json, result_fields_json,
+            error_message, created_by, updated_by
         ) values (
-            #{projectId}, #{templateId}, #{fileId}, #{taskId}, #{status}, #{issuesJson},
-            #{resultJson}, #{errorMessage}, #{createdBy}, #{updatedBy}
+            #{projectId}, #{templateId}, #{fieldSchemaId}, #{fieldSchemaVersion}, #{fileId}, #{taskId}, #{status}, #{issuesJson},
+            #{resultJson}, #{inputFieldsJson}, #{documentFieldsJson}, #{resultFieldsJson},
+            #{errorMessage}, #{createdBy}, #{updatedBy}
         )
     </insert>
 
@@ -91,6 +99,8 @@
         set status = 'COMPLETED',
             issues_json = #{issuesJson},
             result_json = #{resultJson},
+            document_fields_json = json_extract(#{resultJson}, '$.documentReviewFields'),
+            result_fields_json = json_extract(#{resultJson}, '$.resultReviewFields'),
             error_message = null,
             updated_by = #{updatedBy}
         where id = #{recordId}
@@ -108,6 +118,8 @@
     <update id="markFinished">
         update review_record
         set status = #{status}, issues_json = #{issuesJson}, result_json = #{resultJson},
+            document_fields_json = json_extract(#{resultJson}, '$.documentReviewFields'),
+            result_fields_json = json_extract(#{resultJson}, '$.resultReviewFields'),
             error_message = null, updated_by = #{updatedBy}
         where id = #{recordId}
           and status in ('PROCESSING', 'PARSING', 'RULES_READY', 'REVIEWING', 'PARTIAL_SUCCESS', 'COMPLETED')

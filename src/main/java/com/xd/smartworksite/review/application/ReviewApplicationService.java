@@ -25,6 +25,7 @@ import com.xd.smartworksite.review.dto.ReviewRecordResponse;
 import com.xd.smartworksite.review.dto.ReviewSubmitRequest;
 import com.xd.smartworksite.review.repository.ReviewRecordRepository;
 import com.xd.smartworksite.review.repository.ReviewReferenceRepository;
+import com.xd.smartworksite.review.domain.ReviewFieldSchema;
 import com.xd.smartworksite.knowledge.domain.KnowledgeDocument;
 import com.xd.smartworksite.knowledge.repository.KnowledgeDocumentRepository;
 import com.xd.smartworksite.template.application.TemplateApplicationService;
@@ -62,6 +63,8 @@ public class ReviewApplicationService {
     private final TaskWorkerApplicationService taskWorkerApplicationService;
     private final ReviewReferenceRepository reviewReferenceRepository;
     private final KnowledgeDocumentRepository knowledgeDocumentRepository;
+    @Autowired(required = false)
+    private ReviewFieldSchemaService reviewFieldSchemaService;
     @Autowired(required = false)
     private ReviewRuleOrchestrator reviewRuleOrchestrator;
     @Autowired(required = false)
@@ -125,6 +128,8 @@ public class ReviewApplicationService {
         request.validateReferences();
         projectAccessApplicationService.requireProjectWritableAccess(request.getProjectId());
         TemplateResponse template = requireReviewTemplate(request.getProjectId(), request.getTemplateId());
+        ReviewFieldSchema schema = reviewFieldSchemaService == null ? null : reviewFieldSchemaService.requireForSubmission(
+                request.getProjectId(), template.getTemplateId(), request.getSchemaVersion(), request.getFieldValues());
         FileUploadRequest uploadRequest = new FileUploadRequest();
         uploadRequest.setProjectId(request.getProjectId());
         uploadRequest.setBizType("REVIEW_DOC");
@@ -134,6 +139,10 @@ public class ReviewApplicationService {
         ReviewRecord record = new ReviewRecord();
         record.setProjectId(request.getProjectId());
         record.setTemplateId(template.getTemplateId());
+        if (schema != null) {
+            record.setFieldSchemaId(schema.getId()); record.setFieldSchemaVersion(schema.getVersion());
+            record.setInputFieldsJson(request.getFieldValues() == null ? "{}" : request.getFieldValues());
+        }
         record.setFileId(file.getFileId());
         record.setStatus(ReviewStatus.PENDING.name());
         record.setIssuesJson("[]");
@@ -391,6 +400,7 @@ public class ReviewApplicationService {
         parameters.put("reviewFileContentTruncated", reviewText.truncated() || reviewText.text().length() > 20000);
         parameters.put("templateContent", legacyPromptText(templateText.text()));
         parameters.put("templateContentTruncated", templateText.truncated() || templateText.text().length() > 20000);
+        if (record.getInputFieldsJson() != null) parameters.put("reviewFieldInputValues", record.getInputFieldsJson());
         parameters.put("instruction", "请基于审查模板和被审查文件内容进行合规审查，只返回合法JSON对象，不要输出Markdown或解释文字。");
         parameters.put("expectedResultSchema", Map.of(
                 "issues", "array of {issueId,severity,location,ruleName,description,suggestion,status}",
@@ -425,7 +435,7 @@ public class ReviewApplicationService {
             Map<String, Object> result = parseAgentResult(response);
             result.put("providerTraceId", response.getProviderTraceId());
             if (response.getSteps() != null && !response.getSteps().isEmpty()) result.put("steps", response.getSteps());
-            return result;
+            return attachReviewFields(record, result);
         }
         List<ReviewRuleOrchestrator.SourceText> sources = new ArrayList<>();
         for (ReviewReference reference : references) {
@@ -482,6 +492,27 @@ public class ReviewApplicationService {
             ReviewRuleResultWriter.WriteSummary summary = reviewRuleResultWriter.replace(record.getId(), record.getProjectId(), outcome);
             result.put("finalStatus", summary.finalStatus());
         }
+        return attachReviewFields(record, result);
+    }
+
+    private Map<String, Object> attachReviewFields(ReviewRecord record, Map<String, Object> result) {
+        if (reviewFieldSchemaService == null) return result;
+        ReviewFieldSchema schema = reviewFieldSchemaService.findVersion(
+                record.getProjectId(), record.getTemplateId(), record.getFieldSchemaVersion());
+        Map<String, Object> documentValues = new LinkedHashMap<>();
+        Map<String, Object> resultValues = new LinkedHashMap<>();
+        for (var field : schema.getFields()) {
+            if ("DOCUMENT".equals(field.getStage()) || "RESULT".equals(field.getStage())) {
+                Object value = result.get(field.getKey());
+                Map<String, Object> item = new LinkedHashMap<>(); item.put("value", value);
+                item.put("evidence", result.get(field.getKey() + "Evidence"));
+                item.put("confidence", result.get(field.getKey() + "Confidence"));
+                item.put("manuallyRevised", false);
+                ("DOCUMENT".equals(field.getStage()) ? documentValues : resultValues).put(field.getKey(), item);
+            }
+        }
+        result.put("documentReviewFields", documentValues);
+        result.put("resultReviewFields", resultValues);
         return result;
     }
 

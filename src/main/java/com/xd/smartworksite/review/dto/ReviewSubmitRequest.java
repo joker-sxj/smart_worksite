@@ -20,6 +20,8 @@ public class ReviewSubmitRequest {
     private List<Long> referenceDocumentIds = new ArrayList<>();
     private List<Long> referenceFileIds = new ArrayList<>();
     private List<MultipartFile> referenceFiles = new ArrayList<>();
+    private Integer schemaVersion;
+    private String fieldValues = "{}";
 
     public Long getProjectId() { return projectId; }
     public void setProjectId(Long projectId) { this.projectId = projectId; }
@@ -39,6 +41,10 @@ public class ReviewSubmitRequest {
     public void setReferenceFiles(List<MultipartFile> referenceFiles) {
         this.referenceFiles = referenceFiles == null ? new ArrayList<>() : new ArrayList<>(referenceFiles);
     }
+    public Integer getSchemaVersion() { return schemaVersion; }
+    public void setSchemaVersion(Integer schemaVersion) { this.schemaVersion = schemaVersion; }
+    public String getFieldValues() { return fieldValues; }
+    public void setFieldValues(String fieldValues) { this.fieldValues = fieldValues; }
 
     public List<Long> normalizedReferenceDocumentIds() {
         return normalize(referenceDocumentIds);

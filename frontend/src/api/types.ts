@@ -259,6 +259,26 @@ export interface ReviewRecord {
   updatedAt: string;
 }
 
+export interface ReviewField {
+  key: string;
+  label?: string;
+  stage: 'INPUT' | 'DOCUMENT' | 'RESULT';
+  type: 'STRING' | 'TEXT' | 'NUMBER' | 'BOOLEAN' | 'DATE' | 'ENUM';
+  required: boolean;
+  options: string[];
+  sort: number;
+  validation: Record<string, unknown>;
+}
+
+export interface ReviewFieldSchema {
+  id?: ID;
+  projectId: ID;
+  templateId: ID;
+  version: number;
+  status: string;
+  fields: ReviewField[];
+}
+
 export interface ReviewReference {
   id: ID;
   reviewRecordId: ID;

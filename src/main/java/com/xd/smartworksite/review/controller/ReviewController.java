@@ -7,6 +7,9 @@ import com.xd.smartworksite.review.dto.ReviewIssueUpdateRequest;
 import com.xd.smartworksite.review.dto.ReviewRecordQueryRequest;
 import com.xd.smartworksite.review.dto.ReviewRecordResponse;
 import com.xd.smartworksite.review.dto.ReviewSubmitRequest;
+import com.xd.smartworksite.review.dto.ReviewFieldSchemaRequest;
+import com.xd.smartworksite.review.domain.ReviewFieldSchema;
+import com.xd.smartworksite.review.application.ReviewFieldSchemaService;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -24,9 +27,24 @@ import org.springframework.web.bind.annotation.RestController;
 @Validated
 public class ReviewController {
     private final ReviewApplicationService reviewApplicationService;
+    private final ReviewFieldSchemaService reviewFieldSchemaService;
 
-    public ReviewController(ReviewApplicationService reviewApplicationService) {
+    public ReviewController(ReviewApplicationService reviewApplicationService, ReviewFieldSchemaService reviewFieldSchemaService) {
         this.reviewApplicationService = reviewApplicationService;
+        this.reviewFieldSchemaService = reviewFieldSchemaService;
+    }
+
+    @GetMapping("/field-schemas/active")
+    @PreAuthorize("hasAuthority('review:view')")
+    public ApiResponse<ReviewFieldSchema> getFieldSchema(Long projectId, Long templateId) {
+        return ApiResponse.success(reviewFieldSchemaService.findActive(projectId, templateId));
+    }
+
+    @PutMapping("/field-schemas")
+    @PreAuthorize("hasAuthority('review:manage')")
+    public ApiResponse<ReviewFieldSchema> saveFieldSchema(Long projectId, Long templateId,
+            @org.springframework.web.bind.annotation.RequestBody ReviewFieldSchemaRequest request) {
+        return ApiResponse.success(reviewFieldSchemaService.save(projectId, templateId, request.getFields()));
     }
 
     @PostMapping(value = "/records", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

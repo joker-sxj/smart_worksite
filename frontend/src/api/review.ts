@@ -1,7 +1,7 @@
 
 import request from '../utils/request';
 import { mockReviewRecord, mockReviewTemplates } from '../mocks/review';
-import type { ID, PageQuery, PageResult, ReviewRecord, ReviewTemplate } from './types';
+import type { ID, PageQuery, PageResult, ReviewField, ReviewFieldSchema, ReviewRecord, ReviewTemplate } from './types';
 import { useModuleMock } from './mock';
 import { buildReviewFormData, type ReviewSubmission } from '../views/review/reviewSubmission';
 
@@ -26,6 +26,14 @@ function findMockReviewRecord(recordId: ID) {
 export async function fetchReviewTemplates(projectId?: ID) {
   if (useReviewTemplateMock) return filterMockReviewTemplates(projectId);
   return request.get<ReviewTemplate[]>('/review/templates', { params: { projectId, status: 'ENABLED' } });
+}
+
+export async function fetchReviewFieldSchema(projectId: ID, templateId: ID) {
+  return request.get<ReviewFieldSchema>('/review/field-schemas/active', { params: { projectId, templateId } });
+}
+
+export async function saveReviewFieldSchema(projectId: ID, templateId: ID, fields: ReviewField[]) {
+  return request.put<ReviewFieldSchema>('/review/field-schemas', { fields }, { params: { projectId, templateId } });
 }
 
 export async function submitReviewRecord(data: ReviewSubmission) {
