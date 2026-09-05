@@ -242,6 +242,8 @@ def build_report(profile: dict[str, str], hardware: dict[str, Any], samples: lis
         "profile": {
             "name": profile.get("MODEL_PROFILE_NAME", "unknown"),
             "chatModel": profile.get("CHAT_MODEL_NAME"),
+            "chatModelId": profile.get("CHAT_MODEL_ID"),
+            "chatModelRevision": profile.get("CHAT_MODEL_REVISION"),
             "maxContextTokens": _integer_or_none(profile.get("CHAT_MAX_MODEL_LEN")),
             "maxSequences": _integer_or_none(profile.get("CHAT_MAX_NUM_SEQS")),
             "tensorParallelSize": _integer_or_none(profile.get("CHAT_TENSOR_PARALLEL_SIZE")),
@@ -249,6 +251,7 @@ def build_report(profile: dict[str, str], hardware: dict[str, Any], samples: lis
         "hardware": hardware,
         "samples": samples,
         "summaryByConcurrency": summarize_by_concurrency(samples),
+        "summaryByLengthAndConcurrency": summarize_by_length_and_concurrency(samples),
         "smoke": smoke,
         "indicators": {
             "oom": errors.get("OOM", 0) > 0,
@@ -316,6 +319,30 @@ def _json_request(url: str, payload: dict[str, Any]) -> urllib.request.Request:
 def _metric_summary(samples: list[dict[str, Any]], key: str) -> dict[str, Any]:
     values = [sample[key] for sample in samples if sample.get(key) is not None]
     return {"p50": percentile(values, 50), "p95": percentile(values, 95)}
+
+
+def summarize_by_length_and_concurrency(samples: list[dict[str, Any]]) -> dict[str, dict[str, dict[str, Any]]]:
+    groups: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for sample in samples:
+        length = str(sample.get("length", "unknown"))
+        concurrency = str(sample.get("concurrency", "unknown"))
+        groups.setdefault(length, {}).setdefault(concurrency, []).append(sample)
+
+    summary: dict[str, dict[str, dict[str, Any]]] = {}
+    for length, concurrency_groups in groups.items():
+        summary[length] = {}
+        for concurrency, grouped in concurrency_groups.items():
+            passed = [sample for sample in grouped if sample.get("status") == "PASS"]
+            errors = Counter(sample.get("errorClass", "UNKNOWN") for sample in grouped if sample.get("status") != "PASS")
+            summary[length][concurrency] = {
+                "sampleCount": len(grouped),
+                "passedCount": len(passed),
+                "errors": dict(errors),
+                "ttftSeconds": _metric_summary(passed, "ttftSeconds"),
+                "outputTokensPerSecond": _metric_summary(passed, "outputTokensPerSecond"),
+                "durationSeconds": _metric_summary(passed, "durationSeconds"),
+            }
+    return summary
 
 
 def _positive_csv(value: str, name: str) -> list[int]:

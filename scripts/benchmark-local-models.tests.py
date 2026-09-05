@@ -64,7 +64,12 @@ class BenchmarkLocalModelsTest(unittest.TestCase):
 
     def test_report_schema_contains_acceptance_evidence(self):
         report = benchmark.build_report(
-            profile={"MODEL_PROFILE_NAME": "a6000x2-production-32k", "CHAT_MAX_MODEL_LEN": "32768"},
+            profile={
+                "MODEL_PROFILE_NAME": "a6000x2-production-32k",
+                "CHAT_MODEL_ID": "Qwen/example",
+                "CHAT_MODEL_REVISION": "abc123",
+                "CHAT_MAX_MODEL_LEN": "32768",
+            },
             hardware={"available": True, "gpus": [{"name": "NVIDIA RTX A6000", "memoryTotalMiB": 49140}]},
             samples=[{"status": "PASS", "concurrency": 1, "length": 2000}],
             smoke={"embedding": {"status": "PASS"}, "reranker": {"status": "PASS"}},
@@ -74,9 +79,26 @@ class BenchmarkLocalModelsTest(unittest.TestCase):
         self.assertEqual(report["schemaVersion"], 1)
         self.assertFalse(report["validatedOnHost"])
         self.assertEqual(report["profile"]["name"], "a6000x2-production-32k")
+        self.assertEqual(report["profile"]["chatModelId"], "Qwen/example")
+        self.assertEqual(report["profile"]["chatModelRevision"], "abc123")
         self.assertIn("summaryByConcurrency", report)
+        self.assertIn("2000", report["summaryByLengthAndConcurrency"])
+        self.assertIn("1", report["summaryByLengthAndConcurrency"]["2000"])
         self.assertIn("indicators", report)
         self.assertIn("gpuSamples", report["hardware"])
+
+    def test_summary_groups_each_length_and_concurrency_pair(self):
+        samples = [
+            {"length": 2000, "concurrency": 1, "status": "PASS", "ttftSeconds": 1.0, "outputTokensPerSecond": 8.0, "durationSeconds": 3.0},
+            {"length": 2000, "concurrency": 2, "status": "ERROR", "errorClass": "TIMEOUT"},
+            {"length": 8000, "concurrency": 1, "status": "PASS", "ttftSeconds": 2.0, "outputTokensPerSecond": 6.0, "durationSeconds": 5.0},
+        ]
+
+        groups = benchmark.summarize_by_length_and_concurrency(samples)
+
+        self.assertEqual(groups["2000"]["1"]["sampleCount"], 1)
+        self.assertEqual(groups["2000"]["2"]["errors"]["TIMEOUT"], 1)
+        self.assertEqual(groups["8000"]["1"]["ttftSeconds"]["p50"], 2.0)
 
     def test_profile_parser_preserves_json_values_and_ignores_comments(self):
         with tempfile.TemporaryDirectory() as tmp:

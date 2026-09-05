@@ -100,11 +100,16 @@ bucket 默认设置为私有访问。后端通过 MinIO SDK 生成临时预签�
 | `h100-fp8` | `Qwen/Qwen3.8-27B-FP8` | 单张 H100 80GB | 1 | 16K / 2 |
 | `a6000x2-bf16` | `Qwen/Qwen3.8-27B` BF16 | 两张 RTX A6000 48GB | 2 | 16K / 2 |
 
-两套配置均固定官方 Qwen 仓库的模型 revision，并分别运行：
+各 Profile 固定一个模型 ID 和 revision，并分别运行：
 
 - 主对话及视觉理解：Qwen3.8 27B；
 - 向量模型：`Qwen/Qwen3-Embedding-4B`；
 - 重排序模型：`Qwen/Qwen3-Reranker-0.6B`。
+
+模型 ID、revision、运行参数和镜像 digest 是仓库配置声明，见
+`docs/本地大模型选型与数据治理说明.md`。当前仓库不包含模型权重缓存、逐模型
+license 复核记录或客户双 RTX A6000 性能报告；权重 checksum、license 和客户
+性能结论必须按治理文档的取证命令补齐，不能由模型名称或 Profile 推测。
 
 当前固定推理镜像为 `vllm/vllm-openai:v0.27.1-cu129`，配置文件同时固定 Docker Hub manifest digest。vLLM 容器启用受支持的数据中心/专业显卡 CUDA Forward Compatibility。启动脚本不会仅凭驱动版本假定兼容：它会先检查驱动下限，再通过临时的 `docker run --rm --gpus all` 容器实测 NVIDIA Container Toolkit。随后启动的 vLLM 容器及模型健康检查才是所选 CUDA 12.9 推理镜像的最终兼容性门禁。任一环节失败都会在启动 Java 和前端前终止，并提示升级驱动或改用经验证的推理镜像。
 
