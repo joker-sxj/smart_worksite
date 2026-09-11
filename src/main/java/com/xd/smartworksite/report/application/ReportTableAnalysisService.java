@@ -101,6 +101,15 @@ public class ReportTableAnalysisService {
         if (statistics.totalRows() == 0) {
             return "当前数据源未返回可用于统计的记录，无法据此判断风险或闭环情况。";
         }
+        String countColumn = selectCountColumn(new ArrayList<>(statistics.numericTotals().keySet()));
+        if (countColumn != null) {
+            double total = statistics.numericTotals().getOrDefault(countColumn, 0.0);
+            if (Double.isFinite(total) && total >= 0 && total == Math.rint(total)) {
+                return "本次统计共返回" + statistics.totalRows() + "组汇总记录，计数字段"
+                        + countColumn + "合计" + (long) total
+                        + "条业务记录。请结合表格中的分类、趋势和责任人信息推进处置。";
+            }
+        }
         return "本次统计共返回" + statistics.totalRows() + "条记录，其中"
                 + statistics.nonEmptyRows() + "条包含有效数据。请结合表格中的分类、趋势和责任人信息推进处置。";
     }

@@ -141,4 +141,21 @@ class ReportTableAnalysisServiceTest {
 
         assertThat(statistics.groupCounts().get("risk_level")).containsEntry("一级", 2);
     }
+
+    @Test
+    void describesGroupedResultsAsGroupsAndBusinessRecordCount() {
+        var table = new ReportTableAnalysisService().normalize(
+                List.of("risk_level", "total_risks"),
+                List.of(
+                        Map.of("risk_level", "一级", "total_risks", 2),
+                        Map.of("risk_level", "二级", "total_risks", 4),
+                        Map.of("risk_level", "三级", "total_risks", 4),
+                        Map.of("risk_level", "四级", "total_risks", 2)),
+                "source");
+
+        String conclusion = new ReportTableAnalysisService().standardConclusion(
+                new ReportTableAnalysisService().statistics(table));
+
+        assertThat(conclusion).contains("4组汇总记录").contains("合计12条业务记录");
+    }
 }
