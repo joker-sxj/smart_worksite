@@ -3,6 +3,7 @@ package com.xd.smartworksite.report.application;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -58,5 +59,13 @@ class ReportChartRendererTest {
 
         assertThat(bluePixels).isGreaterThan(1000);
         assertThat(blueColumns).isLessThan(500);
+    }
+
+    @Test
+    void usesDistinctIntegerScaleLabelsForSmallCounts() {
+        assertThat(renderer.scaleLabels(1)).isEqualTo(List.of(0, 1));
+        assertThat(renderer.scaleLabels(2)).isEqualTo(List.of(0, 1, 2));
+        assertThat(renderer.scaleLabels(4)).isEqualTo(List.of(0, 1, 2, 3, 4));
+        assertThat(renderer.scaleLabels(9)).isEqualTo(List.of(0, 3, 5, 7, 9));
     }
 }

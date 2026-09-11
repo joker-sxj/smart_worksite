@@ -176,17 +176,29 @@ public class ReportChartRenderer {
 
     private void drawScale(Graphics2D graphics, int left, int top, int bottom, int width, int max) {
         graphics.setFont(font(Font.PLAIN, 16));
-        for (int tick = 0; tick <= 4; tick++) {
-            int y = bottom - tick * (bottom - top) / 4;
+        java.util.List<Integer> labels = scaleLabels(max);
+        int intervals = labels.size() - 1;
+        for (int tick = 0; tick <= intervals; tick++) {
+            int y = bottom - tick * (bottom - top) / intervals;
             graphics.setColor(new Color(225, 230, 234));
             graphics.drawLine(left, y, left + width, y);
             graphics.setColor(new Color(90, 105, 118));
-            String label = String.valueOf((int) Math.ceil(max * tick / 4.0));
+            String label = String.valueOf(labels.get(tick));
             graphics.drawString(label, left - 45, y + 6);
         }
         graphics.setColor(new Color(90, 105, 118));
         graphics.drawLine(left, top, left, bottom);
         graphics.drawLine(left, bottom, left + width, bottom);
+    }
+
+    java.util.List<Integer> scaleLabels(int max) {
+        int normalizedMax = Math.max(1, max);
+        int intervals = Math.min(4, normalizedMax);
+        java.util.List<Integer> labels = new java.util.ArrayList<>(intervals + 1);
+        for (int tick = 0; tick <= intervals; tick++) {
+            labels.add((int) Math.ceil(normalizedMax * tick / (double) intervals));
+        }
+        return java.util.List.copyOf(labels);
     }
 
     private void drawFooter(Graphics2D graphics, ReportChartSpec spec) {
