@@ -108,4 +108,37 @@ class ReportTableAnalysisServiceTest {
         assertThat(statistics.groupCounts().get("risk_level"))
                 .containsEntry("一级", 120).containsEntry("二级", 30);
     }
+
+    @Test
+    void weightsGroupedCategoriesByAnExplicitCountColumn() {
+        var table = new ReportTableAnalysisService().normalize(
+                List.of("risk_level", "total_risks", "latest_discovery_time"),
+                List.of(
+                        Map.of("risk_level", "一级", "total_risks", 2, "latest_discovery_time", "2026-09-09"),
+                        Map.of("risk_level", "二级", "total_risks", 4, "latest_discovery_time", "2026-09-05"),
+                        Map.of("risk_level", "三级", "total_risks", 4, "latest_discovery_time", "2026-08-30"),
+                        Map.of("risk_level", "四级", "total_risks", 2, "latest_discovery_time", "2026-08-24")),
+                "source");
+
+        var statistics = new ReportTableAnalysisService().statistics(table);
+
+        assertThat(statistics.groupCounts().get("risk_level"))
+                .containsEntry("一级", 2).containsEntry("二级", 4)
+                .containsEntry("三级", 4).containsEntry("四级", 2);
+        assertThat(statistics.monthlyTrend()).containsEntry("2026-09", 6).containsEntry("2026-08", 6);
+    }
+
+    @Test
+    void doesNotTreatIdentifiersOrAmountsAsCategoryWeights() {
+        var table = new ReportTableAnalysisService().normalize(
+                List.of("risk_level", "record_id", "amount"),
+                List.of(
+                        Map.of("risk_level", "一级", "record_id", 1001, "amount", 5000),
+                        Map.of("risk_level", "一级", "record_id", 1002, "amount", 3000)),
+                "source");
+
+        var statistics = new ReportTableAnalysisService().statistics(table);
+
+        assertThat(statistics.groupCounts().get("risk_level")).containsEntry("一级", 2);
+    }
 }

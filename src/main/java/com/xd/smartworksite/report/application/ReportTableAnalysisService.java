@@ -65,11 +65,13 @@ public class ReportTableAnalysisService {
         Map<String, Integer> months = new TreeMap<>();
         int nonEmptyRows = 0;
         List<Map<String, Object>> analysisRows = table.analysisRows() == null ? table.rows() : table.analysisRows();
+        String countColumn = selectCountColumn(table.columns());
         for (Map<String, Object> row : analysisRows) {
             boolean nonEmpty = row.values().stream().anyMatch(this::hasValue);
             if (nonEmpty) {
                 nonEmptyRows++;
             }
+            int rowWeight = countWeight(row.get(countColumn));
             for (String column : table.columns()) {
                 Object value = row.get(column);
                 if (value instanceof Number number) {
@@ -83,9 +85,9 @@ public class ReportTableAnalysisService {
                 Matcher matcher = YEAR_MONTH.matcher(text);
                 if (isDateColumn(column) && !isTechnicalColumn(column) && matcher.matches()) {
                     String month = matcher.group(1) + "-" + String.format("%02d", Integer.parseInt(matcher.group(2)));
-                    months.merge(month, 1, Integer::sum);
+                    months.merge(month, rowWeight, Integer::sum);
                 } else {
-                    groups.computeIfAbsent(column, ignored -> new LinkedHashMap<>()).merge(text, 1, Integer::sum);
+                    groups.computeIfAbsent(column, ignored -> new LinkedHashMap<>()).merge(text, rowWeight, Integer::sum);
                 }
             }
         }
@@ -126,6 +128,35 @@ public class ReportTableAnalysisService {
 
     private boolean hasValue(Object value) {
         return value != null && !String.valueOf(value).isBlank();
+    }
+
+    private String selectCountColumn(List<String> columns) {
+        return columns.stream()
+                .filter(column -> countColumnScore(column) > 0)
+                .max(Comparator.comparingInt(this::countColumnScore)
+                        .thenComparing(Comparator.reverseOrder()))
+                .orElse(null);
+    }
+
+    private int countColumnScore(String column) {
+        String normalized = column.toLowerCase(java.util.Locale.ROOT).replace('-', '_').replace(' ', '_');
+        if (normalized.contains("amount") || normalized.contains("price") || normalized.contains("cost")
+                || normalized.contains("金额") || normalized.contains("价格") || normalized.contains("成本")) return 0;
+        if (normalized.equals("count") || normalized.equals("record_count") || normalized.equals("total_count")
+                || normalized.equals("total_risks") || normalized.equals("risk_count")
+                || normalized.equals("hazard_count") || normalized.equals("数量")
+                || normalized.equals("条数") || normalized.equals("总数")) return 100;
+        if (normalized.endsWith("_count") || normalized.startsWith("count_")
+                || normalized.endsWith("数量") || normalized.endsWith("条数")) return 80;
+        return 0;
+    }
+
+    private int countWeight(Object value) {
+        if (!(value instanceof Number number)) return 1;
+        double numeric = number.doubleValue();
+        if (!Double.isFinite(numeric) || numeric < 0 || numeric != Math.rint(numeric)
+                || numeric > Integer.MAX_VALUE) return 1;
+        return (int) numeric;
     }
 
     private boolean isDateColumn(String column) {
