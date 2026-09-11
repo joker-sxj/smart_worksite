@@ -28,19 +28,22 @@ public class ReportTableAnalysisService {
         List<String> normalizedColumns = normalizeColumns(columns);
         List<Map<String, Object>> inputRows = rows == null ? List.of() : rows;
         List<Map<String, Object>> normalizedRows = new ArrayList<>();
-        for (Map<String, Object> row : inputRows.stream().limit(MAX_DISPLAY_ROWS).toList()) {
+        List<Map<String, Object>> analysisRows = new ArrayList<>();
+        for (Map<String, Object> row : inputRows) {
             Map<String, Object> normalizedRow = new LinkedHashMap<>();
             for (String column : normalizedColumns) {
                 normalizedRow.put(column, row == null ? null : row.get(column));
             }
-            normalizedRows.add(Collections.unmodifiableMap(normalizedRow));
+            Map<String, Object> immutable = Collections.unmodifiableMap(normalizedRow);
+            analysisRows.add(immutable);
+            if (normalizedRows.size() < MAX_DISPLAY_ROWS) normalizedRows.add(immutable);
         }
         return new StructuredReportTable(
                 List.copyOf(normalizedColumns),
                 List.copyOf(normalizedRows),
                 inputRows.size(),
                 inputRows.size() > MAX_DISPLAY_ROWS,
-                source == null ? "" : source.trim());
+                source == null ? "" : source.trim(), List.copyOf(analysisRows));
     }
 
     private List<String> normalizeColumns(List<String> columns) {
@@ -61,7 +64,8 @@ public class ReportTableAnalysisService {
         Map<String, Double> totals = new LinkedHashMap<>();
         Map<String, Integer> months = new TreeMap<>();
         int nonEmptyRows = 0;
-        for (Map<String, Object> row : table.rows()) {
+        List<Map<String, Object>> analysisRows = table.analysisRows() == null ? table.rows() : table.analysisRows();
+        for (Map<String, Object> row : analysisRows) {
             boolean nonEmpty = row.values().stream().anyMatch(this::hasValue);
             if (nonEmpty) {
                 nonEmptyRows++;
@@ -77,7 +81,7 @@ public class ReportTableAnalysisService {
                 }
                 String text = String.valueOf(value).trim();
                 Matcher matcher = YEAR_MONTH.matcher(text);
-                if (isDateColumn(column) && matcher.matches()) {
+                if (isDateColumn(column) && !isTechnicalColumn(column) && matcher.matches()) {
                     String month = matcher.group(1) + "-" + String.format("%02d", Integer.parseInt(matcher.group(2)));
                     months.merge(month, 1, Integer::sum);
                 } else {
@@ -128,5 +132,14 @@ public class ReportTableAnalysisService {
         String normalized = column.toLowerCase(java.util.Locale.ROOT);
         return normalized.contains("date") || normalized.contains("time")
                 || column.contains("日期") || column.contains("时间");
+    }
+
+    private boolean isTechnicalColumn(String column) {
+        String normalized = column.toLowerCase(java.util.Locale.ROOT).replace('-', '_');
+        return normalized.contains("created") || normalized.contains("updated")
+                || normalized.contains("generation") || normalized.contains("task")
+                || normalized.contains("template") || normalized.contains("report")
+                || normalized.contains("deleted") || normalized.contains("trace")
+                || normalized.contains("request");
     }
 }

@@ -84,4 +84,28 @@ class ReportTableAnalysisServiceTest {
                 .doesNotContain("无风险")
                 .doesNotContain("全部闭环");
     }
+
+    @Test
+    void excludesTechnicalDatesFromBusinessTrend() {
+        var table = new ReportTableAnalysisService().normalize(
+                List.of("created_at", "generation_time"),
+                List.of(Map.of("created_at", "2026-09-01", "generation_time", "2026-09-02")), "source");
+
+        assertThat(new ReportTableAnalysisService().statistics(table).monthlyTrend()).isEmpty();
+    }
+
+    @Test
+    void computesStatisticsFromAllRowsWhileDisplayingOnlyFirstHundred() {
+        List<Map<String, Object>> rows = java.util.stream.IntStream.range(0, 150)
+                .mapToObj(i -> Map.<String, Object>of("risk_level", i < 120 ? "一级" : "二级"))
+                .toList();
+        var table = new ReportTableAnalysisService().normalize(List.of("risk_level"), rows, "source");
+
+        var statistics = new ReportTableAnalysisService().statistics(table);
+
+        assertThat(table.rows()).hasSize(100);
+        assertThat(statistics.nonEmptyRows()).isEqualTo(150);
+        assertThat(statistics.groupCounts().get("risk_level"))
+                .containsEntry("一级", 120).containsEntry("二级", 30);
+    }
 }
