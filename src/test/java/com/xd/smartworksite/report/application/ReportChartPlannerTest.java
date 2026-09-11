@@ -12,6 +12,21 @@ class ReportChartPlannerTest {
     private final ReportChartPlanner planner = new ReportChartPlanner();
 
     @Test
+    void skipsGenericStatusWhenTheTableIsReportGenerationMetadata() {
+        var statistics = new com.xd.smartworksite.report.domain.ReportStatistics(1, 1,
+                Map.of(
+                        "variable_name", Map.of("var_summary", 1),
+                        "variable_description", Map.of("根据施工情况生成摘要", 1),
+                        "status", Map.of("RUNNING", 1)),
+                Map.of(), Map.of());
+
+        var spec = planner.plan(statistics, "数据源 1");
+
+        assertThat(spec.drawable()).isFalse();
+        assertThat(spec.reason()).contains("技术字段");
+    }
+
+    @Test
     void prefersRiskLevelAndExcludesTechnicalColumns() {
         Map<String, Map<String, Integer>> groups = new LinkedHashMap<>();
         groups.put("variable_id", Map.of("49", 1));

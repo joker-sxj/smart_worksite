@@ -22,8 +22,9 @@ public class ReportChartPlanner {
         if (statistics == null || statistics.totalRows() == 0 || statistics.nonEmptyRows() == 0) {
             return ReportChartSpec.skipped("当前没有可用于生成图表的有效业务数据", source);
         }
+        Set<String> columns = statistics.groupCounts().keySet();
         Candidate best = statistics.groupCounts().entrySet().stream()
-                .filter(entry -> eligibleColumn(entry.getKey()))
+                .filter(entry -> eligibleColumn(entry.getKey(), columns))
                 .map(entry -> new Candidate(entry.getKey(), clean(entry.getValue()), score(entry.getKey())))
                 .filter(candidate -> !candidate.values().isEmpty())
                 .filter(candidate -> candidate.score() > 0)
@@ -42,11 +43,25 @@ public class ReportChartPlanner {
         return ReportChartSpec.skipped("当前数据仅包含技术字段或无有效分类，未生成业务图表", source);
     }
 
-    private boolean eligibleColumn(String column) {
+    private boolean eligibleColumn(String column, Set<String> columns) {
         if (column == null || column.isBlank()) return false;
         String normalized = normalize(column);
         if (normalized.equals("id") || normalized.endsWith("_id")) return false;
+        if (isAny(normalized, "status", "状态") && hasTechnicalContext(columns) && !hasBusinessContext(columns)) {
+            return false;
+        }
         return TECHNICAL_TOKENS.stream().noneMatch(normalized::contains);
+    }
+
+    private boolean hasTechnicalContext(Set<String> columns) {
+        return columns.stream().map(this::normalize)
+                .anyMatch(column -> TECHNICAL_TOKENS.stream().anyMatch(column::contains));
+    }
+
+    private boolean hasBusinessContext(Set<String> columns) {
+        return columns.stream().map(this::normalize).anyMatch(column ->
+                contains(column, "risk", "hazard", "rectification", "owner", "area", "region",
+                        "风险", "隐患", "整改", "负责人", "责任人", "区域", "位置"));
     }
 
     private int score(String column) {
