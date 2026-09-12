@@ -44,28 +44,37 @@ public class DocumentPreparationService {
         String declaredFormat = declaredFormat(fileObject);
         try (InputStream inputStream = storageAdapter.openObject(fileObject.getObjectName())) {
             byte[] bytes = readAll(inputStream);
-            String detectedFormat = DocumentFormatDetector.detect(bytes, fileObject.getFileName(), contentType);
-            if ("unknown".equals(detectedFormat)) {
-                detectedFormat = declaredFormat;
+            String contentDetectedFormat = DocumentFormatDetector.detect(bytes);
+            String effectiveFormat = contentDetectedFormat;
+            String detectionSource = "CONTENT";
+            if ("unknown".equals(contentDetectedFormat)) {
+                effectiveFormat = declaredFormat;
+                detectionSource = "DECLARED";
             }
-            if ("png".equals(detectedFormat) || "jpg".equals(detectedFormat) || "webp".equals(detectedFormat)) {
-                String detectedContentType = imageContentType(detectedFormat);
-                return PreparedDocument.image(detectedFormat, "data:" + detectedContentType + ";base64,"
+            if (effectiveFormat == null || effectiveFormat.isBlank()) {
+                effectiveFormat = DocumentFormatDetector.extensionForContentType(contentType);
+                detectionSource = "MIME";
+            }
+            if ("png".equals(effectiveFormat) || "jpg".equals(effectiveFormat) || "webp".equals(effectiveFormat)) {
+                String detectedContentType = imageContentType(effectiveFormat);
+                return PreparedDocument.image(effectiveFormat, "data:" + detectedContentType + ";base64,"
                         + Base64.getEncoder().encodeToString(bytes)).withSource(fileObject.getProjectId(), fileObject.getId())
-                        .withDetectedFormat(detectedFormat, declaredFormat);
+                        .withFormatDetection(effectiveFormat, declaredFormat, contentDetectedFormat, detectionSource);
             }
-            if ("pdf".equals(detectedFormat)) {
-                return parseRegistered(fileObject, bytes, detectedFormat, contentType, declaredFormat);
+            if ("pdf".equals(effectiveFormat)) {
+                return parseRegistered(fileObject, bytes, effectiveFormat, contentType, declaredFormat,
+                        contentDetectedFormat, detectionSource);
             }
-            if ("docx".equals(detectedFormat)) {
+            if ("docx".equals(effectiveFormat)) {
                 return prepareDocx(bytes).withSource(fileObject.getProjectId(), fileObject.getId())
-                        .withDetectedFormat(detectedFormat, declaredFormat);
+                        .withFormatDetection(effectiveFormat, declaredFormat, contentDetectedFormat, detectionSource);
             }
-            if ("doc".equals(detectedFormat)) {
+            if ("doc".equals(effectiveFormat)) {
                 return prepareDoc(bytes).withSource(fileObject.getProjectId(), fileObject.getId())
-                        .withDetectedFormat(detectedFormat, declaredFormat);
+                        .withFormatDetection(effectiveFormat, declaredFormat, contentDetectedFormat, detectionSource);
             }
-            return parseRegistered(fileObject, bytes, detectedFormat, contentType, declaredFormat);
+            return parseRegistered(fileObject, bytes, effectiveFormat, contentType, declaredFormat,
+                    contentDetectedFormat, detectionSource);
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -74,11 +83,12 @@ public class DocumentPreparationService {
     }
 
     private PreparedDocument parseRegistered(FileObject fileObject, byte[] bytes,
-                                             String fileExt, String contentType, String declaredFormat) {
+                                             String fileExt, String contentType, String declaredFormat,
+                                             String detectedFormat, String detectionSource) {
         return parserRegistry.find(fileObject.getFileName(), fileExt, contentType)
                 .map(parser -> parser.parse(fileObject, bytes)
                         .withSource(fileObject.getProjectId(), fileObject.getId())
-                        .withDetectedFormat(fileExt, declaredFormat))
+                        .withFormatDetection(fileExt, declaredFormat, detectedFormat, detectionSource))
                 .orElseThrow(() -> new BusinessException(
                         ErrorCode.PARAM_ERROR, "unsupported file parse content type"));
     }

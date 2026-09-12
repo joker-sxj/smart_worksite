@@ -8,6 +8,9 @@ import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -40,16 +43,46 @@ class DocumentFormatDetectorTest {
     void contentDetectionWinsWhenDocxNameContainsLegacyWordDocument() throws Exception {
         byte[] content = ole("WordDocument");
 
-        assertThat(DocumentFormatDetector.detect(content, "report.docx",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
-                .isEqualTo("doc");
+        assertThat(DocumentFormatDetector.detect(content)).isEqualTo("doc");
+    }
+
+    @Test
+    void doesNotTreatAnArbitraryZipFolderAsAnOfficeDocument() throws Exception {
+        assertThat(DocumentFormatDetector.detect(zip(Map.entry("word/readme.txt", "not a document"))))
+                .isEqualTo("unknown");
+    }
+
+    @Test
+    void rejectsAmbiguousOleContainersWithMultipleOfficeStreams() throws Exception {
+        assertThat(DocumentFormatDetector.detect(ole("WordDocument", "Workbook")))
+                .isEqualTo("unknown");
     }
 
     private byte[] ole(String streamName) throws Exception {
+        return ole(new String[]{streamName});
+    }
+
+    private byte[] ole(String... streamNames) throws Exception {
         try (POIFSFileSystem fileSystem = new POIFSFileSystem();
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            fileSystem.getRoot().createDocument(streamName, new ByteArrayInputStream(new byte[]{1}));
+            for (String streamName : streamNames) {
+                fileSystem.getRoot().createDocument(streamName, new ByteArrayInputStream(new byte[]{1}));
+            }
             fileSystem.writeFilesystem(output);
+            return output.toByteArray();
+        }
+    }
+
+    @SafeVarargs
+    private byte[] zip(Map.Entry<String, String>... entries) throws Exception {
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream();
+             ZipOutputStream zip = new ZipOutputStream(output)) {
+            for (Map.Entry<String, String> entry : entries) {
+                zip.putNextEntry(new ZipEntry(entry.getKey()));
+                zip.write(entry.getValue().getBytes());
+                zip.closeEntry();
+            }
+            zip.finish();
             return output.toByteArray();
         }
     }

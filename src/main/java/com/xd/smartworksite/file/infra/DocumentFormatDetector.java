@@ -26,34 +26,55 @@ final class DocumentFormatDetector {
         return "unknown";
     }
 
-    static String detect(byte[] content, String fileName, String contentType) {
-        String detected = detect(content);
-        if (!"unknown".equals(detected)) return detected;
-        String extension = DocumentParserRegistry.extensionOf(fileName);
-        if (!extension.isBlank()) return extension;
-        return extensionForContentType(contentType);
-    }
-
     private static String detectOle(byte[] content) {
         try (POIFSFileSystem fileSystem = new POIFSFileSystem(new ByteArrayInputStream(content))) {
             DirectoryEntry root = fileSystem.getRoot();
-            if (root.hasEntry("WordDocument")) return "doc";
-            if (root.hasEntry("Workbook") || root.hasEntry("Book")) return "xls";
-            if (root.hasEntry("PowerPoint Document")) return "ppt";
+            int matches = 0;
+            String format = "unknown";
+            if (root.hasEntry("WordDocument")) {
+                matches++;
+                format = "doc";
+            }
+            if (root.hasEntry("Workbook") || root.hasEntry("Book")) {
+                matches++;
+                format = "xls";
+            }
+            if (root.hasEntry("PowerPoint Document")) {
+                matches++;
+                format = "ppt";
+            }
+            return matches == 1 ? format : "unknown";
         } catch (Exception ignored) {
             return "unknown";
         }
-        return "unknown";
     }
 
     private static String detectOoxml(byte[] content) {
         try (ZipInputStream input = new ZipInputStream(new ByteArrayInputStream(content))) {
             ZipEntry entry;
+            boolean hasWord = false;
+            boolean hasExcel = false;
+            boolean hasPowerPoint = false;
+            boolean hasContentTypes = false;
+            boolean hasWordMain = false;
+            boolean hasExcelMain = false;
+            boolean hasPowerPointMain = false;
             while ((entry = input.getNextEntry()) != null) {
                 String name = entry.getName().toLowerCase(Locale.ROOT);
-                if (name.startsWith("word/")) return "docx";
-                if (name.startsWith("xl/")) return "xlsx";
-                if (name.startsWith("ppt/")) return "pptx";
+                hasContentTypes |= "[content_types].xml".equals(name);
+                hasWord |= name.startsWith("word/");
+                hasExcel |= name.startsWith("xl/");
+                hasPowerPoint |= name.startsWith("ppt/");
+                hasWordMain |= "word/document.xml".equals(name);
+                hasExcelMain |= "xl/workbook.xml".equals(name);
+                hasPowerPointMain |= "ppt/presentation.xml".equals(name);
+            }
+            int matches = (hasWord && hasWordMain ? 1 : 0)
+                    + (hasExcel && hasExcelMain ? 1 : 0)
+                    + (hasPowerPoint && hasPowerPointMain ? 1 : 0);
+            if (!hasContentTypes) return "unknown";
+            if (matches == 1) {
+                return hasWord && hasWordMain ? "docx" : hasExcel && hasExcelMain ? "xlsx" : "pptx";
             }
         } catch (Exception ignored) {
             return "unknown";
@@ -75,7 +96,7 @@ final class DocumentFormatDetector {
         return true;
     }
 
-    private static String extensionForContentType(String contentType) {
+    static String extensionForContentType(String contentType) {
         String normalized = DocumentParserRegistry.normalizeContentType(contentType);
         return switch (normalized) {
             case "application/msword" -> "doc";

@@ -158,7 +158,18 @@ class FileParseWorkerTest {
         JsonNode metadata = objectMapper.readTree(success.getValue().getMetadata());
         assertThat(metadata.path("declaredFormat").asText()).isEqualTo("docx");
         assertThat(metadata.path("detectedFormat").asText()).isEqualTo("doc");
+        assertThat(metadata.path("effectiveFormat").asText()).isEqualTo("doc");
+        assertThat(metadata.path("formatDetectionSource").asText()).isEqualTo("CONTENT");
         assertThat(metadata.path("formatMismatch").asBoolean()).isTrue();
+    }
+
+    @Test
+    void treatsJpegAndJpgAsEquivalentFormats() throws Exception {
+        PreparedDocument prepared = PreparedDocument.image("jpg", "data:image/jpeg;base64,/9j/")
+                .withSource(7L, 24L)
+                .withDetectedFormat("jpg", "jpeg");
+
+        assertThat(prepared.isFormatMismatch()).isFalse();
     }
 
     @Test
