@@ -33,4 +33,14 @@ class FileParsePersistenceContractTest {
         assertThat(xml.split(Pattern.quote("source_file_hash &lt;=&gt; #{sourceFileHash}"), -1)).hasSize(3);
         assertThat(xml).contains("status in ('PENDING', 'PARSING', 'RUNNING')");
     }
+
+    @Test
+    void orderedParseLookupsPinTheMatchingCompositeIndex() throws Exception {
+        String xml = Files.readString(MAPPER, StandardCharsets.UTF_8);
+
+        assertThat(xml.split(Pattern.quote(
+                "from file_parse_record force index (idx_file_parse_latest)"), -1)).hasSize(3);
+        assertThat(xml).contains("from file_parse_record force index (idx_file_parse_latest_success)");
+        assertThat(xml).contains("from file_parse_record force index (idx_file_parse_reuse_lookup)");
+    }
 }
