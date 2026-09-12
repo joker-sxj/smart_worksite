@@ -144,9 +144,12 @@ if ! bash -c 'set -euo pipefail; source "$1"; validate_host_model_configuration 
   fail 'Static host model validation must reject an invalid chat-completions path without making a network call.'
 fi
 
-if ! bash -c 'set -euo pipefail; source "$1"; [[ "$(effective_qwen_vl_model "")" == qwen-vl-plus ]]; [[ "$(effective_qwen_vl_model smart-worksite-chat)" == smart-worksite-chat ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
-  fail 'Host model validation must use the same default Qwen VL model as the Java application.'
+if ! bash -c 'set -euo pipefail; source "$1"; [[ "$(effective_qwen_vl_model "" smart-worksite-chat)" == smart-worksite-chat ]]; [[ "$(effective_qwen_vl_model qwen-vl-plus smart-worksite-chat)" == smart-worksite-chat ]]; [[ "$(effective_qwen_vl_model dedicated-local-vlm smart-worksite-chat)" == dedicated-local-vlm ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
+  fail 'Host model validation must migrate the stale cloud Qwen VL default to the configured local chat/vision model while preserving dedicated local vision models.'
 fi
+
+grep -q 'effective_qwen_vl_model.*QWEN_MODEL' "$repo_root/scripts/start-all.sh" \
+  || fail 'Linux startup must resolve the local vision model against the configured chat/vision model.'
 
 if grep -q '^for command_name in .*python3' "$repo_root/scripts/start-all.sh"; then
   fail 'Cloud-only startup must not require host Python 3 when no local model preflight is needed.'

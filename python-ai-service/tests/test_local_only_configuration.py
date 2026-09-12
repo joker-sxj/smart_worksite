@@ -60,6 +60,15 @@ def test_example_env_matches_local_chat_topology():
     assert "QWEN_VL_MODEL=smart-worksite-chat" in env
 
 
+def test_local_only_replaces_legacy_cloud_vision_model_with_local_served_model():
+    settings = local_settings(
+        qwen_model="smart-worksite-chat",
+        qwen_vl_model="qwen-vl-plus",
+    )
+
+    assert settings.qwen_vl_model == "smart-worksite-chat"
+
+
 @pytest.mark.parametrize(
     "field,url",
     [

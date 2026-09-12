@@ -81,6 +81,16 @@ class Settings(BaseSettings):
         return value
     @model_validator(mode="after")
     def validate_local_only_endpoints(self) -> "Settings":
+        # Older deployments used the cloud-only qwen-vl-plus name.  In a local
+        # deployment the served chat model is also the multimodal endpoint;
+        # normalize that stale value before readiness checks and OCR calls.
+        if (
+            self.ai_deployment_mode == AiDeploymentMode.LOCAL_ONLY
+            and self.qwen_vl_model in {"", "qwen-vl-plus"}
+            and self.qwen_model
+        ):
+            self.qwen_vl_model = self.qwen_model
+
         if self.context_history_budget_ratio + self.context_evidence_budget_ratio > 1:
             raise ValueError("context history and evidence budget ratios must not exceed 1")
 

@@ -61,7 +61,11 @@ normalize_host_model_endpoints() {
 }
 
 effective_qwen_vl_model() {
-  printf '%s\n' "${1:-qwen-vl-plus}"
+  local configured="${1:-}" local_model="${2:-${QWEN_MODEL:-}}"
+  if [[ -z "$configured" || "$configured" == 'qwen-vl-plus' ]]; then
+    configured="$local_model"
+  fi
+  printf '%s\n' "${configured:-qwen-vl-plus}"
 }
 
 validate_host_model_configuration() {

@@ -38,7 +38,7 @@ normalize_host_model_endpoints
 assert_minimum_free_disk "$root"
 deployment_mode="${AI_DEPLOYMENT_MODE:-CLOUD_ALLOWED}"
 if requires_host_model_preflight "$deployment_mode" "${MODEL_PROFILE_FILE:-}"; then
-  QWEN_VL_MODEL="$(effective_qwen_vl_model "${QWEN_VL_MODEL:-}")"
+  QWEN_VL_MODEL="$(effective_qwen_vl_model "${QWEN_VL_MODEL:-}" "${QWEN_MODEL:-}")"
   export QWEN_VL_MODEL
   validate_host_model_configuration "$QWEN_VL_ENDPOINT" "$QWEN_VL_MODEL"
 fi
