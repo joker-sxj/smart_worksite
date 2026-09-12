@@ -811,9 +811,20 @@ def title_match_score(query: str, title: str) -> float:
     """Keep a source explicitly named by the user in the lexical candidate set."""
     query_compact = compact_search_text(query)
     title_compact = compact_search_text(title)
-    if not query_compact or not title_compact or title_compact not in query_compact:
+    if not query_compact or not title_compact:
         return 0.0
-    return min(3.0, max(1.0, len(title_compact) / 12.0))
+    title_core = re.sub(r"^(?:\d+[_-]?)+", "", title_compact)
+    title_core = re.sub(r"(?:20\d{2}|19\d{2})?\.?(?:pdf|docx?|xlsx?|pptx?|txt)$", "", title_core)
+    quoted = [compact_search_text(value) for value in re.findall(r"[《〈]([^》〉]+)[》〉]", query)]
+    explicitly_named = title_compact in query_compact or any(
+        len(value) >= 4 and len(title_core) >= 4
+        and (value in title_compact or title_core in value)
+        for value in quoted
+    )
+    if not explicitly_named:
+        return 0.0
+    matched_length = len(title_core) if title_core else len(title_compact)
+    return min(3.0, max(1.0, matched_length / 12.0))
 
 
 def same_document_scope(left: ChunkRecord, right: ChunkRecord) -> bool:
