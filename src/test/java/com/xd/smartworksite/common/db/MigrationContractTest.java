@@ -168,6 +168,19 @@ class MigrationContractTest {
     }
 
     @Test
+    void fileParseLatestLookupsHaveOrderingIndexes() throws IOException {
+        String migration = Files.readString(
+                MIGRATION_DIR.resolve("V32__optimize_file_parse_latest_lookups.sql"),
+                StandardCharsets.UTF_8
+        );
+
+        assertThat(migration).contains("ADD KEY idx_file_parse_latest");
+        assertThat(migration).contains("project_id, file_id, deleted, created_at DESC, id DESC");
+        assertThat(migration).contains("ADD KEY idx_file_parse_latest_success");
+        assertThat(migration).contains("project_id, file_id, deleted, finished_at DESC, id DESC");
+    }
+
+    @Test
     void fileDownloadContractUsesAccessUrlEndpoint() throws IOException {
         String readme = Files.readString(README, StandardCharsets.UTF_8);
         String frontendFileApi = Files.readString(FRONTEND_FILE_API, StandardCharsets.UTF_8);
