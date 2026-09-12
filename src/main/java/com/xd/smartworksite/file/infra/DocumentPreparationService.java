@@ -18,12 +18,9 @@ import java.io.InputStream;
 import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
 @Service
 public class DocumentPreparationService {
-
-    private static final Set<String> IMAGE_TYPES = Set.of("image/png", "image/jpeg", "image/webp");
 
     private final StorageAdapter storageAdapter;
     private final FileProperties fileProperties;
@@ -44,23 +41,31 @@ public class DocumentPreparationService {
 
     public PreparedDocument prepare(FileObject fileObject) {
         String contentType = normalizeContentType(fileObject.getContentType());
-        String fileExt = normalizeExt(fileObject.getFileExt());
+        String declaredFormat = declaredFormat(fileObject);
         try (InputStream inputStream = storageAdapter.openObject(fileObject.getObjectName())) {
             byte[] bytes = readAll(inputStream);
-            if (IMAGE_TYPES.contains(contentType)) {
-                return PreparedDocument.image(fileExt, "data:" + contentType + ";base64,"
-                        + Base64.getEncoder().encodeToString(bytes)).withSource(fileObject.getProjectId(), fileObject.getId());
+            String detectedFormat = DocumentFormatDetector.detect(bytes, fileObject.getFileName(), contentType);
+            if ("unknown".equals(detectedFormat)) {
+                detectedFormat = declaredFormat;
             }
-            if ("application/pdf".equals(contentType) || "pdf".equals(fileExt)) {
-                return parseRegistered(fileObject, bytes, fileExt, contentType);
+            if ("png".equals(detectedFormat) || "jpg".equals(detectedFormat) || "webp".equals(detectedFormat)) {
+                String detectedContentType = imageContentType(detectedFormat);
+                return PreparedDocument.image(detectedFormat, "data:" + detectedContentType + ";base64,"
+                        + Base64.getEncoder().encodeToString(bytes)).withSource(fileObject.getProjectId(), fileObject.getId())
+                        .withDetectedFormat(detectedFormat, declaredFormat);
             }
-            if ("docx".equals(fileExt) || "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(contentType)) {
-                return prepareDocx(bytes).withSource(fileObject.getProjectId(), fileObject.getId());
+            if ("pdf".equals(detectedFormat)) {
+                return parseRegistered(fileObject, bytes, detectedFormat, contentType, declaredFormat);
             }
-            if ("doc".equals(fileExt) || "application/msword".equals(contentType)) {
-                return prepareDoc(bytes).withSource(fileObject.getProjectId(), fileObject.getId());
+            if ("docx".equals(detectedFormat)) {
+                return prepareDocx(bytes).withSource(fileObject.getProjectId(), fileObject.getId())
+                        .withDetectedFormat(detectedFormat, declaredFormat);
             }
-            return parseRegistered(fileObject, bytes, fileExt, contentType);
+            if ("doc".equals(detectedFormat)) {
+                return prepareDoc(bytes).withSource(fileObject.getProjectId(), fileObject.getId())
+                        .withDetectedFormat(detectedFormat, declaredFormat);
+            }
+            return parseRegistered(fileObject, bytes, detectedFormat, contentType, declaredFormat);
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -69,10 +74,11 @@ public class DocumentPreparationService {
     }
 
     private PreparedDocument parseRegistered(FileObject fileObject, byte[] bytes,
-                                             String fileExt, String contentType) {
+                                             String fileExt, String contentType, String declaredFormat) {
         return parserRegistry.find(fileObject.getFileName(), fileExt, contentType)
                 .map(parser -> parser.parse(fileObject, bytes)
-                        .withSource(fileObject.getProjectId(), fileObject.getId()))
+                        .withSource(fileObject.getProjectId(), fileObject.getId())
+                        .withDetectedFormat(fileExt, declaredFormat))
                 .orElseThrow(() -> new BusinessException(
                         ErrorCode.PARAM_ERROR, "unsupported file parse content type"));
     }
@@ -119,5 +125,14 @@ public class DocumentPreparationService {
             return "";
         }
         return fileExt.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String declaredFormat(FileObject fileObject) {
+        String extension = normalizeExt(fileObject.getFileExt());
+        return extension.isBlank() ? DocumentParserRegistry.extensionOf(fileObject.getFileName()) : extension;
+    }
+
+    private String imageContentType(String format) {
+        return "jpg".equals(format) ? "image/jpeg" : "image/" + format;
     }
 }

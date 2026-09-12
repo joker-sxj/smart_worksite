@@ -91,7 +91,7 @@ class FileParseWorkerTest {
                 )),
                 1,
                 false
-        );
+        ).withDetectedFormat("xlsx", "xlsx");
         when(records.findById(11L)).thenReturn(Optional.of(record));
         when(files.findById(22L)).thenReturn(Optional.of(file));
         when(preparation.prepare(file)).thenReturn(prepared);
@@ -111,12 +111,54 @@ class FileParseWorkerTest {
         assertThat(metadata.path("model").asText()).isEqualTo("local-parser");
         assertThat(metadata.path("documentId").asLong()).isEqualTo(22L);
         assertThat(metadata.path("fileId").asLong()).isEqualTo(22L);
+        assertThat(metadata.path("declaredFormat").asText()).isEqualTo("xlsx");
+        assertThat(metadata.path("detectedFormat").asText()).isEqualTo("xlsx");
+        assertThat(metadata.path("formatMismatch").asBoolean()).isFalse();
         assertThat(metadata.path("blocks").get(0).path("blockId").asText()).isEqualTo("risk-row-2");
         assertThat(metadata.path("blocks").get(0).path("type").asText()).isEqualTo("TABLE");
         assertThat(metadata.path("blocks").get(0).path("location").path("sheet").asText()).isEqualTo("风险");
         assertThat(metadata.path("blocks").get(0).path("location").path("cellRange").asText()).isEqualTo("A2:B2");
         assertThat(metadata.path("blocks").get(0).path("structuredData").path("values").get(0).asText())
                 .isEqualTo("一级");
+    }
+
+    @Test
+    void persistsFormatMismatchWhenDeclaredExtensionDiffersFromDetectedContent() throws Exception {
+        FileParseRecord record = new FileParseRecord();
+        record.setId(13L);
+        record.setProjectId(7L);
+        record.setFileId(23L);
+        record.setResultFormat("MARKDOWN");
+        FileObject file = new FileObject();
+        file.setId(23L);
+        file.setProjectId(7L);
+        file.setFileName("事故调查报告.docx");
+        file.setContentType("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        FileParseRecordRepository records = mock(FileParseRecordRepository.class);
+        FileObjectRepository files = mock(FileObjectRepository.class);
+        DocumentPreparationService preparation = mock(DocumentPreparationService.class);
+        DocumentParseModelAdapter parser = mock(DocumentParseModelAdapter.class);
+        StorageAdapter storage = mock(StorageAdapter.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        PreparedDocument prepared = PreparedDocument.text("doc", "事故原因：临边防护缺失。", 0, false)
+                .withSource(7L, 23L)
+                .withDetectedFormat("doc", "docx");
+        when(records.findById(13L)).thenReturn(Optional.of(record));
+        when(files.findById(23L)).thenReturn(Optional.of(file));
+        when(preparation.prepare(file)).thenReturn(prepared);
+        when(parser.parse(any())).thenReturn(new ParsedDocument(
+                "事故原因：临边防护缺失。", "MARKDOWN", "local-parser", "{}"));
+        FileParseWorker worker = new FileParseWorker(files, records, preparation,
+                parser, storage, new FileProperties(), objectMapper);
+
+        worker.parseAsync(13L);
+
+        ArgumentCaptor<FileParseRecord> success = ArgumentCaptor.forClass(FileParseRecord.class);
+        verify(records).updateSucceeded(success.capture());
+        JsonNode metadata = objectMapper.readTree(success.getValue().getMetadata());
+        assertThat(metadata.path("declaredFormat").asText()).isEqualTo("docx");
+        assertThat(metadata.path("detectedFormat").asText()).isEqualTo("doc");
+        assertThat(metadata.path("formatMismatch").asBoolean()).isTrue();
     }
 
     @Test

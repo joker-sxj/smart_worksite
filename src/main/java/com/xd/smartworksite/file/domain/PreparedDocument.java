@@ -13,10 +13,12 @@ public final class PreparedDocument {
     private final int pageCount;
     private final boolean truncated;
     private final List<DocumentBlock> blocks;
+    private final String declaredFormat;
+    private final boolean formatMismatch;
 
     private PreparedDocument(Long projectId, Long documentId, String inputFormat, String textContent,
                              String imageDataUrl, int pageCount, boolean truncated,
-                             List<DocumentBlock> blocks) {
+                             List<DocumentBlock> blocks, String declaredFormat, boolean formatMismatch) {
         if (inputFormat == null || inputFormat.isBlank()) {
             throw new IllegalArgumentException("inputFormat must not be blank");
         }
@@ -31,19 +33,21 @@ public final class PreparedDocument {
         this.pageCount = pageCount;
         this.truncated = truncated;
         this.blocks = blocks == null ? List.of() : List.copyOf(blocks);
+        this.declaredFormat = declaredFormat;
+        this.formatMismatch = formatMismatch;
     }
 
     public static PreparedDocument text(String inputFormat, String textContent, int pageCount, boolean truncated) {
         List<DocumentBlock> blocks = textContent == null || textContent.isBlank()
                 ? List.of()
                 : List.of(DocumentBlock.text("document-text", textContent, DocumentLocation.unspecified()));
-        return new PreparedDocument(null, null, inputFormat, textContent, null, pageCount, truncated, blocks);
+        return new PreparedDocument(null, null, inputFormat, textContent, null, pageCount, truncated, blocks, null, false);
     }
 
     public static PreparedDocument image(String inputFormat, String imageDataUrl) {
         DocumentBlock imageBlock = DocumentBlock.image(
                 "document-image", Map.of("inputFormat", inputFormat), DocumentLocation.page(1));
-        return new PreparedDocument(null, null, inputFormat, null, imageDataUrl, 1, false, List.of(imageBlock));
+        return new PreparedDocument(null, null, inputFormat, null, imageDataUrl, 1, false, List.of(imageBlock), null, false);
     }
 
     public static PreparedDocument forFile(Long projectId, Long documentId, String inputFormat,
@@ -63,12 +67,19 @@ public final class PreparedDocument {
         boolean textTruncated = maxTextChars > 0 && text != null && text.length() > maxTextChars;
         String preparedText = textTruncated ? text.substring(0, maxTextChars) : text;
         return new PreparedDocument(projectId, documentId, inputFormat, preparedText, null,
-                pageCount, truncated || textTruncated, orderedBlocks);
+                pageCount, truncated || textTruncated, orderedBlocks, null, false);
     }
 
     public PreparedDocument withSource(Long projectId, Long documentId) {
         return new PreparedDocument(projectId, documentId, inputFormat, textContent, imageDataUrl,
-                pageCount, truncated, blocks);
+                pageCount, truncated, blocks, declaredFormat, formatMismatch);
+    }
+
+    public PreparedDocument withDetectedFormat(String detectedFormat, String declaredFormat) {
+        boolean mismatch = declaredFormat != null && !declaredFormat.isBlank()
+                && !declaredFormat.equalsIgnoreCase(detectedFormat);
+        return new PreparedDocument(projectId, documentId, detectedFormat, textContent, imageDataUrl,
+                pageCount, truncated, blocks, declaredFormat, mismatch);
     }
 
     public Long getProjectId() {
@@ -101,5 +112,13 @@ public final class PreparedDocument {
 
     public List<DocumentBlock> getBlocks() {
         return blocks;
+    }
+
+    public String getDeclaredFormat() {
+        return declaredFormat;
+    }
+
+    public boolean isFormatMismatch() {
+        return formatMismatch;
     }
 }

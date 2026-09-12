@@ -159,6 +159,9 @@ public class FileParseWorker {
         metadata.put("model", resolveModel(parsedDocument, modelMetadata));
         metadata.put("pageCount", preparedDocument.getPageCount());
         metadata.put("inputTruncated", preparedDocument.isTruncated());
+        metadata.put("declaredFormat", preparedDocument.getDeclaredFormat());
+        metadata.put("detectedFormat", preparedDocument.getInputFormat());
+        metadata.put("formatMismatch", preparedDocument.isFormatMismatch());
         metadata.put("blocks", preparedDocument.getBlocks());
         if (!modelMetadata.isMissingNode()) {
             metadata.put("modelMetadata", modelMetadata);
