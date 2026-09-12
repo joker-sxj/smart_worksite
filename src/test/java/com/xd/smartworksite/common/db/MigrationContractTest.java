@@ -155,6 +155,19 @@ class MigrationContractTest {
     }
 
     @Test
+    void fileParseReusableLookupHasAnOrderingIndex() throws IOException {
+        String migration = Files.readString(
+                MIGRATION_DIR.resolve("V31__optimize_file_parse_reuse_lookup.sql"),
+                StandardCharsets.UTF_8
+        );
+
+        assertThat(migration).contains("ALTER TABLE file_parse_record");
+        assertThat(migration).contains("ADD KEY idx_file_parse_reuse_lookup");
+        assertThat(migration).contains(
+                "project_id, file_id, source_file_hash, result_format, deleted, finished_at DESC, id DESC");
+    }
+
+    @Test
     void fileDownloadContractUsesAccessUrlEndpoint() throws IOException {
         String readme = Files.readString(README, StandardCharsets.UTF_8);
         String frontendFileApi = Files.readString(FRONTEND_FILE_API, StandardCharsets.UTF_8);
