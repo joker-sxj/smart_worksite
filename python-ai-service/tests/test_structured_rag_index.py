@@ -969,6 +969,20 @@ def test_title_match_score_matches_quoted_filename_without_extension():
     ) >= 1.0
 
 
+def test_title_match_score_rejects_similar_or_short_titles():
+    from app.services.vector_store import title_match_score
+
+    query = '《问题详细情况》记录了哪些内容？'
+    assert title_match_score(query, '问题详细情况补充说明.docx') == 0.0
+    assert title_match_score('《报告》有哪些内容？', '报告模板.docx') == 0.0
+
+
+def test_explicitly_named_title_terms_normalize_extension_and_deduplicate():
+    from app.services.vector_store import explicitly_named_title_terms
+
+    assert explicitly_named_title_terms('《问题详细情况.docx》和《问题详细情况》') == ['问题详细情况']
+
+
 def test_rag_search_tolerates_missing_batch_adjacency_entries(tmp_path):
     from app.services.vector_store import ChunkRecord
 
