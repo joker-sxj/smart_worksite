@@ -300,7 +300,10 @@ child.stdout.on('data', (chunk) => writeSafely(stdoutLog, chunk));
 child.stderr.on('data', (chunk) => writeSafely(stderrLog, chunk));
 child.on('error', (error) => writeSafely(stderrLog, `Failed to start child process: ${error.message}\n`));
 
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+// SSH logout sends SIGHUP; managed services must outlive the launching shell.
+process.on('SIGHUP', () => {});
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     if (stopping) return;
     stopping = true;
