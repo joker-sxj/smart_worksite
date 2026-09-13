@@ -22,16 +22,16 @@
     </resultMap>
 
     <sql id="KnowledgeDocumentColumns">
-        id, project_id, knowledge_base_id, file_id, title, source_type, index_status,
+        id, project_id, knowledge_base_id, file_id, title, file_ext, content_type, source_type, index_status,
         task_id, error_message, version_no, created_by, updated_by, created_at, updated_at
     </sql>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         insert into knowledge_document (
-            project_id, knowledge_base_id, file_id, title, source_type, index_status,
+            project_id, knowledge_base_id, file_id, title, file_ext, content_type, source_type, index_status,
             version_no, created_by, updated_by
         ) values (
-            #{projectId}, #{knowledgeBaseId}, #{fileId}, #{title}, #{sourceType}, #{indexStatus},
+            #{projectId}, #{knowledgeBaseId}, #{fileId}, #{title}, #{fileExt}, #{contentType}, #{sourceType}, #{indexStatus},
             #{versionNo}, #{createdBy}, #{updatedBy}
         )
     </insert>
