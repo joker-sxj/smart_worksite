@@ -49,4 +49,14 @@ describe('knowledge document detail view model', () => {
 
     expect(model).toMatchObject({ fileFormat: 'xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', parserProvider: 'LOCAL_DOCUMENT', parserModel: 'local-parser', resultFormat: 'MARKDOWN', previewUrl: 'https://preview', downloadUrl: 'https://download', contentPreview: 'content' });
   });
+
+  it('derives the format from the filename for legacy documents without stored extension', () => {
+    const model = buildDocumentDetailView({
+      documentId: 8, projectId: 1, knowledgeBaseId: 2, fileId: 10,
+      title: '施工规范.PDF', contentType: 'application/pdf', indexStatus: 'SUCCESS',
+      createdAt: '', updatedAt: ''
+    });
+
+    expect(model.fileFormat).toBe('pdf');
+  });
 });

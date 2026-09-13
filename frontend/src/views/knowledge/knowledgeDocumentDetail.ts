@@ -120,10 +120,11 @@ export function buildDocumentDetailView(
   access: { preview?: string; download?: string } = {}
 ): DocumentDetailView {
   const rawContent = parseContent?.content || parseRecord?.contentPreview || '';
+  const titleExtension = document.title.includes('.') ? document.title.split('.').pop()?.trim().toLowerCase() : undefined;
   return {
     document,
     parseRecord,
-    fileFormat: document.fileExt || '-',
+    fileFormat: document.fileExt?.trim().toLowerCase() || titleExtension || '-',
     contentType: document.contentType || parseRecord?.sourceContentType || '-',
     parserProvider: parseRecord?.parserProvider || '-',
     parserModel: parseRecord?.parserModel || '-',
