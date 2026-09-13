@@ -8,6 +8,7 @@ the only compatibility mode that may retain the existing Qwen-only path.
 import base64
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from io import BytesIO
 from typing import Any, Callable
 
@@ -150,8 +151,19 @@ class PaddleOcrV5Provider:
 
 def build_ocr_provider() -> PaddleOcrV5Provider | QwenOnlyOcrProvider:
     mode = os.getenv("OCR_PROVIDER", "QWEN").strip().upper()
+    return _build_ocr_provider_cached(
+        mode,
+        os.getenv("OCR_PADDLE_DET_MODEL_DIR", ""),
+        os.getenv("OCR_PADDLE_REC_MODEL_DIR", ""),
+        os.getenv("OCR_PADDLE_DEVICE", "cpu"),
+    )
+
+
+@lru_cache(maxsize=4)
+def _build_ocr_provider_cached(mode: str, det_dir: str, rec_dir: str, device: str) \
+        -> PaddleOcrV5Provider | QwenOnlyOcrProvider:
     if mode in {"PP_OCRV5", "PADDLE", "PADDLEOCR"}:
-        provider = PaddleOcrV5Provider()
+        provider = PaddleOcrV5Provider(det_dir, rec_dir, device)
         if not provider.available():
             raise RuntimeError("PaddleOCR/PaddlePaddle is not installed for PP-OCRv5")
         if not provider.detection_model_dir or not provider.recognition_model_dir:
@@ -159,11 +171,15 @@ def build_ocr_provider() -> PaddleOcrV5Provider | QwenOnlyOcrProvider:
         if not all(os.path.isdir(path) for path in (provider.detection_model_dir, provider.recognition_model_dir)):
             raise RuntimeError("PP-OCRv5 local model directories are not available")
         return provider
-    candidate = PaddleOcrV5Provider()
+    candidate = PaddleOcrV5Provider(det_dir, rec_dir, device)
     if mode == "AUTO" and candidate.available() and candidate.detection_model_dir and candidate.recognition_model_dir \
             and os.path.isdir(candidate.detection_model_dir) and os.path.isdir(candidate.recognition_model_dir):
         return candidate
     return QwenOnlyOcrProvider()
+
+
+def clear_ocr_provider_cache() -> None:
+    _build_ocr_provider_cached.cache_clear()
 
 
 def ocr_provider_status() -> dict[str, Any]:

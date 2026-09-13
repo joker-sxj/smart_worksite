@@ -8,6 +8,7 @@ from app.services.ocr_provider import (
     OcrTextResult,
     PaddleOcrV5Provider,
     build_ocr_provider,
+    clear_ocr_provider_cache,
     ocr_provider_status,
 )
 
@@ -92,3 +93,20 @@ def test_paddle_provider_selects_pp_ocrv5_model_names_for_local_directories(tmp_
     assert captured["text_detection_model_name"] == "PP-OCRv5_server_det"
     assert captured["text_recognition_model_name"] == "PP-OCRv5_server_rec"
     assert captured["enable_mkldnn"] is False
+
+
+def test_build_provider_reuses_engine_holder_for_same_runtime_configuration(monkeypatch, tmp_path):
+    det = tmp_path / "det"
+    rec = tmp_path / "rec"
+    det.mkdir()
+    rec.mkdir()
+    monkeypatch.setenv("OCR_PROVIDER", "PP_OCRV5")
+    monkeypatch.setenv("OCR_PADDLE_DET_MODEL_DIR", str(det))
+    monkeypatch.setenv("OCR_PADDLE_REC_MODEL_DIR", str(rec))
+    monkeypatch.setattr("app.services.ocr_provider.PaddleOcrV5Provider.available", staticmethod(lambda: True))
+    clear_ocr_provider_cache()
+
+    first = build_ocr_provider()
+    second = build_ocr_provider()
+
+    assert first is second
