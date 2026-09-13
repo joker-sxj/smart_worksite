@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from app.core.deployment import ModelPolicyViolation
 from app.core.settings import Settings, get_settings
 from app.main import app
 from app.models.schemas import Message
@@ -16,9 +17,13 @@ def local_settings(**overrides) -> Settings:
         "ai_deployment_mode": "LOCAL_ONLY",
         "chat_max_model_len": 16384,
         "qwen_base_url": "http://local-llm:8000/v1",
+        "qwen_model": "smart-worksite-chat",
         "qwen_vl_endpoint": "http://local-vlm:8000/v1/chat/completions",
+        "qwen_vl_model": "smart-worksite-chat",
         "qwen_embedding_base_url": "http://local-embedding:8000/v1",
+        "qwen_embedding_model": "smart-worksite-embedding",
         "qwen_rerank_base_url": "http://local-reranker:8000/v1/rerank",
+        "qwen_rerank_model": "smart-worksite-reranker",
         "qwen_api_key": "",
         "qwen_vl_api_key": "",
         "qwen_rerank_api_style": "QWEN3",
@@ -173,12 +178,25 @@ def test_local_chat_rejects_unapproved_model_before_http_call(monkeypatch):
 def test_local_chat_cannot_override_model_through_parameters(monkeypatch):
     install_fake_http(monkeypatch, {"choices": [{"message": {"content": "LOCAL_OK"}}]})
 
-    with pytest.raises(RuntimeError, match="reserved fields"):
+    with pytest.raises(ModelPolicyViolation, match="reserved fields") as error:
         asyncio.run(QwenClient(local_settings()).chat(
             [Message(role="user", content="ping")],
-            parameters={"model": "unapproved-model", "messages": []},
+            parameters={"model": "unapproved-model"},
         ))
 
+    assert error.value.code == "MODEL_REQUEST_INVALID"
+    assert FakeAsyncClient.calls == []
+
+
+def test_local_chat_cannot_override_messages_through_parameters(monkeypatch):
+    install_fake_http(monkeypatch, {"choices": [{"message": {"content": "LOCAL_OK"}}]})
+
+    with pytest.raises(ModelPolicyViolation, match="reserved fields") as error:
+        asyncio.run(QwenClient(local_settings()).chat(
+            [Message(role="user", content="ping")], parameters={"messages": []}
+        ))
+
+    assert error.value.code == "MODEL_REQUEST_INVALID"
     assert FakeAsyncClient.calls == []
 
 
@@ -202,6 +220,17 @@ def test_cloud_mode_preserves_explicit_chat_model(monkeypatch):
     assert FakeAsyncClient.calls[0]["json"]["model"] == "approved-by-cloud-gateway"
 
 
+def test_cloud_mode_preserves_legacy_parameter_model_override(monkeypatch):
+    install_fake_http(monkeypatch, {"choices": [{"message": {"content": "CLOUD_OK"}}]})
+    settings = Settings(_env_file=None, qwen_api_key="cloud-key")
+
+    asyncio.run(QwenClient(settings).chat(
+        [Message(role="user", content="ping")], parameters={"model": "legacy-cloud-model"}
+    ))
+
+    assert FakeAsyncClient.calls[0]["json"]["model"] == "legacy-cloud-model"
+
+
 def test_all_local_model_calls_omit_authorization_without_key(monkeypatch):
     install_fake_http(
         monkeypatch,
@@ -221,6 +250,9 @@ def test_all_local_model_calls_omit_authorization_without_key(monkeypatch):
         "http://local-vlm:8000/v1/chat/completions",
     ]
     assert all("Authorization" not in call["headers"] for call in FakeAsyncClient.calls)
+    assert FakeAsyncClient.calls[0]["json"]["model"] == "smart-worksite-embedding"
+    assert FakeAsyncClient.calls[1]["json"]["model"] == "smart-worksite-reranker"
+    assert FakeAsyncClient.calls[2]["json"]["model"] == "smart-worksite-chat"
 
 
 def test_cloud_compatible_mode_still_requires_api_key():

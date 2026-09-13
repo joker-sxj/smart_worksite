@@ -86,7 +86,7 @@ class OpenAICompatibleProvider:
         self._require_api_key(self.settings.qwen_api_key, "QWEN_API_KEY")
         selected_model = self._allowed_model(model, self.settings.qwen_model, "chat")
         reserved = {"model", "messages"}.intersection(parameters or {})
-        if reserved:
+        if self.settings.ai_deployment_mode == AiDeploymentMode.LOCAL_ONLY and reserved:
             raise ModelPolicyViolation(
                 "model request parameters contain reserved fields",
                 code="MODEL_REQUEST_INVALID",
@@ -162,7 +162,7 @@ class OpenAICompatibleProvider:
 
     async def _post_qwen_vl(self, content: list[dict[str, Any]], headers: dict[str, str]) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "model": self.settings.qwen_vl_model,
+            "model": self._allowed_model(None, self.settings.qwen_vl_model, "vision"),
             "messages": [{"role": "user", "content": content}],
             "response_format": {"type": "json_object"},
             "presence_penalty": 1.5,
@@ -497,7 +497,7 @@ class OpenAICompatibleProvider:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
     def _build_rerank_payload(self, query: str, documents: list[str], top_n: int) -> dict[str, Any]:
-        model = self.settings.qwen_rerank_model
+        model = self._allowed_model(None, self.settings.qwen_rerank_model, "rerank")
         api_style = self.settings.qwen_rerank_api_style.upper()
         if api_style == "QWEN3" or (api_style == "AUTO" and model == "qwen3-rerank"):
             return {

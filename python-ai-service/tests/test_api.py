@@ -75,7 +75,51 @@ def test_model_invoke_returns_stable_policy_error_for_unapproved_local_model(mon
 
     assert response.status_code == 422
     assert response.json()["errorCode"] == "MODEL_NOT_ALLOWED"
+    assert response.json()["traceId"]
     assert "http://" not in response.text
+
+
+def test_model_invoke_rejects_parameter_model_override_with_specific_error(monkeypatch):
+    from app.api import routes
+
+    settings = Settings(
+        _env_file=None, ai_deployment_mode="LOCAL_ONLY", chat_max_model_len=16384,
+        qwen_base_url="http://local-llm:8000/v1", qwen_model="smart-worksite-chat",
+        qwen_vl_endpoint="http://local-llm:8000/v1/chat/completions",
+        qwen_vl_model="smart-worksite-chat",
+        qwen_embedding_base_url="http://local-embedding:8000/v1",
+        qwen_rerank_base_url="http://local-reranker:8000/v1/rerank",
+    )
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+
+    response = TestClient(app, raise_server_exceptions=False).post("/v1/model/invoke", json={
+        "prompt": "ping", "parameters": {"model": "unapproved-model"},
+    })
+
+    assert response.status_code == 422
+    assert response.json()["errorCode"] == "MODEL_REQUEST_INVALID"
+    assert response.json()["errorMessage"] == "Model request contains protected fields"
+
+
+def test_agent_invoke_rejects_parameter_model_override(monkeypatch):
+    from app.api import routes
+
+    settings = Settings(
+        _env_file=None, ai_deployment_mode="LOCAL_ONLY", chat_max_model_len=16384,
+        qwen_base_url="http://local-llm:8000/v1", qwen_model="smart-worksite-chat",
+        qwen_vl_endpoint="http://local-llm:8000/v1/chat/completions",
+        qwen_vl_model="smart-worksite-chat",
+        qwen_embedding_base_url="http://local-embedding:8000/v1",
+        qwen_rerank_base_url="http://local-reranker:8000/v1/rerank",
+    )
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+
+    response = TestClient(app, raise_server_exceptions=False).post("/v1/agent/invoke", json={
+        "goal": "inspect safety", "parameters": {"model": "unapproved-model"},
+    })
+
+    assert response.status_code == 422
+    assert response.json()["errorCode"] == "MODEL_REQUEST_INVALID"
 
 
 def test_rag_index_and_search_local_hash():

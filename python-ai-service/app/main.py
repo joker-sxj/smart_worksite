@@ -1,4 +1,5 @@
 import logging
+from uuid import uuid4
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -55,16 +56,22 @@ async def handle_context_budget_exceeded(request: Request, exc: ContextBudgetExc
 
 @app.exception_handler(ModelPolicyViolation)
 async def handle_model_policy_violation(request: Request, exc: ModelPolicyViolation):
-    logger.warning("model policy rejected request path=%s code=%s", request.url.path, exc.code)
+    trace_id = uuid4().hex
+    logger.warning("model policy rejected request path=%s code=%s traceId=%s", request.url.path, exc.code, trace_id)
+    public_message = (
+        "Model request contains protected fields"
+        if exc.code == "MODEL_REQUEST_INVALID"
+        else "Requested model is not allowed by deployment policy"
+    )
     return JSONResponse(
         status_code=422,
         content={
             "success": False,
-            "traceId": "",
+            "traceId": trace_id,
             "data": None,
             "usage": {},
             "errorCode": exc.code,
-            "errorMessage": "Requested model is not allowed by deployment policy",
+            "errorMessage": public_message,
         },
     )
 
