@@ -75,7 +75,7 @@ if requires_host_model_preflight "$deployment_mode" "${MODEL_PROFILE_FILE:-}"; t
   preflight_host_model_endpoint "$QWEN_VL_ENDPOINT" "${QWEN_VL_MODEL:-}"
 fi
 printf 'Starting Docker Compose services...\n'
-docker_compose "$root" up -d --build
+docker_compose "$root" up -d --build --pull never
 mysql_port="$(configured_port MYSQL_PORT 3306)"
 redis_port="$(configured_port REDIS_PORT 6379)"
 minio_port="$(configured_port MINIO_API_PORT 9000)"

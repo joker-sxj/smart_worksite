@@ -302,6 +302,8 @@ grep -q 'docker-compose-models.yml' "$repo_root/scripts/lib/lifecycle.sh" || fai
 grep -q 'check-gpu-runtime.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must run GPU preflight before starting local models.'
 grep -q 'check-model-cache.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must reject incomplete offline model caches before starting local models.'
 grep -Eq 'docker_compose "\$root" up -d --pull never local-llm local-embedding local-reranker' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must forbid implicit model image pulls.'
+grep -Eq 'docker_compose "\$root" up -d --build --pull never' "$repo_root/scripts/start-all.sh" || fail 'Full Compose startup must retain the no-pull guarantee.'
+grep -Eq 'docker run .*--pull never' "$repo_root/scripts/check-gpu-runtime.sh" || fail 'GPU preflight must not download its runtime image.'
 grep -q 'check-local-models.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must verify each local model dependency.'
 grep -Eq 'check-local-models.sh.*--smoke' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must run bounded generation, embedding, and rerank smoke checks.'
 grep -q 'chat boundary smoke' "$repo_root/scripts/check-local-models.sh" || fail 'Local model checks must exercise the configured context boundary.'

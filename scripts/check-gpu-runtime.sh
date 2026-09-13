@@ -135,7 +135,11 @@ fi
 
 runtime_image="${NVIDIA_RUNTIME_TEST_IMAGE:-nvidia/cuda:12.2.2-base-ubuntu22.04}"
 printf 'Host NVIDIA GPUs: %s; validating %s selected GPU(s) for profile %s; testing Docker GPU access with %s...\n' "$visible_gpu_count" "$required_gpus" "$profile_label" "$runtime_image"
-if ! docker run --rm --gpus all --pull=missing "$runtime_image" nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits; then
+if ! docker image inspect "$runtime_image" >/dev/null 2>&1; then
+  printf 'GPU preflight failed: NVIDIA runtime test image is not present locally: %s. Import it before offline startup.\n' "$runtime_image" >&2
+  exit 1
+fi
+if ! docker run --rm --gpus all --pull never "$runtime_image" nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits; then
   cat >&2 <<'MESSAGE'
 GPU preflight failed: Docker GPU runtime command failed: expected=docker_gpu_runtime_visible, actual=probe_failed. Install/configure NVIDIA Container Toolkit, ensure the nvidia runtime is available to Docker, then restart Docker.
 This check does not modify project containers, networks, volumes, or application data.

@@ -38,6 +38,30 @@ run_check() {
     bash "$repo_root/scripts/check-model-cache.sh" "$tmp/profile.env"
 }
 
+snapshot="$tmp/cache/hub/models--Qwen--Test-Chat/snapshots/1111111111111111111111111111111111111111"
+mkdir -p "$snapshot"
+printf '{}\n' > "$snapshot/config.json"
+printf '{}\n' > "$snapshot/tokenizer_config.json"
+printf 'weights\n' > "$snapshot/model-00001-of-00002.safetensors"
+printf 'weights\n' > "$snapshot/model-00002-of-00002.safetensors"
+cat > "$snapshot/model.safetensors.index.json" <<'INDEX'
+{"weight_map":{"layer.0":"model-00001-of-00002.safetensors","layer.1":"model-00002-of-00002.safetensors"}}
+INDEX
+
+bash "$repo_root/scripts/check-model-cache.sh" --verify-snapshot "$tmp/cache" Qwen/Test-Chat 1111111111111111111111111111111111111111
+rm "$snapshot/model-00002-of-00002.safetensors"
+if bash "$repo_root/scripts/check-model-cache.sh" --verify-snapshot "$tmp/cache" Qwen/Test-Chat 1111111111111111111111111111111111111111 >"$tmp/missing-shard" 2>&1; then
+  echo 'expected a missing indexed shard to fail' >&2; exit 1
+fi
+grep -Fq 'model-00002-of-00002.safetensors' "$tmp/missing-shard"
+ln -s missing-blob "$snapshot/model-00002-of-00002.safetensors"
+if bash "$repo_root/scripts/check-model-cache.sh" --verify-snapshot "$tmp/cache" Qwen/Test-Chat 1111111111111111111111111111111111111111 >"$tmp/broken-link" 2>&1; then
+  echo 'expected a broken weight symlink to fail' >&2; exit 1
+fi
+grep -Fq 'model-00002-of-00002.safetensors' "$tmp/broken-link"
+rm "$snapshot/model-00002-of-00002.safetensors"
+printf 'weights\n' > "$snapshot/model-00002-of-00002.safetensors"
+
 run_check
 grep -Fq 'image inspect vllm:test@sha256:' "$tmp/docker.log"
 [[ "$(grep -c '^run ' "$tmp/docker.log")" == 3 ]]

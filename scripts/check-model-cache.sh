@@ -1,6 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" == '--verify-snapshot' ]]; then
+  cache_root="${2:-}"; model_id="${3:-}"; revision="${4:-}"
+  [[ -n "$cache_root" && -n "$model_id" && -n "$revision" ]] || { printf 'Usage: %s --verify-snapshot CACHE_ROOT MODEL_ID REVISION\n' "$0" >&2; exit 2; }
+  snapshot="$cache_root/hub/models--${model_id%%/*}--${model_id#*/}/snapshots/$revision"
+  [[ -d "$snapshot" && -f "$snapshot/config.json" ]] || { printf 'snapshot missing config: %s\n' "$snapshot" >&2; exit 1; }
+  find -L "$snapshot" -maxdepth 1 -type f \( -name 'tokenizer.json' -o -name 'tokenizer_config.json' -o -name 'vocab.json' \) -print -quit | grep -q . || { printf 'snapshot missing tokenizer files: %s\n' "$snapshot" >&2; exit 1; }
+  index="$snapshot/model.safetensors.index.json"
+  if [[ -f "$index" ]]; then
+    python3 - "$index" "$snapshot" <<'PY'
+import json, os, sys
+index, snapshot = sys.argv[1:]
+with open(index, encoding="utf-8") as stream:
+    weight_map = json.load(stream).get("weight_map", {})
+if not weight_map:
+    raise SystemExit("safetensors index has no weight_map")
+for name in sorted(set(weight_map.values())):
+    path = os.path.join(snapshot, name)
+    if not os.path.isfile(path):
+        raise SystemExit(f"missing indexed shard: {name}")
+PY
+  elif ! find -L "$snapshot" -maxdepth 1 -type f -name '*.safetensors' -print -quit | grep -q .; then
+    printf 'snapshot missing safetensors weights: %s\n' "$snapshot" >&2
+    exit 1
+  fi
+  find -L "$snapshot" -maxdepth 1 -type f -name '*.safetensors' -print -quit | grep -q . || [[ -f "$index" ]] || { printf 'snapshot has no usable weights: %s\n' "$snapshot" >&2; exit 1; }
+  exit 0
+fi
+
 profile_file="${1:-}"
 [[ -n "$profile_file" ]] || { printf 'Usage: %s MODEL_PROFILE_FILE\n' "$0" >&2; exit 2; }
 [[ -f "$profile_file" ]] || { printf 'Model profile not found: %s\n' "$profile_file" >&2; exit 1; }
@@ -40,9 +68,22 @@ check_model() {
       find -L "$snapshot" -maxdepth 1 -type f \
         \( -name "tokenizer.json" -o -name "tokenizer_config.json" -o -name "vocab.json" \) \
         -print -quit | grep -q .
-      find -L "$snapshot" -maxdepth 1 -type f \
-        \( -name "*.safetensors" -o -name "*.safetensors.index.json" \) \
-        -print -quit | grep -q .
+      index="$snapshot/model.safetensors.index.json"
+      if test -f "$index"; then
+        python3 - "$index" "$snapshot" <<'PY'
+import json, os, sys
+index, snapshot = sys.argv[1:]
+with open(index, encoding="utf-8") as stream:
+    weight_map = json.load(stream).get("weight_map", {})
+if not weight_map:
+    raise SystemExit("safetensors index has no weight_map")
+for name in sorted(set(weight_map.values())):
+    if not os.path.isfile(os.path.join(snapshot, name)):
+        raise SystemExit(f"missing indexed shard: {name}")
+PY
+      elif ! find -L "$snapshot" -maxdepth 1 -type f -name '*.safetensors' -print -quit | grep -q .; then
+        exit 1
+      fi
     ' offline-cache-check "$model_id" "$revision"; then
     printf '%s model cache is missing or incomplete for %s at revision %s. Preload the complete snapshot before startup.\n' \
       "$role" "$model_id" "$revision" >&2
