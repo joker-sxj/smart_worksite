@@ -1,5 +1,6 @@
 <script lang="ts">
-import type { QaEvidenceStatus, QaMessage } from '../../api/types';
+import type { ID, QaEvidenceStatus, QaMessage } from '../../api/types';
+import { restoreSubmittedSuggestionKeys } from './qaMessagePolling';
 
 export const EVIDENCE_RECOVERY_PROMPT = '请在下方问题框补充地区、时间、对象或指定标准名称后重新发送。';
 export const evidenceStatusMeta: Record<Exclude<QaEvidenceStatus, 'SUFFICIENT'>, { label: string; meaning: string; tagType: 'warning' | 'danger' | 'info' }> = {
@@ -63,6 +64,24 @@ export async function runSuggestedFollowUpSubmission(
     state.pending = false;
   }
 }
+
+export function syncSubmittedSuggestionKeys(
+  state: SuggestedFollowUpSubmissionState,
+  records: QaMessage[]
+) {
+  state.submittedKeys = restoreSubmittedSuggestionKeys(records);
+}
+
+export function acceptSessionMessages<T extends QaMessage>(
+  state: SuggestedFollowUpSubmissionState,
+  requestedSessionId: ID,
+  activeSessionId: ID,
+  records: T[]
+): T[] | null {
+  if (String(requestedSessionId) !== String(activeSessionId)) return null;
+  syncSubmittedSuggestionKeys(state, records);
+  return records;
+}
 </script>
 
 <script setup lang="ts">
@@ -74,10 +93,10 @@ import { fetchKnowledgeBases } from '../../api/knowledge';
 import { archiveQaSession, createQaSession, fetchQaMessageDetail, fetchQaMessageReferences, fetchQaMessages, fetchQaSessionDetail, fetchQaSessions, regenerateMessage, sendQuestion, submitFeedback, updateQaSession } from '../../api/qa';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
-import type { DataSourceItem, ID, KnowledgeBase, QaMessageSendRequest, QaSession } from '../../api/types';
+import type { DataSourceItem, KnowledgeBase, QaMessageSendRequest, QaSession } from '../../api/types';
 import { hasSuspiciousText } from '../../utils/textQuality';
 import { renderQaMarkdown } from '../../utils/qaMarkdown';
-import { hasActiveQaGeneration, normalizeQaMessages, qaMessageText, restoreSubmittedSuggestionKeys } from './qaMessagePolling';
+import { hasActiveQaGeneration, normalizeQaMessages, qaMessageText } from './qaMessagePolling';
 
 type QaMessageExtra = QaMessage & Record<string, unknown>;
 
@@ -167,7 +186,10 @@ function scheduleMessagePolling(sessionId: ID) {
   messagePollTimer = setTimeout(async () => {
     if (String(activeSessionId.value) !== String(sessionId)) return;
     try {
-      messages.value = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+      const refreshed = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+      const accepted = acceptSessionMessages(suggestionSubmission.value, sessionId, activeSessionId.value, refreshed);
+      if (!accepted) return;
+      messages.value = accepted;
       messageError.value = '';
     } catch (err) {
       messageError.value = err instanceof Error ? err.message : t('回答状态刷新失败，请稍后重试。');
@@ -257,7 +279,10 @@ async function switchSession(sessionId: ID) {
   messages.value = [];
   try {
     await fetchQaSessionDetail(sessionId);
-    messages.value = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+    const refreshed = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+    const accepted = acceptSessionMessages(suggestionSubmission.value, sessionId, activeSessionId.value, refreshed);
+    if (!accepted) return;
+    messages.value = accepted;
     scheduleMessagePolling(sessionId);
   } catch (err) {
     messageError.value = err instanceof Error ? err.message : t('会话消息加载失败，请检查后端问答接口。');
@@ -383,9 +408,11 @@ async function submitQuestion(content: string, payloadExtra: Partial<QaMessageSe
   try {
     const payload = buildQuestionPayload(content, payloadExtra);
     await sendQuestion(sessionId, payload, projectId) as QaMessageExtra;
-    if (activeSend.value?.token !== sendToken) return false;
-    messages.value = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
-    suggestionSubmission.value.submittedKeys = restoreSubmittedSuggestionKeys(messages.value);
+    if (activeSend.value?.token !== sendToken || String(activeSessionId.value) !== String(sessionId)) return false;
+    const refreshed = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
+    const accepted = acceptSessionMessages(suggestionSubmission.value, sessionId, activeSessionId.value, refreshed);
+    if (!accepted || activeSend.value?.token !== sendToken) return false;
+    messages.value = accepted;
     scheduleMessagePolling(sessionId);
     return true;
   } catch (err) {
