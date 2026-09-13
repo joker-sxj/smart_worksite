@@ -159,6 +159,49 @@ def test_local_openai_compatible_chat_does_not_require_api_key(monkeypatch):
     assert "Authorization" not in FakeAsyncClient.calls[0]["headers"]
 
 
+def test_local_chat_rejects_unapproved_model_before_http_call(monkeypatch):
+    install_fake_http(monkeypatch, {"choices": [{"message": {"content": "SHOULD_NOT_RUN"}}]})
+
+    with pytest.raises(RuntimeError, match="model is not allowed"):
+        asyncio.run(QwenClient(local_settings()).chat(
+            [Message(role="user", content="ping")], model="unapproved-model"
+        ))
+
+    assert FakeAsyncClient.calls == []
+
+
+def test_local_chat_cannot_override_model_through_parameters(monkeypatch):
+    install_fake_http(monkeypatch, {"choices": [{"message": {"content": "LOCAL_OK"}}]})
+
+    with pytest.raises(RuntimeError, match="reserved fields"):
+        asyncio.run(QwenClient(local_settings()).chat(
+            [Message(role="user", content="ping")],
+            parameters={"model": "unapproved-model", "messages": []},
+        ))
+
+    assert FakeAsyncClient.calls == []
+
+
+def test_local_embedding_rejects_unapproved_model_before_http_call(monkeypatch):
+    install_fake_http(monkeypatch, {"data": [{"index": 0, "embedding": [0.1]}]})
+
+    with pytest.raises(RuntimeError, match="model is not allowed"):
+        asyncio.run(QwenClient(local_settings()).embed(["document"], model="unapproved-model"))
+
+    assert FakeAsyncClient.calls == []
+
+
+def test_cloud_mode_preserves_explicit_chat_model(monkeypatch):
+    install_fake_http(monkeypatch, {"choices": [{"message": {"content": "CLOUD_OK"}}]})
+    settings = Settings(_env_file=None, qwen_api_key="cloud-key")
+
+    asyncio.run(QwenClient(settings).chat(
+        [Message(role="user", content="ping")], model="approved-by-cloud-gateway"
+    ))
+
+    assert FakeAsyncClient.calls[0]["json"]["model"] == "approved-by-cloud-gateway"
+
+
 def test_all_local_model_calls_omit_authorization_without_key(monkeypatch):
     install_fake_http(
         monkeypatch,

@@ -9,6 +9,12 @@ class AiDeploymentMode(StrEnum):
     CLOUD_ALLOWED = "CLOUD_ALLOWED"
 
 
+class ModelPolicyViolation(RuntimeError):
+    def __init__(self, message: str, code: str = "MODEL_NOT_ALLOWED"):
+        super().__init__(message)
+        self.code = code
+
+
 def local_only_policy_violations(allow_remote_inference: bool, allow_cloud_fallback: bool) -> list[str]:
     """Return inference policy flags that conflict with strict local-only mode."""
     violations = []

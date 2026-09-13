@@ -51,6 +51,33 @@ def test_health_without_key_when_service_key_is_configured(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_model_invoke_returns_stable_policy_error_for_unapproved_local_model(monkeypatch):
+    from app.api import routes
+
+    settings = Settings(
+        _env_file=None,
+        ai_deployment_mode="LOCAL_ONLY",
+        chat_max_model_len=16384,
+        qwen_base_url="http://local-llm:8000/v1",
+        qwen_model="smart-worksite-chat",
+        qwen_vl_endpoint="http://local-llm:8000/v1/chat/completions",
+        qwen_vl_model="smart-worksite-chat",
+        qwen_embedding_base_url="http://local-embedding:8000/v1",
+        qwen_rerank_base_url="http://local-reranker:8000/v1/rerank",
+    )
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post("/v1/model/invoke", json={
+        "prompt": "ping",
+        "modelName": "unapproved-model",
+    })
+
+    assert response.status_code == 422
+    assert response.json()["errorCode"] == "MODEL_NOT_ALLOWED"
+    assert "http://" not in response.text
+
+
 def test_rag_index_and_search_local_hash():
     client = TestClient(app)
     index_response = client.post("/v1/rag/index", json={

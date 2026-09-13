@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from app.api.routes import router
 from app.core.settings import get_settings
 from app.services.context_budget import ContextBudgetExceeded
+from app.core.deployment import ModelPolicyViolation
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("python-ai-service")
@@ -48,6 +49,22 @@ async def handle_context_budget_exceeded(request: Request, exc: ContextBudgetExc
             "errorCode": "VALIDATION_ERROR",
             "errorMessage": "Model context budget exceeded",
             "errorDetails": {"code": exc.code, "reason": exc.reason},
+        },
+    )
+
+
+@app.exception_handler(ModelPolicyViolation)
+async def handle_model_policy_violation(request: Request, exc: ModelPolicyViolation):
+    logger.warning("model policy rejected request path=%s code=%s", request.url.path, exc.code)
+    return JSONResponse(
+        status_code=422,
+        content={
+            "success": False,
+            "traceId": "",
+            "data": None,
+            "usage": {},
+            "errorCode": exc.code,
+            "errorMessage": "Requested model is not allowed by deployment policy",
         },
     )
 
