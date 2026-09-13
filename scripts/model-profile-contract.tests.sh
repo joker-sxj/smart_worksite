@@ -31,10 +31,11 @@ required_files=(
   deploy/docker-compose-models.yml
   scripts/check-gpu-runtime.sh
   scripts/check-local-models.sh
+  scripts/check-model-cache.sh
 )
 for file in "${required_files[@]}"; do assert_file "$file"; done
 
-for file in scripts/check-gpu-runtime.sh scripts/check-local-models.sh scripts/start-all.sh scripts/status.sh; do
+for file in scripts/check-gpu-runtime.sh scripts/check-local-models.sh scripts/check-model-cache.sh scripts/start-all.sh scripts/status.sh; do
   [[ -f "$repo_root/$file" ]] && bash -n "$repo_root/$file" || fail "Bash syntax error or missing script: $file"
 done
 
@@ -54,6 +55,9 @@ for profile in h100-fp8 a6000x2-bf16 a6000x2-production-32k a6000x2-stable-16k; 
   grep -Eq '^QWEN_VL_CONTAINER_ENDPOINT=http://local-llm:8000/v1/chat/completions$' "$repo_root/$file" || fail "$profile must route container-side vision to the local multimodal model"
   grep -Eq '^QWEN_EMBEDDING_BASE_URL=http://local-embedding:8000/v1$' "$repo_root/$file" || fail "$profile must route embeddings locally"
   grep -Eq '^QWEN_RERANK_BASE_URL=http://local-reranker:8000/v1/rerank$' "$repo_root/$file" || fail "$profile must route reranking locally"
+  grep -Eq '^HF_HUB_OFFLINE=1$' "$repo_root/$file" || fail "$profile must forbid runtime model downloads"
+  grep -Eq '^TRANSFORMERS_OFFLINE=1$' "$repo_root/$file" || fail "$profile must forbid runtime transformer downloads"
+  grep -Eq '^HF_DATASETS_OFFLINE=1$' "$repo_root/$file" || fail "$profile must forbid runtime dataset downloads"
   [[ "$(load_profile_value "$file" QWEN_MODEL)" == "$(load_profile_value "$file" CHAT_MODEL_NAME)" ]] || fail "$profile chat served/client model names must match exactly"
   [[ "$(load_profile_value "$file" QWEN_VL_MODEL)" == "$(load_profile_value "$file" CHAT_MODEL_NAME)" ]] || fail "$profile vision served/client model names must match exactly"
   [[ "$(load_profile_value "$file" QWEN_EMBEDDING_MODEL)" == "$(load_profile_value "$file" EMBEDDING_MODEL_NAME)" ]] || fail "$profile embedding served/client model names must match exactly"
@@ -256,6 +260,8 @@ if [[ -f "$repo_root/$compose" ]]; then
   assert_contains "$compose" 'EMBEDDING_MODEL_REVISION' 'Embedding model revision must be pinned and configurable.'
   assert_contains "$compose" 'RERANK_MODEL_REVISION' 'Reranker model revision must be pinned and configurable.'
   assert_contains "$compose" 'HF_ENDPOINT:.*HF_ENDPOINT' 'Model containers must receive the configurable Hugging Face download endpoint.'
+  [[ "$(grep -Ec '^      HF_HUB_OFFLINE:' "$repo_root/$compose")" == 3 ]] || fail 'Every model service must enable Hugging Face offline mode.'
+  [[ "$(grep -Ec '^      TRANSFORMERS_OFFLINE:' "$repo_root/$compose")" == 3 ]] || fail 'Every model service must enable Transformers offline mode.'
   if grep -q -- '--task' "$repo_root/$compose"; then
     fail 'Model Compose must not use the removed vLLM --task argument.'
   fi
@@ -294,6 +300,8 @@ fi
 grep -q -- '--model-profile' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must accept --model-profile.'
 grep -q 'docker-compose-models.yml' "$repo_root/scripts/lib/lifecycle.sh" || fail 'Linux lifecycle must compose model services when a profile is selected.'
 grep -q 'check-gpu-runtime.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must run GPU preflight before starting local models.'
+grep -q 'check-model-cache.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must reject incomplete offline model caches before starting local models.'
+grep -Eq 'docker_compose "\$root" up -d --pull never local-llm local-embedding local-reranker' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must forbid implicit model image pulls.'
 grep -q 'check-local-models.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must verify each local model dependency.'
 grep -Eq 'check-local-models.sh.*--smoke' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must run bounded generation, embedding, and rerank smoke checks.'
 grep -q 'chat boundary smoke' "$repo_root/scripts/check-local-models.sh" || fail 'Local model checks must exercise the configured context boundary.'

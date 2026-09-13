@@ -11,6 +11,9 @@ services:
     restart: unless-stopped
     logging: *model-logging
     environment:
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-1}
+      HF_DATASETS_OFFLINE: ${HF_DATASETS_OFFLINE:-1}
       CUDA_VISIBLE_DEVICES: ${CHAT_CUDA_VISIBLE_DEVICES:-0}
       HF_HOME: /root/.cache/huggingface
       TRANSFORMERS_CACHE: /root/.cache/huggingface
@@ -62,6 +65,9 @@ services:
     restart: unless-stopped
     logging: *model-logging
     environment:
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-1}
+      HF_DATASETS_OFFLINE: ${HF_DATASETS_OFFLINE:-1}
       CUDA_VISIBLE_DEVICES: ${EMBEDDING_CUDA_VISIBLE_DEVICES:-0}
       HF_HOME: /root/.cache/huggingface
       TRANSFORMERS_CACHE: /root/.cache/huggingface
@@ -113,6 +119,9 @@ services:
     restart: unless-stopped
     logging: *model-logging
     environment:
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-1}
+      HF_DATASETS_OFFLINE: ${HF_DATASETS_OFFLINE:-1}
       CUDA_VISIBLE_DEVICES: ${RERANK_CUDA_VISIBLE_DEVICES:-0}
       HF_HOME: /root/.cache/huggingface
       TRANSFORMERS_CACHE: /root/.cache/huggingface
