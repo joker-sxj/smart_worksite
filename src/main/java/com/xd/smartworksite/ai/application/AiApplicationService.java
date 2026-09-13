@@ -23,9 +23,21 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 @Service
 public class AiApplicationService {
+    private static final Pattern EXPLICIT_SQL_WRITE_INTENT = Pattern.compile(
+            "(?is)(?:^|[;\\s])(?:insert\\s+into|update\\s+[a-z0-9_`\\\"]+|delete\\s+from|"
+                    + "drop\\s+(?:table|database|schema|view)|alter\\s+table|truncate\\s+table|"
+                    + "create\\s+(?:table|database|schema|view)|replace\\s+into|merge\\s+into|"
+                    + "grant\\s+|revoke\\s+|call\\s+|exec(?:ute)?\\s+)",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern EXPLICIT_CHINESE_WRITE_INTENT = Pattern.compile(
+            "^\\s*(?:(?:请|帮我|立即|直接)\\s*)?(?:执行|运行)?\\s*"
+                    + "(?:删除|修改|更新|写入|插入|清空|禁用|启用)(?:所有|全部|这些|该|当前)?"
+                    + ".{0,80}(?:数据|记录|用户|账户|表|状态|权限|项目)");
+
     private final AiPythonServiceProperties properties;
     private final AiPythonServiceClient pythonClient;
     private final AiRepository aiRepository;
@@ -229,6 +241,7 @@ public class AiApplicationService {
 
     public DatabaseQueryResponse queryDatabaseForSystem(DatabaseQueryRequest request) {
         long startedAt = System.currentTimeMillis();
+        rejectDatabaseWriteIntent(request == null ? null : request.getQuestion());
         projectAccessApplicationService.requireProjectWritableForSystem(request.getProjectId());
         DataSourceRecord dataSource = aiRepository.findEnabledDataSource(request.getProjectId(), request.getDataSourceId());
         if (dataSource == null) {
@@ -335,6 +348,14 @@ public class AiApplicationService {
         enrichDatabaseResponse(result, request, dataSource, generatedQuery, startedAt);
         recordDatabaseExecution(request, dataSource, generatedQuery, queryResult, startedAt);
         return result;
+    }
+
+    private void rejectDatabaseWriteIntent(String question) {
+        String normalized = question == null ? "" : question.trim();
+        if (EXPLICIT_SQL_WRITE_INTENT.matcher(normalized).find()
+                || EXPLICIT_CHINESE_WRITE_INTENT.matcher(normalized).find()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "数据库问答仅允许只读查询，拒绝执行写入或结构变更请求");
+        }
     }
 
     private void enrichDatabaseResponse(DatabaseQueryResponse response, DatabaseQueryRequest request,

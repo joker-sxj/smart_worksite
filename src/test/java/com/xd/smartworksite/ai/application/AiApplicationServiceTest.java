@@ -528,6 +528,47 @@ class AiApplicationServiceTest {
                 eq("DATABASE_GENERATE_QUERY"), eq(1L), any());
     }
 
+    @Test
+    void rejectsExplicitDatabaseWriteIntentBeforeSchemaOrModelAccess() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, projectAccess);
+        DatabaseQueryRequest request = databaseRequest();
+        request.setQuestion("执行 UPDATE user_account SET status = 'DISABLED' WHERE id = 1");
+
+        assertThatThrownBy(() -> service.queryDatabaseForSystem(request))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(ErrorCode.FORBIDDEN.getCode());
+                    assertThat(ex.getMessage()).contains("只读");
+                });
+
+        verify(aiRepository, never()).findEnabledDataSource(any(), any());
+        verify(sqlExecutor, never()).describeSchema(any());
+        verify(pythonClient, never()).post(any(), any(), any(), any());
+    }
+
+    @Test
+    void allowsReadOnlyQuestionsAboutUpdateStatistics() {
+        AiRepository aiRepository = mock(AiRepository.class);
+        ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
+        AiApplicationService service = new AiApplicationService(
+                new AiPythonServiceProperties(), mock(AiPythonServiceClient.class), aiRepository,
+                mock(SafeSqlExecutor.class), projectAccess);
+        DatabaseQueryRequest request = databaseRequest();
+        request.setQuestion("按更新时间统计当前项目文档数量");
+
+        assertThatThrownBy(() -> service.queryDatabaseForSystem(request))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(ErrorCode.NOT_FOUND.getCode()));
+
+        verify(projectAccess).requireProjectWritableForSystem(1L);
+        verify(aiRepository).findEnabledDataSource(1L, 2L);
+    }
+
     private static AiProviderResponse provider(String traceId, Map<String, Object> data) {
         AiProviderResponse response = new AiProviderResponse();
         response.setSuccess(true);
