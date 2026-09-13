@@ -65,7 +65,7 @@ class PaddleOcrV5Provider:
         if self._ocr is not None:
             return self._ocr
         if self._ocr_factory is not None:
-            self._ocr = self._ocr_factory()
+            self._ocr = self._ocr_factory(**self._engine_kwargs())
             return self._ocr
         if not self.available():
             raise RuntimeError("PaddleOCR/PaddlePaddle is not installed for PP-OCRv5")
@@ -75,7 +75,13 @@ class PaddleOcrV5Provider:
         for path in (self.detection_model_dir, self.recognition_model_dir):
             if not os.path.isdir(path):
                 raise RuntimeError(f"PP-OCRv5 local model directory is not available: {path}")
-        kwargs: dict[str, Any] = {
+        self._ocr = PaddleOCR(**self._engine_kwargs())
+        return self._ocr
+
+    def _engine_kwargs(self) -> dict[str, Any]:
+        return {
+            "text_detection_model_name": "PP-OCRv5_server_det",
+            "text_recognition_model_name": "PP-OCRv5_server_rec",
             "use_doc_orientation_classify": False,
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
@@ -83,8 +89,6 @@ class PaddleOcrV5Provider:
             "text_detection_model_dir": self.detection_model_dir,
             "text_recognition_model_dir": self.recognition_model_dir,
         }
-        self._ocr = PaddleOCR(**kwargs)
-        return self._ocr
 
     def recognize(self, sources: list[str]) -> OcrTextResult:
         lines: list[OcrTextLine] = []

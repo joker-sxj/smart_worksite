@@ -27,7 +27,7 @@ def test_paddle_provider_normalizes_predict_result_without_exposing_binary_conte
                 "rec_boxes": [[1, 2, 30, 12], [1, 15, 50, 25]],
             }]
 
-    result = PaddleOcrV5Provider(ocr_factory=lambda: FakePaddle()).recognize([_image_data_url()])
+    result = PaddleOcrV5Provider(ocr_factory=lambda **_: FakePaddle()).recognize([_image_data_url()])
 
     assert isinstance(result, OcrTextResult)
     assert result.provider == "PADDLE_OCRV5"
@@ -68,3 +68,24 @@ def test_paddle_readiness_requires_both_offline_model_directories(monkeypatch, t
 
     assert status["status"] == "NOT_READY"
     assert status["activeProvider"] == "QWEN_VL"
+
+
+def test_paddle_provider_selects_pp_ocrv5_model_names_for_local_directories(tmp_path):
+    captured = {}
+
+    class FakePaddle:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    det = tmp_path / "det"
+    rec = tmp_path / "rec"
+    det.mkdir()
+    rec.mkdir()
+    provider = PaddleOcrV5Provider(str(det), str(rec), ocr_factory=FakePaddle)
+
+    provider._engine()
+
+    assert captured["text_detection_model_dir"] == str(det)
+    assert captured["text_recognition_model_dir"] == str(rec)
+    assert captured["text_detection_model_name"] == "PP-OCRv5_server_det"
+    assert captured["text_recognition_model_name"] == "PP-OCRv5_server_rec"
