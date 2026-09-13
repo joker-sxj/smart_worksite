@@ -37,9 +37,23 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=lib/lifecycle.sh
 source "$script_dir/lib/lifecycle.sh"
 load_env "$profile_file"
+root="$(project_root)"
 
 : "${VLLM_IMAGE:?VLLM_IMAGE is required in the model profile.}"
 : "${MODEL_CACHE_VOLUME:?MODEL_CACHE_VOLUME is required in the model profile.}"
+: "${MODEL_ARTIFACT_MANIFEST:?MODEL_ARTIFACT_MANIFEST is required in the model profile.}"
+if [[ "${MODEL_ARTIFACT_STATUS:-}" != 'VERIFIED' ]]; then
+  printf 'MODEL_ARTIFACT_STATUS must be VERIFIED before startup; profile %s is %s. Generate, review, and approve its own manifest.\n' \
+    "${MODEL_PROFILE_NAME:-unknown}" "${MODEL_ARTIFACT_STATUS:-unset}" >&2
+  exit 1
+fi
+
+manifest_file="$MODEL_ARTIFACT_MANIFEST"
+[[ "$manifest_file" == /* ]] || manifest_file="$root/$manifest_file"
+[[ -f "$manifest_file" ]] || {
+  printf 'Model artifact manifest is missing: %s. Generate and approve the manifest before startup.\n' "$manifest_file" >&2
+  exit 1
+}
 
 if ! docker image inspect "$VLLM_IMAGE" >/dev/null 2>&1; then
   printf 'Pinned model container image is not present locally: %s. Import or pull it before entering offline mode.\n' "$VLLM_IMAGE" >&2
@@ -94,5 +108,44 @@ PY
 check_model CHAT "${CHAT_MODEL_ID:-}" "${CHAT_MODEL_REVISION:-}"
 check_model EMBEDDING "${EMBEDDING_MODEL_ID:-}" "${EMBEDDING_MODEL_REVISION:-}"
 check_model RERANK "${RERANK_MODEL_ID:-}" "${RERANK_MODEL_REVISION:-}"
+
+runtime_args=(
+  --expected-runtime "CHAT_MODEL_NAME=${CHAT_MODEL_NAME:-}"
+  --expected-runtime "CHAT_TENSOR_PARALLEL_SIZE=${CHAT_TENSOR_PARALLEL_SIZE:-}"
+  --expected-runtime "CHAT_CUDA_VISIBLE_DEVICES=${CHAT_CUDA_VISIBLE_DEVICES:-}"
+  --expected-runtime "CHAT_MAX_MODEL_LEN=${CHAT_MAX_MODEL_LEN:-}"
+  --expected-runtime "CHAT_MAX_NUM_SEQS=${CHAT_MAX_NUM_SEQS:-}"
+  --expected-runtime "CHAT_GPU_MEMORY_UTILIZATION=${CHAT_GPU_MEMORY_UTILIZATION:-}"
+  --expected-runtime "EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-}"
+  --expected-runtime "EMBEDDING_CUDA_VISIBLE_DEVICES=${EMBEDDING_CUDA_VISIBLE_DEVICES:-}"
+  --expected-runtime "EMBEDDING_MAX_MODEL_LEN=${EMBEDDING_MAX_MODEL_LEN:-}"
+  --expected-runtime "EMBEDDING_MAX_NUM_SEQS=${EMBEDDING_MAX_NUM_SEQS:-}"
+  --expected-runtime "EMBEDDING_GPU_MEMORY_UTILIZATION=${EMBEDDING_GPU_MEMORY_UTILIZATION:-}"
+  --expected-runtime "RERANK_MODEL_NAME=${RERANK_MODEL_NAME:-}"
+  --expected-runtime "RERANK_CUDA_VISIBLE_DEVICES=${RERANK_CUDA_VISIBLE_DEVICES:-}"
+  --expected-runtime "RERANK_MAX_MODEL_LEN=${RERANK_MAX_MODEL_LEN:-}"
+  --expected-runtime "RERANK_MAX_NUM_SEQS=${RERANK_MAX_NUM_SEQS:-}"
+  --expected-runtime "RERANK_GPU_MEMORY_UTILIZATION=${RERANK_GPU_MEMORY_UTILIZATION:-}"
+  --expected-runtime "RERANK_HF_OVERRIDES=${RERANK_HF_OVERRIDES:-}"
+  --expected-runtime "VLLM_ENABLE_CUDA_COMPATIBILITY=${VLLM_ENABLE_CUDA_COMPATIBILITY:-}"
+  --expected-runtime "QWEN_MODEL=${QWEN_MODEL:-}"
+  --expected-runtime "QWEN_VL_MODEL=${QWEN_VL_MODEL:-}"
+  --expected-runtime "QWEN_EMBEDDING_MODEL=${QWEN_EMBEDDING_MODEL:-}"
+  --expected-runtime "QWEN_RERANK_MODEL=${QWEN_RERANK_MODEL:-}"
+)
+if ! docker run --rm --pull never --network none --read-only --entrypoint python3 \
+  -v "${MODEL_CACHE_VOLUME}:/cache:ro" \
+  -v "${manifest_file}:/manifest.json:ro" \
+  -v "${script_dir}/model-artifact-manifest.py:/model-artifact-manifest.py:ro" \
+  "$VLLM_IMAGE" /model-artifact-manifest.py verify \
+  --cache-root /cache --manifest /manifest.json \
+  --expected-profile "${MODEL_PROFILE_NAME:-}" --expected-image "$VLLM_IMAGE" \
+  "${runtime_args[@]}" \
+  --expected-model "CHAT=${CHAT_MODEL_ID}@${CHAT_MODEL_REVISION}" \
+  --expected-model "EMBEDDING=${EMBEDDING_MODEL_ID}@${EMBEDDING_MODEL_REVISION}" \
+  --expected-model "RERANK=${RERANK_MODEL_ID}@${RERANK_MODEL_REVISION}"; then
+  printf 'Model artifact checksum verification failed for profile %s. Refusing model startup.\n' "${MODEL_PROFILE_NAME:-unknown}" >&2
+  exit 1
+fi
 
 printf 'Offline model cache checks passed for chat, embedding, and reranker.\n'

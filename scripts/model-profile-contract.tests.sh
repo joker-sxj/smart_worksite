@@ -32,10 +32,12 @@ required_files=(
   scripts/check-gpu-runtime.sh
   scripts/check-local-models.sh
   scripts/check-model-cache.sh
+  scripts/model-artifact-manifest.py
+  scripts/generate-model-artifact-manifest.sh
 )
 for file in "${required_files[@]}"; do assert_file "$file"; done
 
-for file in scripts/check-gpu-runtime.sh scripts/check-local-models.sh scripts/check-model-cache.sh scripts/start-all.sh scripts/status.sh; do
+for file in scripts/check-gpu-runtime.sh scripts/check-local-models.sh scripts/check-model-cache.sh scripts/generate-model-artifact-manifest.sh scripts/start-all.sh scripts/status.sh; do
   [[ -f "$repo_root/$file" ]] && bash -n "$repo_root/$file" || fail "Bash syntax error or missing script: $file"
 done
 
@@ -58,6 +60,13 @@ for profile in h100-fp8 a6000x2-bf16 a6000x2-production-32k a6000x2-stable-16k; 
   grep -Eq '^HF_HUB_OFFLINE=1$' "$repo_root/$file" || fail "$profile must forbid runtime model downloads"
   grep -Eq '^TRANSFORMERS_OFFLINE=1$' "$repo_root/$file" || fail "$profile must forbid runtime transformer downloads"
   grep -Eq '^HF_DATASETS_OFFLINE=1$' "$repo_root/$file" || fail "$profile must forbid runtime dataset downloads"
+  grep -Eq '^MODEL_ARTIFACT_MANIFEST=deploy/model-manifests/[a-z0-9-]+\.json$' "$repo_root/$file" || fail "$profile must select an exact model artifact checksum manifest"
+  if [[ "$profile" == h100-fp8 ]]; then
+    grep -Eq '^MODEL_ARTIFACT_STATUS=VERIFIED$' "$repo_root/$file" || fail "$profile must mark its generated and reviewed manifest as VERIFIED"
+    [[ -f "$repo_root/deploy/model-manifests/h100-fp8.json" ]] || fail 'H100 verified profile must include its checksum manifest.'
+  else
+    grep -Eq '^MODEL_ARTIFACT_STATUS=PENDING_CUSTOMER_CACHE$' "$repo_root/$file" || fail "$profile must explicitly block startup until customer A6000 artifacts are present"
+  fi
   [[ "$(load_profile_value "$file" QWEN_MODEL)" == "$(load_profile_value "$file" CHAT_MODEL_NAME)" ]] || fail "$profile chat served/client model names must match exactly"
   [[ "$(load_profile_value "$file" QWEN_VL_MODEL)" == "$(load_profile_value "$file" CHAT_MODEL_NAME)" ]] || fail "$profile vision served/client model names must match exactly"
   [[ "$(load_profile_value "$file" QWEN_EMBEDDING_MODEL)" == "$(load_profile_value "$file" EMBEDDING_MODEL_NAME)" ]] || fail "$profile embedding served/client model names must match exactly"
@@ -262,6 +271,7 @@ if [[ -f "$repo_root/$compose" ]]; then
   assert_contains "$compose" 'HF_ENDPOINT:.*HF_ENDPOINT' 'Model containers must receive the configurable Hugging Face download endpoint.'
   [[ "$(grep -Ec '^      HF_HUB_OFFLINE:' "$repo_root/$compose")" == 3 ]] || fail 'Every model service must enable Hugging Face offline mode.'
   [[ "$(grep -Ec '^      TRANSFORMERS_OFFLINE:' "$repo_root/$compose")" == 3 ]] || fail 'Every model service must enable Transformers offline mode.'
+  [[ "$(grep -Ec 'model-cache:/root/.cache/huggingface:ro$' "$repo_root/$compose")" == 3 ]] || fail 'Every model service must mount approved Hugging Face artifacts read-only.'
   if grep -q -- '--task' "$repo_root/$compose"; then
     fail 'Model Compose must not use the removed vLLM --task argument.'
   fi
