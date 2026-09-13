@@ -93,6 +93,20 @@ class FileObjectApplicationServiceTest {
     }
 
     @Test
+    void uploadNormalizesGenericBrowserContentTypeForKnownDocumentExtensions() {
+        FileObjectRepository repository = new UploadFileObjectRepository();
+        FileObjectApplicationService service = newService(repository, new CapturingStorageAdapter(),
+                List.of("application/pdf"));
+        FileUploadRequest request = new FileUploadRequest();
+        request.setProjectId(1L);
+        request.setBizType("KNOWLEDGE_DOC");
+        request.setFile(new MockMultipartFile(
+                "file", "noise-standard.pdf", "application/octet-stream", "%PDF-1.7".getBytes()));
+
+        assertThat(service.upload(request).getContentType()).isEqualTo("application/pdf");
+    }
+
+    @Test
     void openFileContentChecksExpectedOwnershipAndReturnsClosableStream() throws Exception {
         FileObject fileObject = new FileObject();
         fileObject.setId(20L);
