@@ -193,8 +193,10 @@ $dockerfileContent = Get-Content -Raw (Join-Path $repoRoot 'deploy/Dockerfile.py
 if ($dockerfileContent -notmatch 'AI_ACCESS_LOG' -or $dockerfileContent -notmatch '--no-access-log') {
     $failures.Add('Python AI container must disable noisy access logs by default.')
 }
-if ($dockerfileContent -notmatch 'libgomp1') {
-    $failures.Add('Python AI container must install libgomp1 for the PaddlePaddle runtime.')
+foreach ($runtimePackage in @('libgomp1', 'libgl1', 'libglib2.0-0')) {
+    if ($dockerfileContent -notmatch [regex]::Escape($runtimePackage)) {
+        $failures.Add("Python AI container must install $runtimePackage for the Paddle OCR runtime.")
+    }
 }
 
 $autoStarterContent = Get-Content -Raw (Join-Path $repoRoot 'src/main/java/com/xd/smartworksite/ai/infra/AiPythonServiceAutoStarter.java')
