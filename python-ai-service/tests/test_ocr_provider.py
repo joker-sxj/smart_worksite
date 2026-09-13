@@ -3,6 +3,7 @@ from io import BytesIO
 
 from PIL import Image
 import numpy as np
+import pytest
 
 from app.services.ocr_provider import (
     OcrTextResult,
@@ -82,8 +83,8 @@ def test_paddle_provider_selects_pp_ocrv5_model_names_for_local_directories(tmp_
 
     det = tmp_path / "det"
     rec = tmp_path / "rec"
-    det.mkdir()
-    rec.mkdir()
+    _write_model_fixture(det, "PP-OCRv5_server_det")
+    _write_model_fixture(rec, "PP-OCRv5_server_rec")
     provider = PaddleOcrV5Provider(str(det), str(rec), ocr_factory=FakePaddle)
 
     provider._engine()
@@ -98,8 +99,8 @@ def test_paddle_provider_selects_pp_ocrv5_model_names_for_local_directories(tmp_
 def test_build_provider_reuses_engine_holder_for_same_runtime_configuration(monkeypatch, tmp_path):
     det = tmp_path / "det"
     rec = tmp_path / "rec"
-    det.mkdir()
-    rec.mkdir()
+    _write_model_fixture(det, "PP-OCRv5_server_det")
+    _write_model_fixture(rec, "PP-OCRv5_server_rec")
     monkeypatch.setenv("OCR_PROVIDER", "PP_OCRV5")
     monkeypatch.setenv("OCR_PADDLE_DET_MODEL_DIR", str(det))
     monkeypatch.setenv("OCR_PADDLE_REC_MODEL_DIR", str(rec))
@@ -110,3 +111,64 @@ def test_build_provider_reuses_engine_holder_for_same_runtime_configuration(monk
     second = build_ocr_provider()
 
     assert first is second
+
+
+def test_paddle_provider_rejects_oversized_decoded_images(monkeypatch):
+    monkeypatch.setenv("OCR_MAX_IMAGE_BYTES", "16")
+    provider = PaddleOcrV5Provider(ocr_factory=lambda **_: object())
+    oversized = "data:image/png;base64," + base64.b64encode(b"x" * 17).decode("ascii")
+
+    with pytest.raises(ValueError, match="too large"):
+        provider._decode_image(oversized)
+
+
+def test_paddle_provider_rejects_images_over_pixel_limit(monkeypatch):
+    monkeypatch.setenv("OCR_MAX_IMAGE_PIXELS", "63")
+    provider = PaddleOcrV5Provider(ocr_factory=lambda **_: object())
+
+    with pytest.raises(ValueError, match="pixel limit"):
+        provider._decode_image(_image_data_url())
+
+
+def test_unknown_provider_configuration_fails_instead_of_silent_qwen_fallback(monkeypatch):
+    monkeypatch.setenv("OCR_PROVIDER", "PP_OCRV")
+    clear_ocr_provider_cache()
+
+    with pytest.raises(ValueError, match="unsupported OCR_PROVIDER"):
+        build_ocr_provider()
+
+
+def test_auto_readiness_reports_paddle_when_local_models_are_available(monkeypatch, tmp_path):
+    det = tmp_path / "det"
+    rec = tmp_path / "rec"
+    _write_model_fixture(det, "PP-OCRv5_server_det")
+    _write_model_fixture(rec, "PP-OCRv5_server_rec")
+    monkeypatch.setenv("OCR_PROVIDER", "AUTO")
+    monkeypatch.setenv("OCR_PADDLE_DET_MODEL_DIR", str(det))
+    monkeypatch.setenv("OCR_PADDLE_REC_MODEL_DIR", str(rec))
+    monkeypatch.setattr("app.services.ocr_provider.PaddleOcrV5Provider.available", staticmethod(lambda: True))
+
+    status = ocr_provider_status()
+
+    assert status["activeProvider"] == "PADDLE_OCRV5"
+    assert status["model"] == "PP-OCRv5"
+
+
+def test_paddle_readiness_rejects_empty_model_directories(monkeypatch, tmp_path):
+    det = tmp_path / "det"
+    rec = tmp_path / "rec"
+    det.mkdir()
+    rec.mkdir()
+    monkeypatch.setenv("OCR_PROVIDER", "PP_OCRV5")
+    monkeypatch.setenv("OCR_PADDLE_DET_MODEL_DIR", str(det))
+    monkeypatch.setenv("OCR_PADDLE_REC_MODEL_DIR", str(rec))
+    monkeypatch.setattr("app.services.ocr_provider.PaddleOcrV5Provider.available", staticmethod(lambda: True))
+
+    assert ocr_provider_status()["status"] == "NOT_READY"
+
+
+def _write_model_fixture(path, model_name):
+    path.mkdir()
+    (path / "config.json").write_text('{"Global":{"model_name":"' + model_name + '"}}', encoding="utf-8")
+    for name in ("inference.json", "inference.yml", "inference.pdiparams"):
+        (path / name).write_bytes(b"fixture")

@@ -6,6 +6,7 @@ the only compatibility mode that may retain the existing Qwen-only path.
 """
 
 import base64
+import json
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -130,8 +131,21 @@ class PaddleOcrV5Provider:
             raise ValueError("PP-OCRv5 provider requires local data image sources")
         try:
             encoded = source.split(",", 1)[1]
-            return Image.open(BytesIO(base64.b64decode(encoded))).convert("RGB")
+            max_bytes = int(os.getenv("OCR_MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))
+            if len(encoded) > ((max_bytes + 2) // 3) * 4:
+                raise ValueError("local OCR image is too large")
+            decoded = base64.b64decode(encoded, validate=True)
+            if len(decoded) > max_bytes:
+                raise ValueError("local OCR image is too large")
+            image = Image.open(BytesIO(decoded))
+            max_pixels = int(os.getenv("OCR_MAX_IMAGE_PIXELS", "25000000"))
+            if image.width * image.height > max_pixels:
+                raise ValueError("local OCR image exceeds pixel limit")
+            image.load()
+            return image.convert("RGB")
         except (IndexError, ValueError, base64.binascii.Error) as exc:
+            if isinstance(exc, ValueError) and str(exc).startswith("local OCR image"):
+                raise
             raise ValueError("invalid local OCR image data") from exc
 
     def _confidence(self, value: Any) -> float:
@@ -162,18 +176,19 @@ def build_ocr_provider() -> PaddleOcrV5Provider | QwenOnlyOcrProvider:
 @lru_cache(maxsize=4)
 def _build_ocr_provider_cached(mode: str, det_dir: str, rec_dir: str, device: str) \
         -> PaddleOcrV5Provider | QwenOnlyOcrProvider:
+    if mode not in {"QWEN", "QWEN_VL", "AUTO", "PP_OCRV5", "PADDLE", "PADDLEOCR"}:
+        raise ValueError(f"unsupported OCR_PROVIDER: {mode}")
     if mode in {"PP_OCRV5", "PADDLE", "PADDLEOCR"}:
         provider = PaddleOcrV5Provider(det_dir, rec_dir, device)
         if not provider.available():
             raise RuntimeError("PaddleOCR/PaddlePaddle is not installed for PP-OCRv5")
         if not provider.detection_model_dir or not provider.recognition_model_dir:
             raise RuntimeError("PP-OCRv5 local detection and recognition model directories are required")
-        if not all(os.path.isdir(path) for path in (provider.detection_model_dir, provider.recognition_model_dir)):
+        if not _offline_models_ready(provider.detection_model_dir, provider.recognition_model_dir):
             raise RuntimeError("PP-OCRv5 local model directories are not available")
         return provider
     candidate = PaddleOcrV5Provider(det_dir, rec_dir, device)
-    if mode == "AUTO" and candidate.available() and candidate.detection_model_dir and candidate.recognition_model_dir \
-            and os.path.isdir(candidate.detection_model_dir) and os.path.isdir(candidate.recognition_model_dir):
+    if mode == "AUTO" and candidate.available() and _offline_models_ready(det_dir, rec_dir):
         return candidate
     return QwenOnlyOcrProvider()
 
@@ -184,11 +199,24 @@ def clear_ocr_provider_cache() -> None:
 
 def ocr_provider_status() -> dict[str, Any]:
     mode = os.getenv("OCR_PROVIDER", "QWEN").strip().upper()
-    paddle_selected = mode in {"PP_OCRV5", "PADDLE", "PADDLEOCR"}
+    supported_modes = {"QWEN", "QWEN_VL", "AUTO", "PP_OCRV5", "PADDLE", "PADDLEOCR"}
+    if mode not in supported_modes:
+        return {
+            "configuredProvider": mode,
+            "activeProvider": "NONE",
+            "model": "",
+            "dependencyReady": False,
+            "modelsReady": False,
+            "device": "",
+            "status": "NOT_READY",
+        }
     dependency_ready = PaddleOcrV5Provider.available()
     det_dir = os.getenv("OCR_PADDLE_DET_MODEL_DIR", "")
     rec_dir = os.getenv("OCR_PADDLE_REC_MODEL_DIR", "")
-    models_ready = bool(det_dir and rec_dir and os.path.isdir(det_dir) and os.path.isdir(rec_dir))
+    models_ready = _offline_models_ready(det_dir, rec_dir)
+    paddle_selected = mode in {"PP_OCRV5", "PADDLE", "PADDLEOCR"} or (
+        mode == "AUTO" and dependency_ready and models_ready
+    )
     return {
         "configuredProvider": "PADDLE_OCRV5" if paddle_selected else mode,
         "activeProvider": "PADDLE_OCRV5" if paddle_selected and dependency_ready and models_ready else "QWEN_VL",
@@ -198,3 +226,20 @@ def ocr_provider_status() -> dict[str, Any]:
         "device": os.getenv("OCR_PADDLE_DEVICE", "cpu") if paddle_selected else "model-service",
         "status": "READY" if not paddle_selected or (dependency_ready and models_ready) else "NOT_READY",
     }
+
+
+def _offline_models_ready(det_dir: str, rec_dir: str) -> bool:
+    expected = ((det_dir, "PP-OCRv5_server_det"), (rec_dir, "PP-OCRv5_server_rec"))
+    required = {"config.json", "inference.json", "inference.yml", "inference.pdiparams"}
+    for directory, model_name in expected:
+        if not directory or not os.path.isdir(directory):
+            return False
+        if not required.issubset(os.listdir(directory)):
+            return False
+        try:
+            with open(os.path.join(directory, "config.json"), encoding="utf-8") as handle:
+                if json.load(handle).get("Global", {}).get("model_name") != model_name:
+                    return False
+        except (OSError, ValueError, TypeError):
+            return False
+    return True
