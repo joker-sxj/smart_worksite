@@ -141,6 +141,7 @@ grep -Eq 'docker compose .*\-p deploy ' "$repo_root/scripts/verify_ai_adaptation
   || fail 'AI adaptation verification must use the deploy project namespace.'
 grep -q 'AI_ACCESS_LOG' "$repo_root/deploy/Dockerfile.python-ai-service" || fail 'Python AI access logging must be configurable.'
 grep -q -- '--no-access-log' "$repo_root/deploy/Dockerfile.python-ai-service" || fail 'Python AI access logs must be disabled by default.'
+grep -q 'libgomp1' "$repo_root/deploy/Dockerfile.python-ai-service" || fail 'Python AI container must install libgomp1 for the PaddlePaddle runtime.'
 grep -q 'ProcessBuilder.Redirect.INHERIT' "$repo_root/src/main/java/com/xd/smartworksite/ai/infra/AiPythonServiceAutoStarter.java" || fail 'Auto-started Python output must flow through the bounded backend log stream.'
 ! grep -q 'Redirect.appendTo' "$repo_root/src/main/java/com/xd/smartworksite/ai/infra/AiPythonServiceAutoStarter.java" || fail 'Auto-started Python must not append to an unbounded standalone log.'
 grep -q 'log.debug("http request' "$repo_root/src/main/java/com/xd/smartworksite/common/config/RequestIdFilter.java" || fail 'Per-request Java logging must be DEBUG instead of INFO.'

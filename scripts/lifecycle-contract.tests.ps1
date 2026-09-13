@@ -193,6 +193,9 @@ $dockerfileContent = Get-Content -Raw (Join-Path $repoRoot 'deploy/Dockerfile.py
 if ($dockerfileContent -notmatch 'AI_ACCESS_LOG' -or $dockerfileContent -notmatch '--no-access-log') {
     $failures.Add('Python AI container must disable noisy access logs by default.')
 }
+if ($dockerfileContent -notmatch 'libgomp1') {
+    $failures.Add('Python AI container must install libgomp1 for the PaddlePaddle runtime.')
+}
 
 $autoStarterContent = Get-Content -Raw (Join-Path $repoRoot 'src/main/java/com/xd/smartworksite/ai/infra/AiPythonServiceAutoStarter.java')
 if ($autoStarterContent -notmatch 'ProcessBuilder\.Redirect\.INHERIT' -or $autoStarterContent -match 'Redirect\.appendTo') {
