@@ -96,6 +96,10 @@ services:
       AI_SERVICE_PORT: 8015
       AI_SERVICE_API_KEY: ${AI_PYTHON_API_KEY:-dev-ai-service-key}
       AI_ACCESS_LOG: ${AI_ACCESS_LOG:-false}
+      OCR_PROVIDER: ${OCR_PROVIDER:-QWEN}
+      OCR_PADDLE_DEVICE: ${OCR_PADDLE_DEVICE:-cpu}
+      OCR_PADDLE_DET_MODEL_DIR: /app/models/ocr/detection
+      OCR_PADDLE_REC_MODEL_DIR: /app/models/ocr/recognition
       AI_DEPLOYMENT_MODE: ${AI_DEPLOYMENT_MODE:-LOCAL_ONLY}
       AI_ALLOW_REMOTE_INFERENCE: ${AI_ALLOW_REMOTE_INFERENCE:-false}
       AI_ALLOW_CLOUD_FALLBACK: ${AI_ALLOW_CLOUD_FALLBACK:-false}
@@ -137,6 +141,7 @@ services:
       - "${AI_SERVICE_PORT:-8015}:8015"
     volumes:
       - ../python-ai-service/data:/app/data
+      - ${OCR_MODEL_ROOT:-../python-ai-service/models/ocr}:/app/models/ocr:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8015/v1/health', timeout=3)"]
       interval: 10s

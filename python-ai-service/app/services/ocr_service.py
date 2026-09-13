@@ -6,6 +6,7 @@ from app.models.schemas import OcrRecognizeRequest, OcrRecognizeData, OcrFieldDa
 from .qwen_client import QwenClient
 from .normalization import as_dict, optional_int, optional_string
 from .id_card_preprocessor import IdCardPreprocessor
+from .ocr_provider import build_ocr_provider
 
 
 STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
@@ -47,8 +48,9 @@ STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
 
 
 class OcrService:
-    def __init__(self, qwen: QwenClient):
+    def __init__(self, qwen: QwenClient, ocr_provider=None):
         self.qwen = qwen
+        self.ocr_provider = ocr_provider
 
     async def recognize(self, request: OcrRecognizeRequest) -> tuple[OcrRecognizeData, dict[str, Any]]:
         ocr_type = self._normalize_type(request.ocrType)
@@ -57,6 +59,22 @@ class OcrService:
         file_sources = request.file.dataUrls or ([request.file.downloadUrl] if request.file.downloadUrl else [])
         if not file_sources:
             raise ValueError("OCR file requires dataUrls or downloadUrl")
+        provider = self.ocr_provider or build_ocr_provider()
+        local_text = ""
+        local_usage: dict[str, Any] = {}
+        if file_sources and all(source.startswith("data:image/") for source in file_sources):
+            try:
+                import asyncio
+                local_result = await asyncio.to_thread(provider.recognize, file_sources)
+                local_text = local_result.text
+                local_usage = {
+                    "ocrProvider": local_result.provider,
+                    "ocrModel": local_result.model,
+                    "ocrLineCount": len(local_result.lines),
+                }
+            except (RuntimeError, ValueError):
+                if provider.provider_name != "QWEN_VL":
+                    raise
         first_sources = file_sources
         prepared = None
         if ocr_type == "ID_CARD" and all(source.startswith("data:image/") for source in file_sources):
@@ -66,6 +84,8 @@ class OcrService:
             except ValueError:
                 # Keep provider compatibility for opaque test/legacy data URLs; real image inputs use both passes.
                 prepared = None
+        if local_text:
+            prompt += f"\n本地字符OCR初步结果（仅作证据，不得盲目信任）：{local_text[:12000]}"
         raw, usage = await self.qwen.vision_json_chat(
             prompt,
             first_sources,
@@ -79,6 +99,7 @@ class OcrService:
             data = self._merge_dual_pass(data, self._normalize_response(enhanced_raw, ocr_type, field_definitions))
             usage = dict(usage)
             usage["ocrPasses"] = 2
+        usage = {**usage, **local_usage}
         return data, usage
 
     def _apply_type_validation(self, data: OcrRecognizeData, options: dict[str, Any]) -> OcrRecognizeData:

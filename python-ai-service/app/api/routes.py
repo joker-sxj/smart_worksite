@@ -45,6 +45,7 @@ from app.services.route_context_service import RouteService, ContextService
 from app.services.database_service import DatabaseQaService
 from app.services.agent_tools import ToolRegistry, ToolSpec
 from app.services.ocr_service import OcrService
+from app.services.ocr_provider import ocr_provider_status
 from app.services.policy_crawler_service import PolicyCrawlerService
 from app.services.document_understanding_service import DocumentUnderstandingService
 from app.services.context_budget import ContextBudgetPlanner
@@ -114,13 +115,16 @@ async def health():
 async def ready():
     settings = get_settings()
     readiness = await ModelReadinessService(settings).snapshot()
-    status_code = 200 if readiness.get("status") == "READY" else 503
+    ocr_readiness = ocr_provider_status()
+    overall_status = "READY" if readiness.get("status") == "READY" and ocr_readiness["status"] == "READY" else "DEGRADED"
+    status_code = 200 if overall_status == "READY" else 503
     return JSONResponse(status_code=status_code, content=ok({
-        "status": readiness.get("status"),
+        "status": overall_status,
         "service": "python-ai-service",
         "deploymentMode": settings.ai_deployment_mode.value,
         "dependencies": settings.safe_ai_dependency_descriptors(),
         "modelReadiness": readiness,
+        "ocrProvider": ocr_readiness,
     }).model_dump())
 
 
