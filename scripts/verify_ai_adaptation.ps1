@@ -27,7 +27,7 @@ try {
 Write-Host "[3/7] Start vector dependencies"
 Push-Location $Root
 try {
-    docker compose --profile vector -p smart_worksite -f deploy\docker-compose-env.yml --env-file deploy\.env up -d pgvector milvus
+    docker compose --profile vector -p deploy -f deploy\docker-compose-env.yml --env-file deploy\.env up -d pgvector milvus
 } finally {
     Pop-Location
 }

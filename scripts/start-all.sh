@@ -60,6 +60,7 @@ fi
 
 mkdir -p "$run_dir"
 cleanup_stale_project_logs "$log_dir"
+assert_legacy_container_migration_safe "$root"
 if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
   printf '%s\n' "$MODEL_PROFILE_FILE" > "$run_dir/model-profile"
   "$script_dir/check-gpu-runtime.sh" "$MODEL_PROFILE_FILE"

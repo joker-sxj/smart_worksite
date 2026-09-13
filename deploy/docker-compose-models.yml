@@ -7,7 +7,6 @@ x-model-logging: &model-logging
 services:
   local-llm:
     image: ${VLLM_IMAGE:?VLLM_IMAGE is required}
-    container_name: smart-worksite-local-llm
     ipc: host
     restart: unless-stopped
     logging: *model-logging
@@ -59,7 +58,6 @@ services:
 
   local-embedding:
     image: ${VLLM_IMAGE:?VLLM_IMAGE is required}
-    container_name: smart-worksite-local-embedding
     ipc: host
     restart: unless-stopped
     logging: *model-logging
@@ -111,7 +109,6 @@ services:
 
   local-reranker:
     image: ${VLLM_IMAGE:?VLLM_IMAGE is required}
-    container_name: smart-worksite-local-reranker
     ipc: host
     restart: unless-stopped
     logging: *model-logging

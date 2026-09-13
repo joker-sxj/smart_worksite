@@ -166,7 +166,55 @@ docker_compose() {
   if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
     args+=(-f "$root/deploy/docker-compose-models.yml" --env-file "$MODEL_PROFILE_FILE")
   fi
-  docker compose "${args[@]}" "$@"
+  docker compose --project-name deploy "${args[@]}" "$@"
+}
+
+assert_legacy_container_migration_safe() {
+  local root="$1" container metadata project service working_dir mounts expected_mounts
+  local expected_working_dir="$root/deploy"
+  local -A expected_services=(
+    [smart-worksite-mysql]=mysql [smart-worksite-redis]=redis
+    [smart-worksite-minio]=minio [smart-worksite-minio-init]=minio-init
+    [smart-worksite-python-ai-service]=python-ai-service [smart-worksite-pgvector]=pgvector
+    [smart-worksite-milvus-etcd]=milvus-etcd [smart-worksite-milvus-minio]=milvus-minio
+    [smart-worksite-milvus]=milvus [smart-worksite-local-llm]=local-llm
+    [smart-worksite-local-embedding]=local-embedding [smart-worksite-local-reranker]=local-reranker
+  )
+  local -A expected_volumes=(
+    [smart-worksite-mysql]='deploy_mysql-data:/var/lib/mysql'
+    [smart-worksite-redis]='deploy_redis-data:/data'
+    [smart-worksite-minio]='deploy_minio-data:/data'
+    [smart-worksite-pgvector]='deploy_pgvector-data:/var/lib/postgresql/data'
+    [smart-worksite-milvus-etcd]='deploy_milvus-etcd-data:/etcd'
+    [smart-worksite-milvus-minio]='deploy_milvus-minio-data:/minio_data'
+    [smart-worksite-milvus]='deploy_milvus-data:/var/lib/milvus'
+    [smart-worksite-local-llm]='smart-worksite-model-cache:/root/.cache/huggingface smart-worksite-vllm-cache:/root/.cache/vllm'
+    [smart-worksite-local-embedding]='smart-worksite-model-cache:/root/.cache/huggingface smart-worksite-vllm-cache:/root/.cache/vllm'
+    [smart-worksite-local-reranker]='smart-worksite-model-cache:/root/.cache/huggingface smart-worksite-vllm-cache:/root/.cache/vllm'
+  )
+  for container in "${!expected_services[@]}"; do
+    if ! docker inspect "$container" >/dev/null 2>&1; then
+      continue
+    fi
+    metadata="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$container" 2>/dev/null || true)"
+    IFS='|' read -r project service working_dir <<< "$metadata"
+    mounts="$(docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}:{{.Destination}} {{end}}{{end}}' "$container" 2>/dev/null || true)"
+    mounts="${mounts% }"
+    expected_mounts="${expected_volumes[$container]:-}"
+    if [[ -n "$mounts" ]]; then
+      mounts="$(printf '%s\n' $mounts | sort | paste -sd' ' -)"
+    fi
+    if [[ -n "$expected_mounts" ]]; then
+      expected_mounts="$(printf '%s\n' $expected_mounts | sort | paste -sd' ' -)"
+    fi
+    if [[ "$project" == 'deploy' && "$service" == "${expected_services[$container]}" && "$working_dir" == "$expected_working_dir" ]]; then
+      if [[ "$mounts" == "$expected_mounts" ]]; then
+        continue
+      fi
+    fi
+    printf 'Legacy container %s does not match the expected deploy service, working directory, or named volumes. Refusing automatic migration; inspect and migrate it manually.\n' "$container" >&2
+    return 1
+  done
 }
 
 tcp_check() {

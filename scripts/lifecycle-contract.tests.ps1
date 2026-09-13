@@ -108,6 +108,24 @@ if ((Test-Path -LiteralPath $startBash) -and (Get-Content -Raw $startBash) -notm
 if ((Test-Path -LiteralPath $startBash) -and (Get-Content -Raw $startBash) -notmatch 'docker_compose\s+"\$root"\s+up\s+-d\s+--build') {
     $failures.Add('scripts/start-all.sh must rebuild local Docker images before detached startup.')
 }
+$lifecycleBash = Join-Path $repoRoot 'scripts\lib\lifecycle.sh'
+if ((Test-Path -LiteralPath $lifecycleBash) -and (Get-Content -Raw $lifecycleBash) -notmatch 'assert_legacy_container_migration_safe') {
+    $failures.Add('Linux lifecycle must guard legacy fixed-name containers before migration.')
+}
+$composeEnv = Join-Path $repoRoot 'deploy\docker-compose-env.yml'
+$composeModels = Join-Path $repoRoot 'deploy\docker-compose-models.yml'
+foreach ($composeFile in @($composeEnv, $composeModels)) {
+    if ((Test-Path -LiteralPath $composeFile) -and (Get-Content -Raw $composeFile) -match '(?m)^\s*container_name:') {
+        $failures.Add("$composeFile must not define fixed container names.")
+    }
+}
+if ((Test-Path -LiteralPath $composeEnv) -and (Get-Content -Raw $composeEnv) -notmatch '(?m)^name:\s+deploy\s*$') {
+    $failures.Add('Docker Compose must preserve the deploy project and its named-volume namespace.')
+}
+$verifyAdaptation = Join-Path $repoRoot 'scripts\verify_ai_adaptation.ps1'
+if ((Test-Path -LiteralPath $verifyAdaptation) -and (Get-Content -Raw $verifyAdaptation) -notmatch 'docker compose .*\-p deploy ') {
+    $failures.Add('AI adaptation verification must use the deploy Compose project namespace.')
+}
 
 foreach ($relativePath in @('scripts/stop-all.ps1', 'scripts/stop-all.sh')) {
     $fullPath = Join-Path $repoRoot $relativePath

@@ -31,6 +31,41 @@ if [[ -f "$repo_root/scripts/lib/lifecycle.sh" ]]; then
   if ! bash -c 'set -euo pipefail; source "$1"; [[ "$(configured_port MYSQL_PORT 3306)" == "3306" ]]; MYSQL_PORT=13306; [[ "$(configured_port MYSQL_PORT 3306)" == "13306" ]]; [[ "$(configured_port bad-name 1234)" == "1234" ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
     fail 'configured_port must safely read unset, set, and invalid variable names under set -u.'
   fi
+  docker_test_dir="$(mktemp -d)"
+  cat > "$docker_test_dir/docker" <<'DOCKER_TEST'
+#!/usr/bin/env bash
+if [[ "$1" == inspect && "$2" == -f ]]; then
+  if [[ "$3" == *'.Mounts'* ]]; then
+    printf '%s\n' "${MOCK_MOUNTS:-}"
+  else
+    printf '%s|%s|%s\n' "${MOCK_COMPOSE_PROJECT:-}" "${MOCK_COMPOSE_SERVICE:-}" "${MOCK_WORKING_DIR:-}"
+  fi
+  exit 0
+fi
+if [[ "$1" == inspect ]]; then
+  [[ "$2" == "${MOCK_EXISTING_CONTAINER:-}" ]]
+  exit
+fi
+exit 1
+DOCKER_TEST
+  chmod +x "$docker_test_dir/docker"
+  if ! PATH="$docker_test_dir:$PATH" MOCK_EXISTING_CONTAINER=smart-worksite-redis MOCK_COMPOSE_PROJECT=deploy \
+    MOCK_COMPOSE_SERVICE=redis MOCK_WORKING_DIR="$repo_root/deploy" MOCK_MOUNTS=deploy_redis-data:/data \
+    bash -c 'set -euo pipefail; source "$1"; assert_legacy_container_migration_safe "$2"' bash "$repo_root/scripts/lib/lifecycle.sh" "$repo_root"; then
+    fail 'Legacy containers already owned by the deploy project must be accepted for volume-preserving migration.'
+  fi
+  for unsafe_case in wrong-project wrong-service wrong-volume; do
+    project=deploy service=redis mounts=deploy_redis-data:/data
+    [[ "$unsafe_case" == wrong-project ]] && project=another-project
+    [[ "$unsafe_case" == wrong-service ]] && service=mysql
+    [[ "$unsafe_case" == wrong-volume ]] && mounts=foreign-data:/data
+    if PATH="$docker_test_dir:$PATH" MOCK_EXISTING_CONTAINER=smart-worksite-redis MOCK_COMPOSE_PROJECT="$project" \
+      MOCK_COMPOSE_SERVICE="$service" MOCK_WORKING_DIR="$repo_root/deploy" MOCK_MOUNTS="$mounts" \
+      bash -c 'set -euo pipefail; source "$1"; assert_legacy_container_migration_safe "$2"' bash "$repo_root/scripts/lib/lifecycle.sh" "$repo_root" >/dev/null 2>&1; then
+      fail "Legacy container migration must reject $unsafe_case metadata."
+    fi
+  done
+  rm -rf "$docker_test_dir"
   java_test_dir="$(mktemp -d)"
   cat > "$java_test_dir/java" <<'JAVA_TEST'
 #!/usr/bin/env bash
@@ -88,6 +123,21 @@ grep -q -- '-size +"${max_size_mb}"M' "$repo_root/scripts/lib/lifecycle.sh" || f
 grep -q '^x-logging: &default-logging' "$repo_root/deploy/docker-compose-env.yml" || fail 'Docker Compose must define a shared bounded logging policy.'
 grep -q 'DOCKER_LOG_MAX_SIZE' "$repo_root/deploy/docker-compose-env.yml" || fail 'Docker log max size must be configurable.'
 grep -q 'DOCKER_LOG_MAX_FILES' "$repo_root/deploy/docker-compose-env.yml" || fail 'Docker log max file count must be configurable.'
+for compose_file in deploy/docker-compose-env.yml deploy/docker-compose-models.yml; do
+  if grep -Eq '^[[:space:]]*container_name:' "$repo_root/$compose_file"; then
+    fail "$compose_file must let Compose scope container names by project and service."
+  fi
+done
+grep -Fq 'name: deploy' "$repo_root/deploy/docker-compose-env.yml" \
+  || fail 'Docker Compose must preserve the deploy project and its existing named-volume namespace.'
+grep -q 'assert_legacy_container_migration_safe' "$repo_root/scripts/lib/lifecycle.sh" \
+  || fail 'Linux startup must guard legacy fixed-name containers before migration.'
+grep -q 'assert_legacy_container_migration_safe' "$repo_root/scripts/start-all.sh" \
+  || fail 'Linux startup must run the legacy fixed-name container migration guard.'
+grep -q 'docker compose --project-name deploy' "$repo_root/scripts/lib/lifecycle.sh" \
+  || fail 'All Linux Compose calls must preserve the deploy project namespace.'
+grep -Eq 'docker compose .*\-p deploy ' "$repo_root/scripts/verify_ai_adaptation.ps1" \
+  || fail 'AI adaptation verification must use the deploy project namespace.'
 grep -q 'AI_ACCESS_LOG' "$repo_root/deploy/Dockerfile.python-ai-service" || fail 'Python AI access logging must be configurable.'
 grep -q -- '--no-access-log' "$repo_root/deploy/Dockerfile.python-ai-service" || fail 'Python AI access logs must be disabled by default.'
 grep -q 'ProcessBuilder.Redirect.INHERIT' "$repo_root/src/main/java/com/xd/smartworksite/ai/infra/AiPythonServiceAutoStarter.java" || fail 'Auto-started Python output must flow through the bounded backend log stream.'

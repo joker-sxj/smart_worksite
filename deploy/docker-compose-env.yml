@@ -10,7 +10,6 @@ services:
   mysql:
     logging: *default-logging
     image: mysql:${MYSQL_VERSION:-8.4}
-    container_name: smart-worksite-mysql
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
@@ -35,7 +34,6 @@ services:
   redis:
     logging: *default-logging
     image: redis:${REDIS_VERSION:-7.2-alpine}
-    container_name: smart-worksite-redis
     restart: unless-stopped
     ports:
       - "${REDIS_PORT:-6379}:6379"
@@ -51,7 +49,6 @@ services:
   minio:
     logging: *default-logging
     image: minio/minio:${MINIO_VERSION:-RELEASE.2025-04-22T22-12-26Z}
-    container_name: smart-worksite-minio
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -72,7 +69,6 @@ services:
   minio-init:
     logging: *default-logging
     image: minio/mc:${MINIO_MC_VERSION:-RELEASE.2025-04-16T18-13-26Z}
-    container_name: smart-worksite-minio-init
     depends_on:
       minio:
         condition: service_healthy
@@ -93,7 +89,6 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.python-ai-service
-    container_name: smart-worksite-python-ai-service
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -137,7 +132,6 @@ services:
   pgvector:
     logging: *default-logging
     image: pgvector/pgvector:${PGVECTOR_VERSION:-pg16}
-    container_name: smart-worksite-pgvector
     restart: unless-stopped
     profiles: ["vector"]
     environment:
@@ -158,7 +152,6 @@ services:
   milvus-etcd:
     logging: *default-logging
     image: quay.io/coreos/etcd:${MILVUS_ETCD_VERSION:-v3.5.18}
-    container_name: smart-worksite-milvus-etcd
     profiles: ["vector"]
     environment:
       ETCD_AUTO_COMPACTION_MODE: revision
@@ -172,7 +165,6 @@ services:
   milvus-minio:
     logging: *default-logging
     image: minio/minio:${MINIO_VERSION:-RELEASE.2025-04-22T22-12-26Z}
-    container_name: smart-worksite-milvus-minio
     profiles: ["vector"]
     environment:
       MINIO_ACCESS_KEY: ${MILVUS_MINIO_ACCESS_KEY:-minioadmin}
@@ -186,7 +178,6 @@ services:
   milvus:
     logging: *default-logging
     image: milvusdb/milvus:${MILVUS_VERSION:-v2.5.4}
-    container_name: smart-worksite-milvus
     restart: unless-stopped
     profiles: ["vector"]
     command: ["milvus", "run", "standalone"]

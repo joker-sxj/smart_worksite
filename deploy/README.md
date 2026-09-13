@@ -47,8 +47,10 @@ AI_ACCESS_LOG=false
 ```bash
 docker compose -f docker-compose-env.yml --env-file .env down
 docker compose -f docker-compose-env.yml --env-file .env up -d --build
-docker inspect -f '{{json .HostConfig.LogConfig}}' smart-worksite-python-ai-service
+docker inspect -f '{{json .HostConfig.LogConfig}}' "$(docker compose -f docker-compose-env.yml --env-file .env ps -q python-ai-service)"
 ```
+
+生产部署固定使用 Compose 项目名 `deploy`，以继续挂载现有 `deploy_*` 命名卷。不要在既有环境使用 `-p` 或 `COMPOSE_PROJECT_NAME` 切换项目名；这不会迁移数据，只会创建另一组卷。启动脚本发现其他项目遗留的 `smart-worksite-*` 固定名容器时会安全中止，不会自动停止或删除；应先用 `docker inspect` 核对其 Compose 标签、端口和挂载卷，再由运维人员决定迁移。
 
 ## 停止服务
 

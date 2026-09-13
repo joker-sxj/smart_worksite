@@ -337,8 +337,10 @@ AI_ACCESS_LOG=false
 ./scripts/start-all.sh
 
 # 检查某个容器实际采用的日志策略
-docker inspect -f '{{json .HostConfig.LogConfig}}' smart-worksite-python-ai-service
+docker inspect -f '{{json .HostConfig.LogConfig}}' "$(docker compose -f deploy/docker-compose-env.yml --env-file deploy/.env ps -q python-ai-service)"
 ```
+
+Compose 项目名固定为 `deploy`，这是 MySQL、Redis、MinIO 等命名卷的数据命名空间。已有生产部署不要通过 `-p` 或 `COMPOSE_PROJECT_NAME` 改名，否则会连接到另一组空卷。新版配置不再使用全局固定容器名；若检测到不属于 `deploy` 项目的 `smart-worksite-*` 遗留容器，启动会中止并要求先核对挂载卷和端口，不会自动删除容器。
 
 进程 PID 文件：
 
