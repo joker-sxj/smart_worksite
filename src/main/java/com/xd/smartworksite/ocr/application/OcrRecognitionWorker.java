@@ -221,12 +221,22 @@ public class OcrRecognitionWorker {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("ocrType", data.getOrDefault("ocrType", record.getOcrType()));
         summary.put("confidence", data.getOrDefault("confidence", 0));
-        summary.put("provider", "QWEN_VL");
         summary.put("providerTraceId", providerResponse.getTraceId());
         summary.put("elapsedMs", elapsedMs);
-        Object model = providerResponse.getUsage() == null ? null : providerResponse.getUsage().get("model");
+        Map<String, Object> usage = providerResponse.getUsage() == null ? Map.of() : providerResponse.getUsage();
+        Object semanticProvider = usage.get("provider");
+        Object semanticModel = usage.get("model");
+        Object provider = usage.getOrDefault("ocrProvider", semanticProvider == null ? "QWEN_VL" : semanticProvider);
+        Object model = usage.getOrDefault("ocrModel", semanticModel);
+        summary.put("provider", provider);
         if (model != null) {
             summary.put("model", model);
+        }
+        if (semanticProvider != null) {
+            summary.put("semanticProvider", semanticProvider);
+        }
+        if (semanticModel != null) {
+            summary.put("semanticModel", semanticModel);
         }
         Map<String, Object> extras = normalizeMap(data.get("extras"));
         if (!reconciliation.unmappedFields().isEmpty() && !extras.containsKey("unmappedFields")) {

@@ -306,4 +306,36 @@ class OcrRecognitionWorkerTest {
         assertThat(fields.get(1).get("fieldValue")).isEqualTo("");
         assertThat(fields.get(2).get("fieldValue")).isEqualTo("100万元");
     }
+
+    @Test
+    void persistsActualOcrProviderAndModelInResultSummary() throws Exception {
+        OcrRepository repository = mock(OcrRepository.class);
+        FileObjectApplicationService fileService = mock(FileObjectApplicationService.class);
+        OcrPythonServiceClient pythonClient = mock(OcrPythonServiceClient.class);
+        StorageAdapter storage = mock(StorageAdapter.class);
+        ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
+        OcrRecord record = new OcrRecord();
+        record.setId(7L); record.setProjectId(10L); record.setFileId(26L); record.setTaskId(36L); record.setOcrType("LICENSE_PLATE");
+        when(repository.findRecordById(7L)).thenReturn(Optional.of(record));
+        FileObjectResponse file = new FileObjectResponse();
+        file.setFileId(26L); file.setProjectId(10L); file.setFileName("plate.jpg"); file.setObjectName("projects/10/OCR/plate.jpg"); file.setContentType("image/jpeg");
+        when(fileService.getFileForSystem(26L)).thenReturn(file);
+        when(storage.openObject(file.getObjectName())).thenReturn(new ByteArrayInputStream("fake-image".getBytes(StandardCharsets.UTF_8)));
+        AiProviderResponse response = new AiProviderResponse();
+        response.setSuccess(true); response.setData(Map.of("ocrType", "LICENSE_PLATE", "fields", List.of()));
+        response.setUsage(Map.of("provider", "QWEN_VL", "model", "smart-worksite-chat",
+                "ocrProvider", "PADDLE_OCRV5", "ocrModel", "PP-OCRv5"));
+        when(pythonClient.recognize(eq(10L), any())).thenReturn(response);
+
+        new OcrRecognitionWorker(repository, fileService, storage, pythonClient, projectAccess, new ObjectMapper()).recognize(7L);
+
+        ArgumentCaptor<String> jsonCaptor = ArgumentCaptor.forClass(String.class);
+        verify(repository).updateRecordPartialSuccess(eq(7L), jsonCaptor.capture(), any());
+        Map<String, Object> result = new ObjectMapper().readValue(jsonCaptor.getValue(), new TypeReference<>() {});
+        assertThat((Map<String, Object>) result.get("summary"))
+                .containsEntry("provider", "PADDLE_OCRV5")
+                .containsEntry("model", "PP-OCRv5")
+                .containsEntry("semanticProvider", "QWEN_VL")
+                .containsEntry("semanticModel", "smart-worksite-chat");
+    }
 }
