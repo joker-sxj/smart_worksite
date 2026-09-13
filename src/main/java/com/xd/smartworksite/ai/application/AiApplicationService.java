@@ -286,6 +286,15 @@ public class AiApplicationService {
                 }
                 continue;
             }
+            String scopeError = validateProjectScope(request, generatedQuery);
+            if (scopeError != null) {
+                failedSql = generatedQuery.sql();
+                databaseError = scopeError;
+                if (attempt == maxAttempts) {
+                    throw repairedDatabaseQueryFailure(databaseError);
+                }
+                continue;
+            }
             try {
                 queryResult = safeSqlExecutor.execute(
                         dataSource, generatedQuery.sql(), generatedQuery.parameters());
@@ -418,7 +427,8 @@ public class AiApplicationService {
         String sql = String.valueOf(generatedData.getOrDefault("sql", ""));
         Map<String, Object> parameters = extractSqlParameters(generatedData.get("parameters"));
         List<String> expectedColumns = extractExpectedColumns(generatedData.get("plan"));
-        return new GeneratedQuery(sql, parameters, expectedColumns);
+        String projectScopeField = extractProjectScopeField(generatedData.get("plan"));
+        return new GeneratedQuery(sql, parameters, expectedColumns, projectScopeField);
     }
 
     private BusinessException databaseQueryFailure(SafeSqlExecutor.QueryExecutionException ex) {
@@ -458,6 +468,14 @@ public class AiApplicationService {
         return sql.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
     }
 
+    private String extractProjectScopeField(Object planValue) {
+        if (!(planValue instanceof Map<?, ?> plan) || plan.get("projectScopeField") == null) {
+            return null;
+        }
+        String value = String.valueOf(plan.get("projectScopeField")).trim();
+        return value.isEmpty() || "null".equalsIgnoreCase(value) ? null : value;
+    }
+
     private int countSqlPlaceholders(String sql) {
         if (sql == null || sql.isEmpty()) return 0;
         int count = 0;
@@ -480,7 +498,27 @@ public class AiApplicationService {
         return count;
     }
 
-    private record GeneratedQuery(String sql, Map<String, Object> parameters, List<String> expectedColumns) {
+    private String validateProjectScope(DatabaseQueryRequest request, GeneratedQuery query) {
+        if (query.projectScopeField() == null || query.projectScopeField().isBlank()) {
+            return null;
+        }
+        String field = query.projectScopeField().trim().replace("`", "");
+        String normalizedSql = query.sql().toLowerCase(Locale.ROOT).replace("`", "");
+        if (!normalizedSql.contains(field.toLowerCase(Locale.ROOT))) {
+            return "查询未包含取数计划要求的项目范围字段: " + field;
+        }
+        Pattern parameterizedScope = Pattern.compile(
+                "(?i)(?:[a-z0-9_]+\\.)?" + Pattern.quote(field) + "\\s*=\\s*\\?");
+        if (!parameterizedScope.matcher(normalizedSql).find()) {
+            return "项目范围必须使用参数化条件，禁止硬编码项目ID";
+        }
+        boolean projectParameterPresent = query.parameters().values().stream()
+                .anyMatch(value -> value != null && String.valueOf(request.getProjectId()).equals(String.valueOf(value)));
+        return projectParameterPresent ? null : "项目范围参数缺失或与当前项目不一致";
+    }
+
+    private record GeneratedQuery(String sql, Map<String, Object> parameters, List<String> expectedColumns,
+                                  String projectScopeField) {
     }
 
     public PageResult<ExternalCallLogResponse> queryExternalCallLogs(ExternalCallLogQueryRequest request) {

@@ -569,6 +569,78 @@ class AiApplicationServiceTest {
         verify(aiRepository).findEnabledDataSource(1L, 2L);
     }
 
+    @Test
+    void repairsQueryWhenProjectScopeIsHardCodedInsteadOfParameterized() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        DataSourceRecord dataSource = dataSource();
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource);
+        when(sqlExecutor.describeSchema(dataSource)).thenReturn("generate_task(project_id, created_at)");
+        String unsafeSql = "SELECT COUNT(*) total FROM generate_task WHERE project_id = 1";
+        String scopedSql = "SELECT COUNT(*) total FROM generate_task WHERE project_id = ?";
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(
+                        provider("generate-1", Map.of("sql", unsafeSql, "parameters", Map.of(),
+                                "plan", Map.of("projectScopeField", "project_id"))),
+                        provider("generate-2", Map.of("sql", scopedSql, "parameters", Map.of("p1", 1),
+                                "plan", Map.of("projectScopeField", "project_id")))
+                );
+        when(sqlExecutor.execute(dataSource, scopedSql, Map.of("p1", 1))).thenReturn(
+                new SafeSqlExecutor.QueryResult(List.of("total"), List.of(Map.of("total", 5))));
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseSummarizeResult()),
+                eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), any()))
+                .thenReturn(provider("summary", Map.of("summary", "共5项", "warnings", List.of())));
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getSql()).isEqualTo(scopedSql);
+        verify(sqlExecutor, never()).execute(dataSource, unsafeSql, Map.of());
+        verify(pythonClient).post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), argThat(payload -> {
+                    Map<?, ?> map = (Map<?, ?>) payload;
+                    return unsafeSql.equals(map.get("failedSql"))
+                            && String.valueOf(map.get("databaseError")).contains("项目范围")
+                            && Integer.valueOf(2).equals(map.get("attempt"));
+                }));
+    }
+
+    @Test
+    void repairsQueryWhenOnlyNonScopeFilterIsParameterized() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource());
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        when(sqlExecutor.describeSchema(any())).thenReturn("policy_article(project_id, title)");
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        String unsafeSql = "SELECT COUNT(*) total FROM policy_article WHERE project_id = 1 AND title = ?";
+        String scopedSql = "SELECT COUNT(*) total FROM policy_article WHERE project_id = ? AND title = ?";
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(
+                        provider("generate-1", Map.of("sql", unsafeSql, "parameters", Map.of("p1", "公告"),
+                                "plan", Map.of("projectScopeField", "project_id"))),
+                        provider("generate-2", Map.of("sql", scopedSql,
+                                "parameters", Map.of("p1", 1, "p2", "公告"),
+                                "plan", Map.of("projectScopeField", "project_id")))
+                );
+        when(sqlExecutor.execute(any(), eq(scopedSql), eq(Map.of("p1", 1, "p2", "公告"))))
+                .thenReturn(new SafeSqlExecutor.QueryResult(List.of("total"), List.of()));
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getSql()).isEqualTo(scopedSql);
+        verify(sqlExecutor, never()).execute(any(), eq(unsafeSql), any());
+    }
+
     private static AiProviderResponse provider(String traceId, Map<String, Object> data) {
         AiProviderResponse response = new AiProviderResponse();
         response.setSuccess(true);
