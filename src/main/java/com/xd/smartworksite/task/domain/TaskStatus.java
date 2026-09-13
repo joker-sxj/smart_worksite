@@ -7,13 +7,14 @@ public enum TaskStatus {
     QUEUED,
     RUNNING,
     SUCCESS,
+    PARTIAL_SUCCESS,
     FAILED,
     RETRYING,
     CANCELED;
 
     private static final Set<TaskStatus> RETRYABLE = Set.of(FAILED);
     private static final Set<TaskStatus> CANCELABLE = Set.of(PENDING, QUEUED, RUNNING, RETRYING);
-    private static final Set<TaskStatus> TERMINAL = Set.of(SUCCESS, FAILED, CANCELED);
+    private static final Set<TaskStatus> TERMINAL = Set.of(SUCCESS, PARTIAL_SUCCESS, FAILED, CANCELED);
 
     public static TaskStatus parse(String value) {
         return TaskStatus.valueOf(value.trim().toUpperCase());

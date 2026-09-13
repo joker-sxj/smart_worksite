@@ -577,6 +577,7 @@ export interface PolicyCrawlTask {
   progress?: number;
   fetchedCount: number;
   indexedCount: number;
+  failedCount?: number;
   message?: string;
   startedAt?: string;
   finishedAt?: string;
@@ -590,6 +591,7 @@ export interface PolicyArticle {
   title: string;
   url: string;
   summary: string;
+  content?: string;
   publishDate?: string;
   category?: string;
   indexStatus: Status | string;

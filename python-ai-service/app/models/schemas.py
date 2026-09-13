@@ -426,6 +426,7 @@ class PolicyCrawlArticle(BaseModel):
 
 class PolicyCrawlData(BaseModel):
     fetchedCount: int = 0
+    failedCount: int = 0
     message: str = ""
     articles: list[PolicyCrawlArticle] = Field(default_factory=list)
 

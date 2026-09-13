@@ -22,6 +22,8 @@ const sourceDialogVisible = ref(false);
 const sources = ref<PolicySource[]>([]);
 const tasks = ref<PolicyCrawlTask[]>([]);
 const articles = ref<PolicyArticle[]>([]);
+const articleDetailVisible = ref(false);
+const selectedArticle = ref<PolicyArticle | null>(null);
 const articlePager = reactive({ pageNo: 1, pageSize: 10, total: 0, keyword: '', sourceId: '' as ID | '', indexStatus: '' });
 const form = reactive({ sourceId: '' as ID | '', name: '', url: '', crawlFrequency: 'DAILY', description: '' });
 const projectId = computed(() => projectStore.currentProject?.projectId || '');
@@ -204,6 +206,15 @@ function searchArticles() {
   void loadArticles();
 }
 
+function openArticleDetail(article: PolicyArticle) {
+  selectedArticle.value = article;
+  articleDetailVisible.value = true;
+}
+
+function sourceName(sourceId: ID) {
+  return sources.value.find((source) => String(source.sourceId) === String(sourceId))?.name || `来源 ${sourceId}`;
+}
+
 onMounted(() => {
   void refreshAll();
 });
@@ -256,7 +267,7 @@ watch(projectId, () => {
         <div v-for="task in tasks" :key="task.taskId" class="task-card">
           <div class="task-head"><strong>{{ task.sourceName || '全部政策源' }}</strong><StatusTag :status="task.status" /></div>
           <el-progress :percentage="task.progress || 0" :status="task.status === 'FAILED' ? 'exception' : 'success'" />
-          <p class="muted">抓取 {{ task.fetchedCount }} 条 / 入库 {{ task.indexedCount }} 条，{{ task.message || '等待执行' }}</p>
+          <p class="muted">抓取 {{ task.fetchedCount }} 条 / 入库 {{ task.indexedCount }} 条 / 失败 {{ task.failedCount || 0 }} 条，{{ task.message || '等待执行' }}</p>
         </div>
       </el-card>
     </div>
@@ -281,10 +292,22 @@ watch(projectId, () => {
       </template>
       <AppTable :loading="articleLoading" :error="articleError" :data="articles" :total="articlePager.total" :page-no="articlePager.pageNo" :page-size="articlePager.pageSize" :columns="[{ prop: 'title', label: '标题', slot: 'title' }, { prop: 'category', label: '分类', width: 120 }, { prop: 'publishDate', label: '发布日期', width: 130 }, { prop: 'indexStatus', label: '入库状态', slot: 'indexStatus', width: 120 }]" @page-change="(p, s) => { articlePager.pageNo = p; articlePager.pageSize = s; loadArticles(); }">
         <template #empty><EmptyState description="暂无政策资讯，请先触发政策源爬取。" /></template>
-        <template #title="{ row }"><div><strong>{{ row.title }}</strong><p class="muted">{{ row.summary }}</p><p class="muted url-text">{{ row.url }}</p></div></template>
+        <template #title="{ row }"><div><el-button link type="primary" @click="openArticleDetail(row)">{{ row.title }}</el-button><p class="muted">{{ row.summary }}</p><p class="muted url-text">{{ row.url }}</p></div></template>
         <template #indexStatus="{ row }"><StatusTag :status="row.indexStatus" /></template>
       </AppTable>
     </el-card>
+
+    <el-dialog v-model="articleDetailVisible" title="政策资讯详情" width="760px">
+      <el-descriptions v-if="selectedArticle" :column="2" border>
+        <el-descriptions-item label="标题">{{ selectedArticle.title }}</el-descriptions-item>
+        <el-descriptions-item label="发布时间">{{ selectedArticle.publishDate || '未提取' }}</el-descriptions-item>
+        <el-descriptions-item label="来源地址" :span="2"><span class="url-text">{{ selectedArticle.url }}</span></el-descriptions-item>
+        <el-descriptions-item label="项目 ID">{{ selectedArticle.projectId }}</el-descriptions-item>
+        <el-descriptions-item label="来源">{{ sourceName(selectedArticle.sourceId) }}（ID: {{ selectedArticle.sourceId }}）</el-descriptions-item>
+        <el-descriptions-item label="入库状态" :span="2"><StatusTag :status="selectedArticle.indexStatus" /></el-descriptions-item>
+        <el-descriptions-item label="完整正文" :span="2"><pre class="article-content">{{ selectedArticle.content || '正文未返回' }}</pre></el-descriptions-item>
+      </el-descriptions>
+    </el-dialog>
 
     <el-dialog v-model="sourceDialogVisible" title="政策源配置" width="640px">
       <el-form label-width="96px">
@@ -314,5 +337,6 @@ watch(projectId, () => {
 .task-card:last-child { border-bottom: 0; }
 .muted { color: var(--sw-muted); font-size: 13px; line-height: 1.6; }
 .url-text { word-break: break-all; margin: 4px 0 0; }
+.article-content { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; line-height: 1.8; max-height: 52vh; overflow: auto; }
 @media (max-width: 960px) { .table-head, .filters, .header-actions { align-items: stretch; flex-direction: column; } }
 </style>

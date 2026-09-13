@@ -298,6 +298,7 @@ public class PolicyApplicationService {
                 PolicyCrawlerResponse response = crawlSource(source);
                 List<PolicyCrawlerArticle> articles = response.getArticles() == null ? List.of() : response.getArticles();
                 fetched += response.getFetchedCount() == null ? articles.size() : response.getFetchedCount();
+                failed += response.getFailedCount() == null ? 0 : response.getFailedCount();
                 for (PolicyCrawlerArticle item : articles) {
                     PolicyArticle article = upsertArticle(source, item);
                     try {
@@ -315,12 +316,12 @@ public class PolicyApplicationService {
                 requireUpdated(policyRepository.markSourceFailed(source.getId(), lastError, SYSTEM_USER_ID), "policy source failure update failed");
             }
         }
-        String status = failed > 0 ? TaskStatus.FAILED.name() : TaskStatus.SUCCESS.name();
+        String status = PolicyCrawlOutcome.status(indexed, failed);
         int progress = TaskStatus.SUCCESS.name().equals(status) ? 100 : 100;
         requireUpdated(policyRepository.updateCrawlTaskProgress(task.getTaskId(), status, progress, fetched, indexed, failed,
                 failed > 0 ? "policy crawl completed with failures" : "policy crawl completed", lastError, SYSTEM_USER_ID),
                 "policy crawl task final state update failed");
-        if (failed > 0) {
+        if (failed > 0 && indexed == 0) {
             throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, lastError == null ? "policy crawl failed" : lastError);
         }
     }

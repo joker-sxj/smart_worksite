@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     ai_allow_remote_inference: bool = False
     ai_allow_cloud_fallback: bool = False
     policy_crawler_network_enabled: bool = False
+    policy_crawler_connect_timeout_seconds: float = Field(default=8.0, gt=0, le=30)
+    policy_crawler_read_timeout_seconds: float = Field(default=20.0, gt=0, le=60)
+    policy_crawler_total_timeout_seconds: float = Field(default=90.0, gt=0, le=300)
+    policy_crawler_max_response_bytes: int = Field(default=2 * 1024 * 1024, ge=1, le=10 * 1024 * 1024)
+    policy_crawler_max_articles: int = Field(default=20, ge=1, le=100)
+    policy_crawler_max_concurrency: int = Field(default=3, ge=1, le=8)
+    policy_crawler_max_redirects: int = Field(default=5, ge=0, le=10)
+    policy_crawler_max_retries: int = Field(default=2, ge=0, le=3)
+    policy_crawler_retry_backoff_seconds: float = Field(default=0.5, ge=0, le=5)
+    policy_crawler_request_interval_seconds: float = Field(default=0.5, ge=0, le=10)
     model_profile_name: str = "unconfigured"
     chat_max_model_len: int = 0
     context_output_reserve_tokens: int = Field(default=0, ge=0)

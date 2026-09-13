@@ -48,7 +48,7 @@ VITE_USE_MOCK=false
 - `VITE_API_BASE_URL`：后端 API 基础地址，开发代理默认使用 `/api`。
 - `VITE_USE_MOCK`：默认 `false`，请求真实 Java 后端；只有显式设为 `true` 时才允许 API service 使用本地 mock 数据。
 - 模块级 `VITE_USE_xxx_MOCK` 默认也必须为 `false`，仅用于离线演示。
-- `VITE_USE_POLICY_MOCK=true`：仅用于离线演示政策资讯模块；默认关闭，前端会调用 Java 后端 `/api/policy/**`，由 Java 后端调度 Python `/v1/policy/crawl` 完成真实网页抓取、入库和知识库索引。
+- 政策资讯模块固定调用 Java 后端 `/api/policy/**`，生产代码不存在前端 Mock 开关；Java 调度 Python `/v1/policy/crawl` 完成真实网页抓取、入库和知识库索引。
 
 ## Mock 模式
 
@@ -90,7 +90,7 @@ src/
 | 清单项 | 前端入口 | 当前说明 |
 | --- | --- | --- |
 | 11 知识问答 | `/qa` | 支持自动路由、模型、知识库、数据库、混合模式，展示引用、路由和追问信息。 |
-| 11.1 互联网政策资讯爬取 | `/policy` | 前端 Mock 演示政策源配置、爬取任务、资讯列表和入库状态；真实爬虫待后端政策模块实现。 |
+| 11.1 互联网政策资讯爬取 | `/policy` | 支持真实来源配置、异步状态恢复和轮询、抓取/入库/失败计数、资讯正文与来源详情。 |
 | 11.2 本地知识库 | `/knowledge` | 支持项目隔离知识库、文档上传、解析和入库；PPT/Excel/CSV 可作为前端清单入口，后端解析失败会直接显示错误。 |
 | 11.3 数据库问答 | `/datasources`、`/qa` | 数据源管理、连接测试、Schema 查看和数据库问答走 Java 后端接口。 |
 | 11.4 智能路由上下文 | `/qa` | 默认自动路由，可展示后端返回的追问、引用和 trace 信息。 |
