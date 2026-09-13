@@ -3,6 +3,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 ocr="$root/src/main/java/com/xd/smartworksite/ocr/API.md"
 runbook="$root/docs/superpowers/runbooks/a6000-local-inference-operations.md"
+governance="$root/docs/本地大模型选型与数据治理说明.md"
 
 if grep -Eqi 'QWEN_VL_ENDPOINT=https://dashscope|Qwen VL 凭据必须|QWEN_VL_API_KEY.*为空.*FAILED' "$ocr"; then
   echo 'OCR guide still presents cloud inference as the production path.' >&2
@@ -13,6 +14,13 @@ for pattern in 'Java.*Python' 'LOCAL_ONLY' 'a6000x2-production-32k' 'a6000x2-sta
 done
 if grep -Eqi '(api[_ -]?key|authorization)[=:][^[:space:]`]*[A-Za-z0-9]{12,}' "$runbook"; then
   echo 'Runbook appears to contain a secret.' >&2
+  exit 1
+fi
+for pattern in 'deploy/model-manifests/h100-fp8.json' 'LOCAL_CACHE_BASELINE' 'upstreamSignatureVerified=false' 'PENDING_CUSTOMER_CACHE' '当前没有项目专属训练或微调证据'; do
+  grep -Fq "$pattern" "$governance" || { echo "Model governance guide missing: $pattern" >&2; exit 1; }
+done
+if grep -Fq '模型权重 checksum | **BLOCKED：仓库无权重文件和缓存清单**' "$governance"; then
+  echo 'Model governance guide still claims the verified H100 checksum manifest is missing.' >&2
   exit 1
 fi
 echo 'Local inference documentation contracts passed.'
