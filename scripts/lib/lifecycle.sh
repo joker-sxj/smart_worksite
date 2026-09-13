@@ -299,6 +299,32 @@ wait_http() {
   done
 }
 
+model_ready() {
+  local url="$1" body
+  if command -v curl >/dev/null 2>&1; then
+    body="$(curl -fsS --max-time 5 "$url" 2>/dev/null)" || return 1
+  elif command -v python3 >/dev/null 2>&1; then
+    body="$(python3 - "$url" <<'PY'
+import sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
+    print(response.read().decode('utf-8'))
+PY
+)" || return 1
+  else
+    printf 'curl or python3 is required for model readiness checks.\n' >&2
+    return 1
+  fi
+  [[ "$body" == *'"status":"READY"'* || "$body" == *'"status": "READY"'* ]]
+}
+
+wait_model_ready() {
+  local name="$1" url="$2" timeout_seconds="${3:-3600}" elapsed=0
+  until model_ready "$url"; do
+    (( elapsed >= timeout_seconds )) && { printf '%s readiness check failed at %s after %s seconds.\n' "$name" "$url" "$timeout_seconds" >&2; return 1; }
+    sleep 2; elapsed=$((elapsed + 2))
+  done
+}
+
 managed_pid() {
   local pid_file="$1" expected_cwd="$2" marker="$3" pid cwd args
   [[ -f "$pid_file" ]] || return 1

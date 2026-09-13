@@ -85,7 +85,7 @@ wait_tcp MySQL "$mysql_port"
 wait_tcp Redis "$redis_port"
 wait_tcp MinIO "$minio_port"
 wait_http 'Python AI service' "http://127.0.0.1:$ai_port/v1/health"
-wait_http 'Python AI model readiness' "http://127.0.0.1:$ai_port/v1/ready" "${MODEL_STARTUP_TIMEOUT_SECONDS:-3600}"
+wait_model_ready 'Python AI model readiness' "http://127.0.0.1:$ai_port/v1/ready" "${MODEL_STARTUP_TIMEOUT_SECONDS:-3600}"
 
 backend_health_uri="http://127.0.0.1:$server_port/actuator/health"
 restart_managed_if_running 'Java backend' "$root" 'spring-boot:run' "$run_dir/backend.pid"
