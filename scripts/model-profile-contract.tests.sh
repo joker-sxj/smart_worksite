@@ -305,6 +305,7 @@ grep -Eq 'docker_compose "\$root" up -d --pull never local-llm local-embedding l
 grep -Eq 'docker_compose "\$root" up -d --build --pull never' "$repo_root/scripts/start-all.sh" || fail 'Full Compose startup must retain the no-pull guarantee.'
 grep -Eq 'docker run .*--pull never' "$repo_root/scripts/check-gpu-runtime.sh" || fail 'GPU preflight must not download its runtime image.'
 grep -q 'check-local-models.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must verify each local model dependency.'
+grep -q '/v1/ready' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must wait for Python AI model readiness, not liveness only.'
 grep -Eq 'check-local-models.sh.*--smoke' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must run bounded generation, embedding, and rerank smoke checks.'
 grep -q 'chat boundary smoke' "$repo_root/scripts/check-local-models.sh" || fail 'Local model checks must exercise the configured context boundary.'
 grep -q 'Local model configuration:' "$repo_root/scripts/status.sh" || fail 'Status must distinguish model configuration from readiness.'

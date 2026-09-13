@@ -1441,7 +1441,7 @@ def test_ocr_prompt_only_requests_type_specific_extras():
     assert "extras.items" not in plate_prompt
 
 
-def test_health_separates_liveness_configuration_and_model_readiness(monkeypatch):
+def test_ready_separates_liveness_configuration_and_model_readiness(monkeypatch):
     from app.api import routes
 
     async def fake_snapshot(_self):
@@ -1462,14 +1462,55 @@ def test_health_separates_liveness_configuration_and_model_readiness(monkeypatch
         }
 
     monkeypatch.setattr(routes.ModelReadinessService, "snapshot", fake_snapshot)
-    response = TestClient(app).get("/v1/health")
+    response = TestClient(app).get("/v1/ready")
     body = response.json()["data"]
 
-    assert body["status"] == "UP"
+    assert response.status_code == 503
+    assert body["status"] == "DEGRADED"
     assert body["modelReadiness"]["status"] == "DEGRADED"
     assert body["modelReadiness"]["maxContextTokens"] == 32768
     assert "http://" not in response.text
     assert "api_key" not in response.text.lower()
+
+
+def test_health_is_liveness_and_does_not_probe_models(monkeypatch):
+    from app.api import routes
+
+    async def must_not_probe(_self):
+        raise AssertionError("liveness must not probe model dependencies")
+
+    monkeypatch.setattr(routes.ModelReadinessService, "snapshot", must_not_probe)
+    response = TestClient(app).get("/v1/health")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"status": "UP", "service": "python-ai-service"}
+
+
+def test_ready_returns_503_with_sanitized_dependency_details(monkeypatch):
+    from app.api import routes
+
+    async def fake_snapshot(_self):
+        return {"status": "DEGRADED", "dependencies": {"chat": {"status": "CONNECT_ERROR", "endpointScope": "LOCAL"}}}
+
+    monkeypatch.setattr(routes.ModelReadinessService, "snapshot", fake_snapshot)
+    response = TestClient(app).get("/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json()["data"]["modelReadiness"]["status"] == "DEGRADED"
+    assert "http://" not in response.text
+
+
+def test_ready_returns_200_when_all_models_are_ready(monkeypatch):
+    from app.api import routes
+
+    async def fake_snapshot(_self):
+        return {"status": "READY", "dependencies": {}}
+
+    monkeypatch.setattr(routes.ModelReadinessService, "snapshot", fake_snapshot)
+    response = TestClient(app).get("/v1/ready")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "READY"
 
 # Task 4: model API context-budget integration
 

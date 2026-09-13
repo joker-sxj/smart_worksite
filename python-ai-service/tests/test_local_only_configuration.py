@@ -199,7 +199,7 @@ def test_dependency_descriptors_do_not_expose_keys():
     assert "vision-secret" not in str(descriptors)
 
 
-def test_health_exposes_sanitized_local_dependency_configuration():
+def test_ready_exposes_sanitized_local_dependency_configuration():
     settings = local_settings(qwen_api_key="must-not-leak")
     app.dependency_overrides = {}
     get_settings.cache_clear()
@@ -210,7 +210,7 @@ def test_health_exposes_sanitized_local_dependency_configuration():
 
         original = routes.get_settings
         routes.get_settings = lambda: settings
-        response = TestClient(app).get("/v1/health")
+        response = TestClient(app).get("/v1/ready")
     finally:
         routes.get_settings = original
         app.dependency_overrides.clear()
@@ -220,6 +220,11 @@ def test_health_exposes_sanitized_local_dependency_configuration():
     assert body["deploymentMode"] == "LOCAL_ONLY"
     assert body["dependencies"]["chat"]["model"] == settings.qwen_model
     assert "must-not-leak" not in response.text
+
+
+def test_ready_endpoint_does_not_require_service_key():
+    response = TestClient(app).get("/v1/ready")
+    assert response.status_code != 401
 
 
 def test_local_only_validates_dedicated_embedding_endpoint():

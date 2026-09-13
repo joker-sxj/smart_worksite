@@ -160,7 +160,7 @@ class SystemStatusApplicationServiceTest {
         TestHttpServer(String healthBody) throws IOException {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/minio/health/live", exchange -> respond(exchange, 200, ""));
-            server.createContext("/v1/health", exchange -> respond(exchange, 200, healthBody));
+            server.createContext("/v1/ready", exchange -> respond(exchange, 200, healthBody));
             server.start();
         }
 

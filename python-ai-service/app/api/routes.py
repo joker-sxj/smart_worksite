@@ -1,5 +1,6 @@
 from uuid import uuid4
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from app.core.security import verify_service_key
 from app.core.settings import get_settings
 from app.models.schemas import (
@@ -103,15 +104,24 @@ def services():
 
 @router.get("/health")
 async def health():
-    settings = get_settings()
-    readiness = await ModelReadinessService(settings).snapshot()
     return ok({
         "status": "UP",
+        "service": "python-ai-service",
+    })
+
+
+@router.get("/ready")
+async def ready():
+    settings = get_settings()
+    readiness = await ModelReadinessService(settings).snapshot()
+    status_code = 200 if readiness.get("status") == "READY" else 503
+    return JSONResponse(status_code=status_code, content=ok({
+        "status": readiness.get("status"),
         "service": "python-ai-service",
         "deploymentMode": settings.ai_deployment_mode.value,
         "dependencies": settings.safe_ai_dependency_descriptors(),
         "modelReadiness": readiness,
-    })
+    }).model_dump())
 
 
 @router.post("/model/invoke", response_model=StandardResponse[ModelInvokeData])

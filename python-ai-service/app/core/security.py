@@ -3,7 +3,7 @@ from .settings import get_settings
 
 
 async def verify_service_key(request: Request, x_ai_service_key: str | None = Header(default=None)) -> None:
-    if request.url.path == "/v1/health":
+    if request.url.path in {"/v1/health", "/v1/ready"}:
         return
     expected = get_settings().ai_service_api_key
     if expected and x_ai_service_key != expected:

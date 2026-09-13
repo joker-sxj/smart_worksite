@@ -116,7 +116,7 @@ public class SystemStatusApplicationService {
         try {
             String base = aiProperties.getBaseUrl().replaceAll("/+$", "");
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(base + "/v1/health"))
+                    .uri(URI.create(base + "/v1/ready"))
                     .timeout(Duration.ofMillis(Math.max(1, aiProperties.getReadTimeoutMs())))
                     .header("Accept", "application/json")
                     .GET().build();
