@@ -217,10 +217,16 @@ onMounted(async () => {
           <el-descriptions-item label="返回行数">{{ resultTable.rows.length }}</el-descriptions-item>
           <el-descriptions-item label="返回列数">{{ resultTable.columns.length }}</el-descriptions-item>
           <el-descriptions-item label="模型追踪ID">{{ result.providerTraceId || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="执行耗时">{{ result.executionTimeMs ?? '-' }} ms</el-descriptions-item>
+          <el-descriptions-item label="数据源ID">{{ result.dataSourceId ?? '-' }}</el-descriptions-item>
         </el-descriptions>
         <div v-if="result.sql">
           <div class="result-title">已执行的只读查询</div>
           <pre>{{ result.sql }}</pre>
+        </div>
+        <div v-if="Object.keys(result.parameters || {}).length">
+          <div class="result-title">查询参数（值已脱敏）</div>
+          <JsonViewer :value="result.parameters" />
         </div>
         <el-alert
           v-for="warning in result.warnings || []"
@@ -228,6 +234,13 @@ onMounted(async () => {
           :title="warning"
           type="warning"
           show-icon
+          :closable="false"
+        />
+        <el-alert
+          v-for="rule in result.maskingRules || []"
+          :key="`mask-${rule}`"
+          :title="rule"
+          type="info"
           :closable="false"
         />
         <div>

@@ -228,6 +228,7 @@ public class AiApplicationService {
     }
 
     public DatabaseQueryResponse queryDatabaseForSystem(DatabaseQueryRequest request) {
+        long startedAt = System.currentTimeMillis();
         projectAccessApplicationService.requireProjectWritableForSystem(request.getProjectId());
         DataSourceRecord dataSource = aiRepository.findEnabledDataSource(request.getProjectId(), request.getDataSourceId());
         if (dataSource == null) {
@@ -308,6 +309,8 @@ public class AiApplicationService {
             emptyResult.setRows(queryResult.rows());
             emptyResult.setSummary("查询成功，但未查询到符合条件的数据。");
             emptyResult.setWarnings(List.of("查询结果为空，报告内容不得推断为不存在或已完成。"));
+            enrichDatabaseResponse(emptyResult, request, dataSource, generatedQuery, startedAt);
+            recordDatabaseExecution(request, dataSource, generatedQuery, queryResult, startedAt);
             return emptyResult;
         }
 
@@ -329,7 +332,47 @@ public class AiApplicationService {
             result.setWarnings(list.stream().map(String::valueOf).toList());
         }
         result.setProviderTraceId(summarized.getTraceId());
+        enrichDatabaseResponse(result, request, dataSource, generatedQuery, startedAt);
+        recordDatabaseExecution(request, dataSource, generatedQuery, queryResult, startedAt);
         return result;
+    }
+
+    private void enrichDatabaseResponse(DatabaseQueryResponse response, DatabaseQueryRequest request,
+                                        DataSourceRecord dataSource, GeneratedQuery query, long startedAt) {
+        response.setDataSourceId(dataSource.getId());
+        response.setParameters(redactedParameters(query.parameters()));
+        response.setExecutionTimeMs(Math.max(0, System.currentTimeMillis() - startedAt));
+        response.setMaskingRules(List.of("敏感列按列名识别并替换为[MASKED]", "查询参数仅展示名称，不展示原始值"));
+    }
+
+    private Map<String, Object> redactedParameters(Map<String, Object> parameters) {
+        Map<String, Object> redacted = new LinkedHashMap<>();
+        if (parameters != null) {
+            parameters.keySet().stream().sorted().forEach(key -> redacted.put(key, "[REDACTED]"));
+        }
+        return redacted;
+    }
+
+    private void recordDatabaseExecution(DatabaseQueryRequest request, DataSourceRecord dataSource,
+                                         GeneratedQuery query, SafeSqlExecutor.QueryResult result,
+                                         long startedAt) {
+        ExternalCallLog log = new ExternalCallLog();
+        log.setProjectId(request.getProjectId());
+        log.setServiceName("DATABASE");
+        log.setCallType("DATABASE_QUERY_EXECUTION");
+        log.setRequestSummary(limitAudit("dataSourceId=" + dataSource.getId()
+                + ", sql=" + query.sql() + ", parameters=" + redactedParameters(query.parameters())));
+        log.setResponseSummary(limitAudit("columns=" + result.columns() + ", rowCount=" + result.rows().size()
+                + ", maskingRules=[MASKED]"));
+        log.setStatus("SUCCESS");
+        log.setCostMs(Math.max(0, System.currentTimeMillis() - startedAt));
+        if (aiRepository.saveExternalCallLog(log) <= 0) {
+            throw new BusinessException(ErrorCode.CONFLICT, "database query audit log insert failed");
+        }
+    }
+
+    private String limitAudit(String value) {
+        return value.length() <= 2000 ? value : value.substring(0, 2000) + "...";
     }
 
     private GeneratedQuery generateDatabaseQuery(DatabaseQueryRequest request, DataSourceRecord dataSource,

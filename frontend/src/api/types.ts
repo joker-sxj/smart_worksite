@@ -542,6 +542,10 @@ export interface DataSourceQueryResult {
   summary?: string;
   warnings?: string[];
   providerTraceId?: string;
+  dataSourceId?: ID;
+  parameters?: Record<string, unknown>;
+  executionTimeMs?: number;
+  maskingRules?: string[];
 }
 
 export interface PolicySource {

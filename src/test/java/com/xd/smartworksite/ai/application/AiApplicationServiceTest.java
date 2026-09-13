@@ -117,6 +117,7 @@ class AiApplicationServiceTest {
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         AiApplicationService service = new AiApplicationService(properties, pythonClient, aiRepository,
                 mock(SafeSqlExecutor.class), projectAccess);
         AiProviderResponse providerResponse = new AiProviderResponse();
@@ -153,6 +154,7 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         ProjectAccessApplicationService access = mock(ProjectAccessApplicationService.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, mock(SafeSqlExecutor.class), access);
@@ -208,6 +210,7 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
         AiApplicationService service = new AiApplicationService(
@@ -259,6 +262,7 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -302,6 +306,7 @@ class AiApplicationServiceTest {
         properties.getDatabase().setQueryMaxAttempts(4);
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -346,6 +351,7 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -390,6 +396,7 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -424,6 +431,7 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -449,10 +457,58 @@ class AiApplicationServiceTest {
     }
 
     @Test
+    void exposesAndAuditsDatabaseExecutionWithoutPersistingParameterValues() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        DataSourceRecord dataSource = dataSource();
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource);
+        when(sqlExecutor.describeSchema(dataSource)).thenReturn("safety_issue(project_id, status)");
+        String sql = "SELECT COUNT(*) AS total FROM safety_issue WHERE project_id = ? AND status <> ?";
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("p1", 1);
+        parameters.put("p2", "CLOSED");
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(provider("generate", Map.of("sql", sql, "parameters", parameters)));
+        when(sqlExecutor.execute(dataSource, sql, parameters)).thenReturn(
+                new SafeSqlExecutor.QueryResult(List.of("total"), List.of(Map.of("total", 3L))));
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseSummarizeResult()),
+                eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), any()))
+                .thenReturn(provider("summary", Map.of("summary", "未闭环3项", "warnings", List.of())));
+        when(aiRepository.saveExternalCallLog(any())).thenAnswer(invocation -> {
+            ((ExternalCallLog) invocation.getArgument(0)).setId(99L);
+            return 1;
+        });
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getParameters()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                "p1", "[REDACTED]", "p2", "[REDACTED]"));
+        assertThat(response.getExecutionTimeMs()).isNotNegative();
+        assertThat(response.getMaskingRules()).contains("敏感列按列名识别并替换为[MASKED]");
+        verify(aiRepository).saveExternalCallLog(argThat(log ->
+                "DATABASE".equals(log.getServiceName())
+                        && "DATABASE_QUERY_EXECUTION".equals(log.getCallType())
+                        && log.getRequestSummary().contains("dataSourceId=2")
+                        && log.getRequestSummary().contains(sql)
+                        && log.getRequestSummary().contains("p1=[REDACTED]")
+                        && !log.getRequestSummary().contains("CLOSED")
+                        && log.getResponseSummary().contains("columns=[total]")
+                        && log.getResponseSummary().contains("rowCount=1")
+                        && !log.getResponseSummary().contains("未闭环3项")));
+    }
+
+    @Test
     void doesNotRepairDatabaseSqlForConnectionOrAuthenticationErrors() {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -556,3 +612,4 @@ class AiApplicationServiceTest {
         @Override public List<ProjectMember> selectEnabledByUserId(Long userId) { return List.of(); }
     }
 }
+
