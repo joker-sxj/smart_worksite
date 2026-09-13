@@ -691,6 +691,41 @@ def test_global_500_does_not_leak_internal_url_token_or_path(monkeypatch):
     assert "token=secret" not in response.text
 
 
+def test_policy_crawler_errors_return_safe_actionable_diagnostics(monkeypatch):
+    from app.api import routes
+    from app.services.policy_crawler_service import (
+        PolicyCrawlerNetworkDisabledError,
+        PolicyCrawlerBlockedError,
+        PolicyCrawlerResponseError,
+        PolicyCrawlerTimeoutError,
+        PolicyCrawlerUrlError,
+    )
+
+    cases = [
+        (PolicyCrawlerNetworkDisabledError("internal config"), 503, "POLICY_CRAWLER_NETWORK_DISABLED", "政策爬虫网络访问未启用"),
+        (PolicyCrawlerUrlError("policy crawler is disallowed by robots.txt"), 422, "POLICY_CRAWLER_ROBOTS_DENIED", "目标网站的 robots.txt 禁止抓取"),
+        (PolicyCrawlerUrlError("private host: token=secret"), 422, "POLICY_CRAWLER_URL_REJECTED", "目标地址不符合安全抓取规则"),
+        (PolicyCrawlerBlockedError("secret target response"), 502, "POLICY_CRAWLER_TARGET_BLOCKED", "目标网站拒绝了抓取请求"),
+        (PolicyCrawlerTimeoutError("secret timeout target"), 504, "POLICY_CRAWLER_TIMEOUT", "目标网站响应超时"),
+        (PolicyCrawlerResponseError("policy crawler requires an HTML Content-Type"), 502, "POLICY_CRAWLER_INVALID_RESPONSE", "目标网站未返回可解析的 HTML 内容"),
+    ]
+
+    for error, status, code, message in cases:
+        class FailingPolicy:
+            async def crawl(self, _request):
+                raise error
+
+        monkeypatch.setattr(routes, "services", lambda: {"policy": FailingPolicy()})
+        response = TestClient(app, raise_server_exceptions=False).post("/v1/policy/crawl", json={
+            "projectId": 1, "sourceId": 1, "url": "https://example.gov/policy",
+        })
+
+        assert response.status_code == status
+        assert response.json()["errorCode"] == code
+        assert response.json()["errorMessage"] == message
+        assert "token=secret" not in response.text
+
+
 def test_request_validation_error_returns_safe_field_summary_without_input_value():
     secret = "https://internal.local?token=secret"
     response = TestClient(app).post("/v1/rag/search", json={

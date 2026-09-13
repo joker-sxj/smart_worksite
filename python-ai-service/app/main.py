@@ -11,6 +11,13 @@ from app.api.routes import router
 from app.core.settings import get_settings
 from app.services.context_budget import ContextBudgetExceeded
 from app.core.deployment import ModelPolicyViolation
+from app.services.policy_crawler_service import (
+    PolicyCrawlerBlockedError,
+    PolicyCrawlerNetworkDisabledError,
+    PolicyCrawlerResponseError,
+    PolicyCrawlerTimeoutError,
+    PolicyCrawlerUrlError,
+)
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -73,6 +80,36 @@ async def handle_model_policy_violation(request: Request, exc: ModelPolicyViolat
             "usage": {},
             "errorCode": exc.code,
             "errorMessage": public_message,
+        },
+    )
+
+
+@app.exception_handler(PolicyCrawlerNetworkDisabledError)
+@app.exception_handler(PolicyCrawlerUrlError)
+@app.exception_handler(PolicyCrawlerResponseError)
+async def handle_policy_crawler_error(request: Request, exc: Exception):
+    if isinstance(exc, PolicyCrawlerNetworkDisabledError):
+        status_code, error_code, message = 503, "POLICY_CRAWLER_NETWORK_DISABLED", "政策爬虫网络访问未启用"
+    elif isinstance(exc, PolicyCrawlerUrlError) and "robots.txt" in str(exc):
+        status_code, error_code, message = 422, "POLICY_CRAWLER_ROBOTS_DENIED", "目标网站的 robots.txt 禁止抓取"
+    elif isinstance(exc, PolicyCrawlerUrlError):
+        status_code, error_code, message = 422, "POLICY_CRAWLER_URL_REJECTED", "目标地址不符合安全抓取规则"
+    elif isinstance(exc, PolicyCrawlerBlockedError):
+        status_code, error_code, message = 502, "POLICY_CRAWLER_TARGET_BLOCKED", "目标网站拒绝了抓取请求"
+    elif isinstance(exc, PolicyCrawlerTimeoutError):
+        status_code, error_code, message = 504, "POLICY_CRAWLER_TIMEOUT", "目标网站响应超时"
+    else:
+        status_code, error_code, message = 502, "POLICY_CRAWLER_INVALID_RESPONSE", "目标网站未返回可解析的 HTML 内容"
+    logger.warning("policy crawler request rejected path=%s code=%s", request.url.path, error_code)
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "success": False,
+            "traceId": uuid4().hex,
+            "data": None,
+            "usage": {},
+            "errorCode": error_code,
+            "errorMessage": message,
         },
     )
 

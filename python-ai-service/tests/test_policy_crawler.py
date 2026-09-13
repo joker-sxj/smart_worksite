@@ -1,5 +1,5 @@
 from app.core.settings import Settings
-from app.services.policy_crawler_service import PolicyCrawlerService
+from app.services.policy_crawler_service import PolicyCrawlerBlockedError, PolicyCrawlerService
 
 
 def crawler_settings(**overrides):
@@ -74,7 +74,7 @@ def test_policy_crawler_detects_target_site_block_page():
 
     try:
         service._ensure_usable_response(response)
-    except httpx.HTTPStatusError as exc:
+    except PolicyCrawlerBlockedError as exc:
         assert 'anti-bot' in str(exc)
     else:
         raise AssertionError('expected anti-bot HTTPStatusError')
@@ -231,6 +231,22 @@ def test_policy_crawler_pins_validated_dns_address_for_request(monkeypatch):
     asyncio.run(service._request_once(Client(), "https://public.example/policy"))
 
 
+def test_policy_crawler_prefers_ipv4_when_host_has_unreachable_ipv6(monkeypatch):
+    import socket
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [
+        (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2408:8614:e20::1:2", 443, 0, 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("27.223.1.56", 443)),
+    ])
+
+    service = PolicyCrawlerService(crawler_settings())
+
+    assert service._resolve_public_addresses("https://public.example/policy") == [
+        "27.223.1.56",
+        "2408:8614:e20::1:2",
+    ]
+
+
 def test_policy_crawler_checks_robots_and_redirect_targets(monkeypatch):
     import asyncio
     import httpx
@@ -282,6 +298,46 @@ def test_policy_crawler_fails_closed_when_robots_cannot_be_loaded(monkeypatch):
     service = PolicyCrawlerService(crawler_settings())
     async def unavailable(*args, **kwargs):
         raise httpx.ConnectError("robots unavailable")
+    monkeypatch.setattr(service, "_fetch", unavailable)
+    assert asyncio.run(service._robots_allowed(object(), "https://public.example/policy")) is False
+
+
+def test_policy_crawler_allows_robots_404_but_fails_closed_on_auth_errors(monkeypatch):
+    import asyncio
+    import httpx
+
+    async def response_for(status, **headers):
+        return httpx.Response(status, headers={"content-type": "text/plain", **headers}, content=b"", request=httpx.Request("GET", "https://public.example/robots.txt")), "https://public.example/robots.txt"
+
+    service = PolicyCrawlerService(crawler_settings())
+    monkeypatch.setattr(service, "_fetch", lambda *args, **kwargs: response_for(404))
+    assert asyncio.run(service._robots_allowed(object(), "https://public.example/policy")) is True
+
+    service = PolicyCrawlerService(crawler_settings())
+    monkeypatch.setattr(service, "_fetch", lambda *args, **kwargs: response_for(403))
+    assert asyncio.run(service._robots_allowed(object(), "https://public.example/policy")) is False
+
+
+def test_policy_crawler_allows_robots_410_as_missing_policy(monkeypatch):
+    import asyncio
+    import httpx
+
+    async def gone(*args, **kwargs):
+        return httpx.Response(410, headers={"content-type": "text/plain"}, content=b"", request=httpx.Request("GET", "https://public.example/robots.txt")), "https://public.example/robots.txt"
+
+    service = PolicyCrawlerService(crawler_settings())
+    monkeypatch.setattr(service, "_fetch", gone)
+    assert asyncio.run(service._robots_allowed(object(), "https://public.example/policy")) is True
+
+
+def test_policy_crawler_fails_closed_on_unexpected_robots_status(monkeypatch):
+    import asyncio
+    import httpx
+
+    async def unavailable(*args, **kwargs):
+        return httpx.Response(500, headers={"content-type": "text/plain"}, content=b"", request=httpx.Request("GET", "https://public.example/robots.txt")), "https://public.example/robots.txt"
+
+    service = PolicyCrawlerService(crawler_settings())
     monkeypatch.setattr(service, "_fetch", unavailable)
     assert asyncio.run(service._robots_allowed(object(), "https://public.example/policy")) is False
 

@@ -21,6 +21,8 @@ METADATA_IPS = {ipaddress.ip_address("169.254.169.254"), ipaddress.ip_address("1
 class PolicyCrawlerNetworkDisabledError(RuntimeError): pass
 class PolicyCrawlerUrlError(ValueError): pass
 class PolicyCrawlerResponseError(RuntimeError): pass
+class PolicyCrawlerBlockedError(PolicyCrawlerResponseError): pass
+class PolicyCrawlerTimeoutError(PolicyCrawlerResponseError): pass
 
 class _HtmlTextExtractor(HTMLParser):
     def __init__(self):
@@ -134,7 +136,9 @@ class PolicyCrawlerService:
             if not address.is_global: raise PolicyCrawlerUrlError("policy URL resolves to a private, loopback, link-local or reserved address")
             addresses.append(str(address))
         if not addresses: raise PolicyCrawlerUrlError("policy URL host cannot be resolved")
-        return sorted(addresses)
+        # Prefer IPv4 on dual-stack hosts; some enterprise networks advertise
+        # IPv6 but do not provide a usable route to the public site.
+        return sorted(addresses, key=lambda value: (":" in value, value))
 
     async def _request_once(self, client, url):
         """Resolve once, validate every answer, then connect to that exact IP to close DNS-rebinding TOCTOU."""
@@ -177,7 +181,10 @@ class PolicyCrawlerService:
             try:
                 await self._respect_interval(); response = await self._request_once(client, url)
                 if response.status_code not in RETRYABLE_STATUS or attempt == self.settings.policy_crawler_max_retries: return response
-            except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout):
+            except (httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
+                if attempt == self.settings.policy_crawler_max_retries:
+                    raise PolicyCrawlerTimeoutError("policy crawler target timed out") from exc
+            except httpx.ConnectError:
                 if attempt == self.settings.policy_crawler_max_retries: raise
             await asyncio.sleep(self.settings.policy_crawler_retry_backoff_seconds * (2 ** attempt))
         raise PolicyCrawlerResponseError("policy crawler request failed")
@@ -193,7 +200,12 @@ class PolicyCrawlerService:
             parser = RobotFileParser(); parser.set_url(f"{origin}/robots.txt")
             try:
                 response, _ = await self._fetch(client, parser.url, robots=True)
-                parser.parse(response.text.splitlines() if response.status_code == 200 else [])
+                if response.status_code == 200:
+                    parser.parse(response.text.splitlines())
+                elif response.status_code in {404, 410}:
+                    parser.allow_all = True
+                else:
+                    parser.disallow_all = True
             except (httpx.HTTPError, PolicyCrawlerUrlError, PolicyCrawlerResponseError):
                 parser.disallow_all = True
             self._robots[origin] = parser
@@ -205,7 +217,7 @@ class PolicyCrawlerService:
             raise PolicyCrawlerResponseError("policy crawler response size limit exceeded")
         if len(response.content) > self.settings.policy_crawler_max_response_bytes: raise PolicyCrawlerResponseError("policy crawler response size limit exceeded")
         if response.status_code in {401, 403} and _looks_like_blocked_page(response.text or ""):
-            raise httpx.HTTPStatusError("policy crawler was blocked by the target site anti-bot protection", request=response.request, response=response)
+            raise PolicyCrawlerBlockedError("policy crawler was blocked by the target site anti-bot protection")
         content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if content_type not in {"text/html", "application/xhtml+xml"}: raise PolicyCrawlerResponseError("policy crawler requires an HTML Content-Type")
         if response.status_code >= 400:
