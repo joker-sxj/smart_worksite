@@ -34,6 +34,8 @@ public interface OcrMapper {
     int updateRecordFields(@Param("recordId") Long recordId,
                            @Param("fieldsJson") String fieldsJson);
 
+    int confirmRecord(@Param("recordId") Long recordId, @Param("confirmedBy") Long confirmedBy);
+
     int insertFieldRevision(OcrFieldRevision revision);
 
     int markRecordDeleted(@Param("recordId") Long recordId);

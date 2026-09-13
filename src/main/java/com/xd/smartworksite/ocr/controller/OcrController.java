@@ -59,6 +59,12 @@ public class OcrController {
         return ApiResponse.success(ocrApplicationService.updateFields(recordId, request));
     }
 
+    @PostMapping("/records/{recordId}/confirm")
+    @PreAuthorize("hasAuthority('ocr:manage')")
+    public ApiResponse<OcrRecordResponse> confirm(@PathVariable Long recordId) {
+        return ApiResponse.success(ocrApplicationService.confirm(recordId));
+    }
+
     @PostMapping("/records/{recordId}/retry")
     public ApiResponse<OcrSubmitResponse> retry(@PathVariable Long recordId) {
         return ApiResponse.success(ocrApplicationService.retry(recordId));

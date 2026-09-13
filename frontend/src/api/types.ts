@@ -432,6 +432,9 @@ export interface OcrRecord {
   progress: number;
   fields: OcrField[];
   rawResult?: Record<string, unknown>;
+  manuallyConfirmed?: boolean;
+  confirmedBy?: ID;
+  confirmedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

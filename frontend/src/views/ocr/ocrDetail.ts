@@ -26,3 +26,8 @@ export function fieldReviewLabel(field: OcrField) {
   if (field.revised) return '已修订';
   return '自动识别';
 }
+
+export function canConfirmOcrRecord(record: OcrRecord) {
+  return ['SUCCESS', 'PARTIAL_SUCCESS'].includes(String(record.status || '').toUpperCase())
+    && !record.manuallyConfirmed;
+}

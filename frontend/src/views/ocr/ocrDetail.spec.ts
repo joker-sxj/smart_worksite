@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { confidenceLabel, fieldLocationLabel, fieldReviewLabel, ocrRuntimeMeta } from './ocrDetail';
+import { canConfirmOcrRecord, confidenceLabel, fieldLocationLabel, fieldReviewLabel, ocrRuntimeMeta } from './ocrDetail';
 
 describe('OCR detail metadata', () => {
   it('reads provider and semantic model metadata from the persisted summary', () => {
@@ -19,5 +19,12 @@ describe('OCR detail metadata', () => {
   it('prioritizes manual confirmation over the revised marker', () => {
     expect(fieldReviewLabel({ manualConfirmationRequired: true, revised: true } as any)).toBe('需人工确认');
     expect(fieldReviewLabel({ revised: true } as any)).toBe('已修订');
+  });
+
+  it('allows confirmation only for an unconfirmed terminal result', () => {
+    expect(canConfirmOcrRecord({ status: 'SUCCESS', manuallyConfirmed: false } as any)).toBe(true);
+    expect(canConfirmOcrRecord({ status: 'PARTIAL_SUCCESS', manuallyConfirmed: false } as any)).toBe(true);
+    expect(canConfirmOcrRecord({ status: 'PROCESSING', manuallyConfirmed: false } as any)).toBe(false);
+    expect(canConfirmOcrRecord({ status: 'SUCCESS', manuallyConfirmed: true } as any)).toBe(false);
   });
 });

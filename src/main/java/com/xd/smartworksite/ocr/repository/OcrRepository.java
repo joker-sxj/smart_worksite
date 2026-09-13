@@ -25,6 +25,8 @@ public interface OcrRepository {
 
     void updateRecordFields(Long recordId, String fieldsJson);
 
+    int confirmRecord(Long recordId, Long confirmedBy);
+
     void saveFieldRevision(OcrFieldRevision revision);
 
     void markRecordDeleted(Long recordId);

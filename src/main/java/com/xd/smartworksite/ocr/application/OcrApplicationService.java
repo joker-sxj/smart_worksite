@@ -215,6 +215,20 @@ public class OcrApplicationService {
         return customFieldValidator.parse(customFields);
     }
 
+    @Transactional
+    public OcrRecordResponse confirm(Long recordId) {
+        OcrRecord record = requireRecord(recordId);
+        if (!OcrStatus.SUCCESS.name().equals(record.getStatus())
+                && !OcrStatus.PARTIAL_SUCCESS.name().equals(record.getStatus())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "OCR识别尚未完成，暂不能确认");
+        }
+        Long userId = SecurityUtils.getCurrentUserId();
+        if (ocrRepository.confirmRecord(recordId, userId) != 1) {
+            throw new BusinessException(ErrorCode.CONFLICT, "OCR记录状态已变化，请刷新后重试");
+        }
+        return get(recordId);
+    }
+
     private OcrRecord requireRecord(Long recordId) {
         if (recordId == null) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "recordId is required");
@@ -286,6 +300,9 @@ public class OcrApplicationService {
         response.setFields(parseFields(root.get("fields"), maskSensitive));
         response.setRawResult(maskSensitive ? maskedResult(root) : root);
         response.setErrorMessage(record.getErrorMessage());
+        response.setManuallyConfirmed(Boolean.TRUE.equals(record.getManuallyConfirmed()));
+        response.setConfirmedBy(record.getConfirmedBy());
+        response.setConfirmedAt(record.getConfirmedAt());
         response.setCreatedAt(record.getCreatedAt());
         response.setUpdatedAt(record.getUpdatedAt());
         return response;

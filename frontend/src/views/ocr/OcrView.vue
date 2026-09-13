@@ -6,13 +6,13 @@ import AppTable from '../../components/common/AppTable.vue';
 import StatusTag from '../../components/common/StatusTag.vue';
 import EmptyState from '../../components/common/EmptyState.vue';
 import { fetchFileContent, fetchFileDetail } from '../../api/file';
-import { deleteOcrRecord, fetchOcrDownloadResult, fetchOcrRecord, fetchOcrRecords, fetchOcrTypes, retryOcrRecord, submitOcrRecord, updateOcrFields } from '../../api/ocr';
+import { confirmOcrRecord, deleteOcrRecord, fetchOcrDownloadResult, fetchOcrRecord, fetchOcrRecords, fetchOcrTypes, retryOcrRecord, submitOcrRecord, updateOcrFields } from '../../api/ocr';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, OcrRecord, OcrTypeTemplate } from '../../api/types';
 import { createOcrPreviewController } from './ocrPreview';
 import { normalizeCustomFields, serializeCustomFields, type OcrCustomField } from './ocrCustomFields';
-import { confidenceLabel, fieldLocationLabel, fieldReviewLabel, ocrRuntimeMeta } from './ocrDetail';
+import { canConfirmOcrRecord, confidenceLabel, fieldLocationLabel, fieldReviewLabel, ocrRuntimeMeta } from './ocrDetail';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -27,6 +27,7 @@ const total = ref(0);
 const retryingId = ref<ID | ''>('');
 const deletingId = ref<ID | ''>('');
 const downloadingId = ref<ID | ''>('');
+const confirming = ref(false);
 const OCR_TYPE_STORAGE_KEY = 'smart-worksite:ocr:type';
 const DEFAULT_OCR_TYPE = 'CUSTOM';
 function readStoredOcrType() {
@@ -103,6 +104,20 @@ function canDownloadRecord(item: OcrRecord) {
 
 function canSaveFields() {
   return Boolean(canManageOcr.value && record.value && ['SUCCESS', 'PARTIAL_SUCCESS'].includes(normalizeStatus(record.value.status)));
+}
+
+async function confirmResult() {
+  if (!record.value || !canManageOcr.value || !canConfirmOcrRecord(record.value)) return;
+  confirming.value = true;
+  try {
+    record.value = await confirmOcrRecord(record.value.recordId);
+    ElMessage.success('OCR 结果已人工确认');
+    await loadRecords();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'OCR 结果确认失败';
+  } finally {
+    confirming.value = false;
+  }
 }
 
 function ocrTypeLabel(type?: string) {
@@ -474,7 +489,10 @@ onUnmounted(() => {
       <el-card class="work-card" v-loading="loading || submitting">
         <div class="field-head">
           <h3 class="panel-title">识别字段</h3>
-          <el-button type="primary" :loading="loading" :disabled="!canSaveFields()" @click="saveFields">保存修订</el-button>
+          <div>
+            <el-button :loading="confirming" :disabled="!record || !canManageOcr || !canConfirmOcrRecord(record)" @click="confirmResult">{{ record?.manuallyConfirmed ? '已确认' : '确认结果' }}</el-button>
+            <el-button type="primary" :loading="loading" :disabled="!canSaveFields()" @click="saveFields">保存修订</el-button>
+          </div>
         </div>
         <EmptyState v-if="!record" description="暂无 OCR 记录，请上传文件后开始识别" />
         <template v-else>
@@ -482,6 +500,7 @@ onUnmounted(() => {
             <span>{{ ocrTypeLabel(record.ocrType) }}</span>
             <StatusTag :status="record.status" />
             <span>{{ record.updatedAt }}</span>
+            <el-tag v-if="record.manuallyConfirmed" type="success" size="small">人工已确认 {{ record.confirmedAt || '' }}</el-tag>
           </div>
           <div class="ocr-runtime-meta" role="status">
             <span><b>字符识别：</b>{{ runtimeMeta.provider || '未提供' }} / {{ runtimeMeta.model || '未提供' }}</span>
