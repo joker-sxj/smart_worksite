@@ -92,6 +92,7 @@ public class AiApplicationService {
     }
 
     private RagSearchResponse doSearchKnowledge(RagSearchRequest request) {
+        requireKnowledgeBases(request.getProjectId(), request.getKnowledgeBaseIds());
         AiProviderResponse response = pythonClient.post(properties.getPaths().getRagSearch(), "RAG_SEARCH", request.getProjectId(), request);
         RagSearchResponse result = pythonClient.convertData(response, RagSearchResponse.class);
         result.setProviderTraceId(response.getTraceId());
@@ -109,6 +110,7 @@ public class AiApplicationService {
     }
 
     private RagSearchResponse doSearchKnowledgeDynamic(RagSearchRequest request) {
+        requireKnowledgeBases(request.getProjectId(), request.getKnowledgeBaseIds());
         Map<String, Object> payload = pythonClient.toMap(request);
         payload.put("strategy", "HYBRID");
         payload.put("permissionScope", Map.of(
@@ -128,6 +130,7 @@ public class AiApplicationService {
     }
 
     public RagIndexResponse indexKnowledgeForSystem(RagIndexRequest request) {
+        requireKnowledgeBase(request.getProjectId(), request.getKnowledgeBaseId());
         AiProviderResponse response = pythonClient.post(properties.getPaths().getRagIndex(), "RAG_INDEX", request.getProjectId(), request);
         RagIndexResponse result = pythonClient.convertData(response, RagIndexResponse.class);
         result.setProviderTraceId(response.getTraceId());
@@ -168,6 +171,19 @@ public class AiApplicationService {
         ContextPrepareResponse result = pythonClient.convertData(response, ContextPrepareResponse.class);
         result.setProviderTraceId(response.getTraceId());
         return result;
+    }
+
+    private void requireKnowledgeBases(Long projectId, List<Long> knowledgeBaseIds) {
+        for (Long knowledgeBaseId : knowledgeBaseIds == null ? List.<Long>of() : knowledgeBaseIds) {
+            requireKnowledgeBase(projectId, knowledgeBaseId);
+        }
+    }
+
+    private void requireKnowledgeBase(Long projectId, Long knowledgeBaseId) {
+        if (knowledgeBaseId == null || !aiRepository.existsEnabledKnowledgeBase(projectId, knowledgeBaseId)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN,
+                    "knowledge base is not enabled in the requested project");
+        }
     }
 
     public ConversationResolveResponse resolveConversation(ConversationResolveRequest request) {

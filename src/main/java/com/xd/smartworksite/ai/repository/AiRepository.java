@@ -11,4 +11,6 @@ public interface AiRepository {
     List<ExternalCallLog> queryExternalCallLogs(Long projectId, List<Long> accessibleProjectIds, String serviceName, String callType, String status);
 
     DataSourceRecord findEnabledDataSource(Long projectId, Long dataSourceId);
+
+    boolean existsEnabledKnowledgeBase(Long projectId, Long knowledgeBaseId);
 }

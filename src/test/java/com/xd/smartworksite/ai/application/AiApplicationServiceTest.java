@@ -16,6 +16,7 @@ import com.xd.smartworksite.ai.dto.ModelInvokeRequest;
 import com.xd.smartworksite.ai.dto.ModelInvokeResponse;
 import com.xd.smartworksite.ai.dto.RagSearchRequest;
 import com.xd.smartworksite.ai.dto.RagSearchResponse;
+import com.xd.smartworksite.ai.dto.RagIndexRequest;
 import com.xd.smartworksite.ai.infra.AiProviderResponse;
 import com.xd.smartworksite.ai.infra.AiPythonServiceClient;
 import com.xd.smartworksite.ai.infra.AiPythonServiceProperties;
@@ -115,7 +116,8 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
-        AiApplicationService service = new AiApplicationService(properties, pythonClient, mock(AiRepository.class),
+        AiRepository aiRepository = mock(AiRepository.class);
+        AiApplicationService service = new AiApplicationService(properties, pythonClient, aiRepository,
                 mock(SafeSqlExecutor.class), projectAccess);
         AiProviderResponse providerResponse = new AiProviderResponse();
         providerResponse.setTraceId("dynamic-trace");
@@ -123,6 +125,7 @@ class AiApplicationServiceTest {
         converted.setEvidenceStatus("PARTIAL");
         when(pythonClient.toMap(any())).thenReturn(new LinkedHashMap<>(Map.of(
                 "projectId", 1L, "knowledgeBaseIds", List.of(10L))));
+        when(aiRepository.existsEnabledKnowledgeBase(1L, 10L)).thenReturn(true);
         when(pythonClient.postNoRetry(eq("/v1/rag/dynamic-search"), eq("RAG_DYNAMIC_SEARCH"),
                 eq(1L), any(), eq(50_000))).thenReturn(providerResponse);
         when(pythonClient.convertData(providerResponse, RagSearchResponse.class)).thenReturn(converted);
@@ -143,6 +146,24 @@ class AiApplicationServiceTest {
                             && List.of(10L).equals(scope.get("knowledgeBaseIds"));
                 }), eq(50_000));
         verify(pythonClient, never()).post(eq("/v1/rag/dynamic-search"), any(), any(), any());
+    }
+
+    @Test
+    void knowledgeIndexRejectsKnowledgeBaseOutsideRequestedProjectBeforeCallingPython() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        ProjectAccessApplicationService access = mock(ProjectAccessApplicationService.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, mock(SafeSqlExecutor.class), access);
+        RagIndexRequest request = new RagIndexRequest();
+        request.setProjectId(1L);
+        request.setKnowledgeBaseId(20L);
+
+        assertThatThrownBy(() -> service.indexKnowledge(request))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(ErrorCode.FORBIDDEN.getCode()));
+        verify(pythonClient, never()).post(any(), any(), any(), any());
     }
 
     @Test
@@ -496,6 +517,7 @@ class AiApplicationServiceTest {
         }
 
         @Override public DataSourceRecord findEnabledDataSource(Long projectId, Long dataSourceId) { return null; }
+        @Override public boolean existsEnabledKnowledgeBase(Long projectId, Long knowledgeBaseId) { return true; }
     }
 
     private static class InMemoryProjectRepository implements ProjectRepository {

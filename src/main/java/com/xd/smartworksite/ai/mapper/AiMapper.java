@@ -17,4 +17,7 @@ public interface AiMapper {
 
     DataSourceRecord selectDataSourceById(@Param("projectId") Long projectId,
                                            @Param("dataSourceId") Long dataSourceId);
+
+    int countEnabledKnowledgeBase(@Param("projectId") Long projectId,
+                                  @Param("knowledgeBaseId") Long knowledgeBaseId);
 }
