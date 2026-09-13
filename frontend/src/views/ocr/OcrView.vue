@@ -12,6 +12,7 @@ import { useUserStore } from '../../stores/user';
 import type { ID, OcrRecord, OcrTypeTemplate } from '../../api/types';
 import { createOcrPreviewController } from './ocrPreview';
 import { normalizeCustomFields, serializeCustomFields, type OcrCustomField } from './ocrCustomFields';
+import { confidenceLabel, fieldLocationLabel, fieldReviewLabel, ocrRuntimeMeta } from './ocrDetail';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -61,6 +62,7 @@ const query = reactive({ pageNo: 1, pageSize: 10, status: '', ocrType: '' });
 const currentProjectId = computed(() => projectStore.currentProject?.projectId);
 const canManageOcr = computed(() => userStore.hasPermission('ocr:manage'));
 const canSubmit = computed(() => Boolean(canManageOcr.value && currentProjectId.value && file.value && !submitting.value));
+const runtimeMeta = computed(() => record.value ? ocrRuntimeMeta(record.value) : { provider: '', model: '', semanticProvider: '', semanticModel: '' });
 const isPreviewImage = computed(() => Boolean(recordPreviewUrl.value ? recordPreviewIsImage.value : file.value?.type.startsWith('image/') && previewUrl.value));
 const activePreviewUrl = computed(() => recordPreviewUrl.value || previewUrl.value);
 const activePreviewName = computed(() => recordPreviewName.value || file.value?.name || '');
@@ -481,18 +483,30 @@ onUnmounted(() => {
             <StatusTag :status="record.status" />
             <span>{{ record.updatedAt }}</span>
           </div>
+          <div class="ocr-runtime-meta" role="status">
+            <span><b>字符识别：</b>{{ runtimeMeta.provider || '未提供' }} / {{ runtimeMeta.model || '未提供' }}</span>
+            <span><b>语义模型：</b>{{ runtimeMeta.semanticProvider || '未提供' }} / {{ runtimeMeta.semanticModel || '未提供' }}</span>
+          </div>
           <AppTable
             :data="record.fields"
             max-height="360"
             :columns="[
-              { prop: 'fieldName', label: '字段' },
-              { prop: 'fieldValue', label: '识别值', slot: 'fieldValue' }
+              { prop: 'fieldName', label: '字段', width: 110 },
+              { prop: 'fieldValue', label: '识别值', slot: 'fieldValue' },
+              { prop: 'confidence', label: '置信度', width: 100, slot: 'confidence' },
+              { prop: 'location', label: '位置', width: 140, slot: 'location' },
+              { prop: 'evidence', label: '证据', width: 180, slot: 'evidence' },
+              { prop: 'review', label: '状态', width: 110, slot: 'review' }
             ]"
           >
             <template #empty><EmptyState description="暂无识别字段" /></template>
             <template #fieldValue="{ row }">
               <el-input v-model="row.fieldValue" :disabled="!canSaveFields()" placeholder="可修订识别值" />
             </template>
+            <template #confidence="{ row }">{{ confidenceLabel(row.confidence) }}</template>
+            <template #location="{ row }">{{ fieldLocationLabel(row) }}</template>
+            <template #evidence="{ row }"><span class="evidence-text">{{ row.evidence || '未提供' }}</span></template>
+            <template #review="{ row }"><el-tag :type="row.manualConfirmationRequired ? 'warning' : row.revised ? 'success' : 'info'" size="small">{{ fieldReviewLabel(row) }}</el-tag></template>
           </AppTable>
         </template>
       </el-card>
@@ -506,7 +520,9 @@ onUnmounted(() => {
 .upload-title { margin: 4px 0 10px; font-weight: 700; }
 .preview { min-height: 220px; margin-top: 14px; padding: 8px; border: 1px dashed var(--sw-border); border-radius: 12px; display: grid; place-items: center; color: var(--sw-muted); background: #f8fafc; overflow: auto; }
 .preview img { display: block; max-width: 100%; max-height: 420px; width: auto; height: auto; object-fit: contain; }
-.ocr-record-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; color: var(--sw-muted); font-size: 13px; }
+.ocr-record-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; color: var(--sw-muted); font-size: 13px; }
+.ocr-runtime-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; padding: 9px 12px; border: 1px solid var(--sw-border); border-radius: 8px; background: #f8fafc; color: var(--sw-muted); font-size: 12px; }
+.evidence-text { display: block; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .field-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 @media (max-width: 768px) {
   .table-head { align-items: flex-start; flex-direction: column; }

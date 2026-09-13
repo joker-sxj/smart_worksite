@@ -418,6 +418,7 @@ export interface OcrField {
   pageNo?: number;
   evidence?: string;
   revised?: boolean;
+  manualConfirmationRequired?: boolean;
 }
 
 export interface OcrRecord {
@@ -430,6 +431,7 @@ export interface OcrRecord {
   status: Status;
   progress: number;
   fields: OcrField[];
+  rawResult?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
