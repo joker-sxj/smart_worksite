@@ -540,6 +540,8 @@ export interface DataSourceQueryResult {
   columns: string[];
   rows: Record<string, unknown>[];
   summary?: string;
+  warnings?: string[];
+  providerTraceId?: string;
 }
 
 export interface PolicySource {
