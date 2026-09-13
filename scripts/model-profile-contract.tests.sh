@@ -54,6 +54,11 @@ for profile in h100-fp8 a6000x2-bf16 a6000x2-production-32k a6000x2-stable-16k; 
   grep -Eq '^QWEN_VL_CONTAINER_ENDPOINT=http://local-llm:8000/v1/chat/completions$' "$repo_root/$file" || fail "$profile must route container-side vision to the local multimodal model"
   grep -Eq '^QWEN_EMBEDDING_BASE_URL=http://local-embedding:8000/v1$' "$repo_root/$file" || fail "$profile must route embeddings locally"
   grep -Eq '^QWEN_RERANK_BASE_URL=http://local-reranker:8000/v1/rerank$' "$repo_root/$file" || fail "$profile must route reranking locally"
+  [[ "$(load_profile_value "$file" QWEN_MODEL)" == "$(load_profile_value "$file" CHAT_MODEL_NAME)" ]] || fail "$profile chat served/client model names must match exactly"
+  [[ "$(load_profile_value "$file" QWEN_VL_MODEL)" == "$(load_profile_value "$file" CHAT_MODEL_NAME)" ]] || fail "$profile vision served/client model names must match exactly"
+  [[ "$(load_profile_value "$file" QWEN_EMBEDDING_MODEL)" == "$(load_profile_value "$file" EMBEDDING_MODEL_NAME)" ]] || fail "$profile embedding served/client model names must match exactly"
+  [[ "$(load_profile_value "$file" QWEN_RERANK_MODEL)" == "$(load_profile_value "$file" RERANK_MODEL_NAME)" ]] || fail "$profile rerank served/client model names must match exactly"
+  [[ "$(load_profile_value "$file" RERANK_MODEL_NAME)" == "smart-worksite-reranker" ]] || fail "$profile must use the canonical smart-worksite-reranker served name"
 done
 
 grep -Eq '^QWEN_VL_ENDPOINT=http://127\.0\.0\.1:18000/v1/chat/completions$' \
@@ -71,6 +76,11 @@ grep -Fq 'QWEN_VL_ENDPOINT: ${QWEN_VL_CONTAINER_ENDPOINT:-http://local-llm:8000/
 grep -Fq 'QWEN_RERANK_BASE_URL: ${QWEN_RERANK_BASE_URL:-http://local-reranker:8000/v1/rerank}' \
   "$repo_root/deploy/docker-compose-env.yml" \
   || fail 'The Python container reranker default must use the local-reranker service port 8000.'
+
+for key in QWEN_MODEL_REVISION QWEN_VL_MODEL_REVISION QWEN_EMBEDDING_MODEL_REVISION QWEN_RERANK_MODEL_REVISION; do
+  grep -Fq "${key}:" "$repo_root/deploy/docker-compose-env.yml" \
+    || fail "The Python container must receive $key for safe runtime provenance."
+done
 
 if ! bash -c 'set -euo pipefail; source "$1"; CHAT_HOST_PORT=19000; QWEN_VL_ENDPOINT=http://local-vlm:8000/v1/chat/completions; normalize_host_model_endpoints; [[ "$QWEN_VL_ENDPOINT" == http://127.0.0.1:19000/v1/chat/completions ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
   fail 'Lifecycle must migrate the legacy Docker-only vision endpoint for the host-side Java parser.'

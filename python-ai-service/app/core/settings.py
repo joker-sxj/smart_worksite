@@ -36,19 +36,23 @@ class Settings(BaseSettings):
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     qwen_api_key: str = ""
     qwen_model: str = "qwen-plus"
+    qwen_model_revision: str = ""
     qwen_vl_endpoint: str = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
     qwen_vl_api_key: str = ""
     qwen_vl_model: str = "qwen-vl-plus"
+    qwen_vl_model_revision: str = ""
     qwen_vl_timeout_seconds: int = 120
     qwen_vl_max_image_bytes: int = 10 * 1024 * 1024
     qwen_vl_max_tokens: int = 8192
     qwen_embedding_base_url: str = ""
     qwen_embedding_model: str = "text-embedding-v4"
+    qwen_embedding_model_revision: str = ""
     qwen_embedding_dimensions: int = 1024
     qwen_embedding_batch_size: int = 10
     qwen_embedding_max_input_chars: int = Field(default=6000, gt=0)
     qwen_rerank_base_url: str = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
     qwen_rerank_model: str = "qwen3-rerank"
+    qwen_rerank_model_revision: str = ""
     qwen_rerank_api_style: str = "LEGACY"
     qwen_rerank_instruct: str = "Given a web search query, retrieve relevant passages that answer the query."
     qwen_timeout_seconds: int = 120
@@ -163,6 +167,7 @@ class Settings(BaseSettings):
             name: {
                 "provider": descriptor["provider"],
                 "model": descriptor["model"],
+                "revision": descriptor["revision"],
                 "endpointScope": (
                     "LOCAL" if is_local_model_endpoint(str(descriptor["endpoint"])) else "REMOTE"
                 ),
@@ -175,21 +180,25 @@ class Settings(BaseSettings):
             "chat": {
                 "provider": "OPENAI_COMPATIBLE",
                 "model": self.qwen_model,
+                "revision": self.qwen_model_revision,
                 "endpoint": self.qwen_base_url,
             },
             "vision": {
                 "provider": "OPENAI_COMPATIBLE",
                 "model": self.qwen_vl_model,
+                "revision": self.qwen_vl_model_revision or self.qwen_model_revision,
                 "endpoint": self.qwen_vl_endpoint,
             },
             "embedding": {
                 "provider": self.embedding_provider,
                 "model": self.qwen_embedding_model,
+                "revision": self.qwen_embedding_model_revision,
                 "endpoint": self.qwen_embedding_base_url or self.qwen_base_url,
             },
             "rerank": {
                 "provider": self.rerank_provider,
                 "model": self.qwen_rerank_model,
+                "revision": self.qwen_rerank_model_revision,
                 "endpoint": self.qwen_rerank_base_url,
             },
         }

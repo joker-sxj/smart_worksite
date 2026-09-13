@@ -140,6 +140,7 @@ public class SystemStatusApplicationService {
                 model.setReachable(node.path("reachable").isBoolean() ? node.path("reachable").asBoolean() : null);
                 model.setProvider(node.path("provider").asText(null));
                 model.setModel(node.path("model").asText(null));
+                model.setRevision(node.path("revision").asText(null));
                 model.setEndpointScope(node.path("endpointScope").asText(null));
                 models.put(entry.getKey(), model);
             });

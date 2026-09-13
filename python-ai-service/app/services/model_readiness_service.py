@@ -60,6 +60,7 @@ class ModelReadinessService:
             "status": "NOT_PROBED_REMOTE",
             "provider": descriptor.get("provider"),
             "model": descriptor.get("model"),
+            "revision": descriptor.get("revision"),
             "endpointScope": scope,
         }
         if scope != "LOCAL":
