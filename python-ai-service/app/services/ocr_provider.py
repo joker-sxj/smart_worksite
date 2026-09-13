@@ -95,7 +95,7 @@ class PaddleOcrV5Provider:
         engine = self._engine()
         for source in sources:
             image = self._decode_image(source)
-            for result in engine.predict(image):
+            for result in engine.predict(self._predict_input(image)):
                 payload = result.json if hasattr(result, "json") else result
                 if callable(payload):
                     payload = payload()
@@ -114,6 +114,12 @@ class PaddleOcrV5Provider:
                     box = self._box(boxes[index]) if index < len(boxes) else None
                     lines.append(OcrTextLine(text, confidence, box))
         return OcrTextResult(self.provider_name, self.model, "\n".join(line.text for line in lines), lines)
+
+    @staticmethod
+    def _predict_input(image: Image.Image) -> Any:
+        import numpy as np
+
+        return np.asarray(image)
 
     def _decode_image(self, source: str) -> Image.Image:
         if not source.startswith("data:image/"):

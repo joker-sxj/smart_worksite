@@ -2,6 +2,7 @@ import base64
 from io import BytesIO
 
 from PIL import Image
+import numpy as np
 
 from app.services.ocr_provider import (
     OcrTextResult,
@@ -20,7 +21,8 @@ def _image_data_url() -> str:
 def test_paddle_provider_normalizes_predict_result_without_exposing_binary_content():
     class FakePaddle:
         def predict(self, source):
-            assert isinstance(source, Image.Image)
+            assert isinstance(source, np.ndarray)
+            assert source.shape == (8, 8, 3)
             return [{
                 "rec_texts": ["项目名称", "青特赫府"],
                 "rec_scores": [0.98, 0.91],
