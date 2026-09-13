@@ -8,7 +8,7 @@ import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-final class DocumentFormatDetector {
+public final class DocumentFormatDetector {
 
     private static final byte[] OLE2 = {(byte) 0xd0, (byte) 0xcf, 0x11, (byte) 0xe0,
             (byte) 0xa1, (byte) 0xb1, 0x1a, (byte) 0xe1};
@@ -16,7 +16,7 @@ final class DocumentFormatDetector {
     private DocumentFormatDetector() {
     }
 
-    static String detect(byte[] content) {
+    public static String detect(byte[] content) {
         if (startsWith(content, "%PDF-".getBytes())) return "pdf";
         if (startsWith(content, new byte[]{(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10})) return "png";
         if (startsWith(content, new byte[]{(byte) 0xff, (byte) 0xd8, (byte) 0xff})) return "jpg";

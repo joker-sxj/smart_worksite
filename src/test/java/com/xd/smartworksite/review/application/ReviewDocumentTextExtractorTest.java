@@ -6,13 +6,30 @@ import com.xd.smartworksite.file.domain.DocumentLocation;
 import com.xd.smartworksite.file.domain.PreparedDocument;
 import com.xd.smartworksite.file.infra.DocumentParser;
 import org.junit.jupiter.api.Test;
+import org.apache.poi.poifs.filesystem.POIFSFileSystem;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ReviewDocumentTextExtractorTest {
+
+    @Test
+    void legacyWordContentWithDocxNameDoesNotUseTheOoxmlReader() throws Exception {
+        byte[] oleWord;
+        try (POIFSFileSystem fileSystem = new POIFSFileSystem();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            fileSystem.getRoot().createDocument("WordDocument", new ByteArrayInputStream(new byte[]{1}));
+            fileSystem.writeFilesystem(output);
+            oleWord = output.toByteArray();
+        }
+        assertThat(new ReviewDocumentTextExtractor(List.of())
+                .resolveFormat("legacy.docx",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document", oleWord))
+                .isEqualTo("doc");
+    }
 
     @Test
     void delegatesPdfToSharedParserSoScannedPagesCanUseOcrFallback() {

@@ -1,5 +1,6 @@
 package com.xd.smartworksite.template.infra;
 
+import com.xd.smartworksite.file.infra.DocumentFormatDetector;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.ss.usermodel.Cell;
@@ -35,20 +36,33 @@ public class TemplateVariableScanner {
     private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{\\{\\s*(var_[a-z0-9_]+)\\s*\\}\\}");
 
     public List<String> scan(String fileName, InputStream inputStream) throws IOException {
-        String extension = TemplateFileSupport.extension(fileName);
-        if (!TemplateFileSupport.isSupported(fileName)) {
-            throw new IllegalArgumentException("unsupported template format: " + extension);
-        }
+        byte[] content = inputStream.readAllBytes();
+        String extension = resolveFormat(fileName, content);
 
         Set<String> variables = new LinkedHashSet<>();
         switch (extension) {
-            case "docx" -> scanDocx(inputStream, variables);
-            case "doc" -> scanDoc(inputStream, variables);
-            case "xls", "xlsx" -> scanWorkbook(inputStream, variables);
-            case "csv", "txt", "md" -> scanText(new String(inputStream.readAllBytes(), StandardCharsets.UTF_8), variables);
+            case "docx" -> scanDocx(new java.io.ByteArrayInputStream(content), variables);
+            case "doc" -> scanDoc(new java.io.ByteArrayInputStream(content), variables);
+            case "xls", "xlsx" -> scanWorkbook(new java.io.ByteArrayInputStream(content), variables);
+            case "csv", "txt", "md" -> scanText(new String(content, StandardCharsets.UTF_8), variables);
             default -> throw new IllegalArgumentException("unsupported template format: " + extension);
         }
         return new ArrayList<>(variables);
+    }
+
+    String resolveFormat(String fileName, byte[] content) {
+        String declared = TemplateFileSupport.extension(fileName);
+        String detected = DocumentFormatDetector.detect(content);
+        if (!"unknown".equals(detected)) {
+            if (!TemplateFileSupport.isSupportedExtension(detected)) {
+                throw new IllegalArgumentException("unsupported template format: " + detected);
+            }
+            return detected;
+        }
+        if (!TemplateFileSupport.isSupported(fileName)) {
+            throw new IllegalArgumentException("unsupported template format: " + declared);
+        }
+        return declared;
     }
 
     private void scanDocx(InputStream inputStream, Set<String> variables) throws IOException {

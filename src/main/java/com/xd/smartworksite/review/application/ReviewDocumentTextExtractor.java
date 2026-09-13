@@ -8,6 +8,7 @@ import com.xd.smartworksite.file.domain.FileObject;
 import com.xd.smartworksite.file.domain.PreparedDocument;
 import com.xd.smartworksite.file.infra.DocumentParser;
 import com.xd.smartworksite.file.infra.DocumentParserRegistry;
+import com.xd.smartworksite.file.infra.DocumentFormatDetector;
 import com.xd.smartworksite.file.infra.PdfDocumentParser;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.extractor.WordExtractor;
@@ -48,7 +49,7 @@ public class ReviewDocumentTextExtractor {
     private ExtractedText extractWithLimit(FileObjectContent content, int textLimit) {
         try (var inputStream = content.getInputStream()) {
             byte[] bytes = readAll(inputStream);
-            String ext = extension(content.getFileName());
+            String ext = resolveFormat(content.getFileName(), content.getContentType(), bytes);
             String contentType = normalizeContentType(content.getContentType());
             String text;
             boolean parserTruncated = false;
@@ -136,6 +137,19 @@ public class ReviewDocumentTextExtractor {
         }
         int dot = fileName.lastIndexOf('.');
         return dot < 0 ? "" : fileName.substring(dot + 1).toLowerCase(Locale.ROOT);
+    }
+
+    String resolveFormat(String fileName, String contentType, byte[] bytes) {
+        String detected = DocumentFormatDetector.detect(bytes);
+        if (!"unknown".equals(detected)) {
+            return detected;
+        }
+        String extension = extension(fileName);
+        String normalizedType = normalizeContentType(contentType);
+        if ("application/pdf".equals(normalizedType)) return "pdf";
+        if ("application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(normalizedType)) return "docx";
+        if ("application/msword".equals(normalizedType)) return "doc";
+        return extension;
     }
 
     private Map<String, Object> locationMap(com.xd.smartworksite.file.domain.DocumentLocation location) {
