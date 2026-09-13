@@ -24,7 +24,7 @@ async def lifespan(_: FastAPI):
     logger.info(
         "AI deployment configured mode=%s dependencies=%s",
         settings.ai_deployment_mode.value,
-        settings.ai_dependency_descriptors(),
+        settings.safe_ai_dependency_descriptors(),
     )
     yield
 

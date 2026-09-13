@@ -274,6 +274,14 @@ def test_dependency_descriptors_do_not_expose_keys():
     assert "vision-secret" not in str(descriptors)
 
 
+def test_startup_logging_uses_safe_dependency_descriptors():
+    startup = Path(__file__).resolve().parents[1] / "app" / "main.py"
+    source = startup.read_text(encoding="utf-8")
+
+    assert "settings.safe_ai_dependency_descriptors()" in source
+    assert "settings.ai_dependency_descriptors()," not in source
+
+
 def test_ready_exposes_sanitized_local_dependency_configuration():
     settings = local_settings(qwen_api_key="must-not-leak")
     app.dependency_overrides = {}
