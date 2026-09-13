@@ -85,6 +85,9 @@ class PaddleOcrV5Provider:
             "use_doc_orientation_classify": False,
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
+            # PaddlePaddle 3.3.1 oneDNN cannot execute the pinned PP-OCRv5
+            # model's PIR array attribute on CPU; the plain CPU executor can.
+            "enable_mkldnn": False,
             "device": self.device,
             "text_detection_model_dir": self.detection_model_dir,
             "text_recognition_model_dir": self.recognition_model_dir,

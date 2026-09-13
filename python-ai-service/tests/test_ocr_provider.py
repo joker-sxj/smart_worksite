@@ -91,3 +91,4 @@ def test_paddle_provider_selects_pp_ocrv5_model_names_for_local_directories(tmp_
     assert captured["text_recognition_model_dir"] == str(rec)
     assert captured["text_detection_model_name"] == "PP-OCRv5_server_det"
     assert captured["text_recognition_model_name"] == "PP-OCRv5_server_rec"
+    assert captured["enable_mkldnn"] is False
