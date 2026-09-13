@@ -17,6 +17,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ReviewDocumentTextExtractorTest {
 
     @Test
+    void extractsLegacyWordDocumentWhoseNameClaimsDocx() throws Exception {
+        byte[] bytes;
+        try (var input = getClass().getResourceAsStream("/review/legacy-word.doc")) {
+            bytes = input.readAllBytes();
+        }
+        FileObjectContent content = new FileObjectContent(1L, 1L, null, "legacy.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes.length,
+                new ByteArrayInputStream(bytes));
+
+        var result = new ReviewDocumentTextExtractor(List.of()).extractLong(content);
+
+        assertThat(result.text()).contains("Legacy review evidence");
+    }
+
+    @Test
     void legacyWordContentWithDocxNameDoesNotUseTheOoxmlReader() throws Exception {
         byte[] oleWord;
         try (POIFSFileSystem fileSystem = new POIFSFileSystem();
