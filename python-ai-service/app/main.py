@@ -13,6 +13,7 @@ from app.services.context_budget import ContextBudgetExceeded
 from app.core.deployment import ModelPolicyViolation
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("python-ai-service")
 
 
