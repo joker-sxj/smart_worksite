@@ -249,6 +249,8 @@ export interface ReviewRecord {
   taskId?: ID;
   fileId?: ID;
   templateId: ID;
+  templateName?: string;
+  templateVersion?: string;
   status: Status;
   issues: ReviewIssue[];
   result?: Record<string, unknown>;

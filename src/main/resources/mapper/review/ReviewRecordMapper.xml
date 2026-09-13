@@ -6,6 +6,8 @@
         <id property="id" column="id"/>
         <result property="projectId" column="project_id"/>
         <result property="templateId" column="template_id"/>
+        <result property="templateName" column="template_name"/>
+        <result property="templateVersion" column="template_version"/>
         <result property="fileId" column="file_id"/>
         <result property="taskId" column="task_id"/>
         <result property="status" column="status"/>
@@ -24,18 +26,18 @@
     </resultMap>
 
     <sql id="ReviewRecordColumns">
-        id, project_id, template_id, field_schema_id, field_schema_version, file_id, task_id, status, issues_json,
+        id, project_id, template_id, template_name, template_version, field_schema_id, field_schema_version, file_id, task_id, status, issues_json,
         result_json, input_fields_json, document_fields_json, result_fields_json,
         error_message, created_at, updated_at, created_by, updated_by
     </sql>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">
         insert into review_record (
-            project_id, template_id, field_schema_id, field_schema_version, file_id, task_id, status, issues_json,
+            project_id, template_id, template_name, template_version, field_schema_id, field_schema_version, file_id, task_id, status, issues_json,
             result_json, input_fields_json, document_fields_json, result_fields_json,
             error_message, created_by, updated_by
         ) values (
-            #{projectId}, #{templateId}, #{fieldSchemaId}, #{fieldSchemaVersion}, #{fileId}, #{taskId}, #{status}, #{issuesJson},
+            #{projectId}, #{templateId}, #{templateName}, #{templateVersion}, #{fieldSchemaId}, #{fieldSchemaVersion}, #{fileId}, #{taskId}, #{status}, #{issuesJson},
             #{resultJson}, #{inputFieldsJson}, #{documentFieldsJson}, #{resultFieldsJson},
             #{errorMessage}, #{createdBy}, #{updatedBy}
         )
@@ -105,6 +107,19 @@
             updated_by = #{updatedBy}
         where id = #{recordId}
           and status in ('PROCESSING', 'PARSING', 'RULES_READY', 'REVIEWING')
+          and deleted = 0
+    </update>
+
+    <update id="updateIssues">
+        update review_record
+        set issues_json = #{issuesJson},
+            result_json = #{resultJson},
+            document_fields_json = json_extract(#{resultJson}, '$.documentReviewFields'),
+            result_fields_json = json_extract(#{resultJson}, '$.resultReviewFields'),
+            error_message = null,
+            updated_by = #{updatedBy}
+        where id = #{recordId}
+          and status in ('PARTIAL_SUCCESS', 'COMPLETED')
           and deleted = 0
     </update>
 

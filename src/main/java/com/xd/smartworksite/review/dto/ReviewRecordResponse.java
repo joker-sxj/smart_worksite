@@ -11,6 +11,8 @@ public class ReviewRecordResponse {
     private Long recordId;
     private Long projectId;
     private Long templateId;
+    private String templateName;
+    private String templateVersion;
     private Long fileId;
     private Long taskId;
     private String status;
@@ -27,6 +29,10 @@ public class ReviewRecordResponse {
     public void setProjectId(Long projectId) { this.projectId = projectId; }
     public Long getTemplateId() { return templateId; }
     public void setTemplateId(Long templateId) { this.templateId = templateId; }
+    public String getTemplateName() { return templateName; }
+    public void setTemplateName(String templateName) { this.templateName = templateName; }
+    public String getTemplateVersion() { return templateVersion; }
+    public void setTemplateVersion(String templateVersion) { this.templateVersion = templateVersion; }
     public Long getFileId() { return fileId; }
     public void setFileId(Long fileId) { this.fileId = fileId; }
     public Long getTaskId() { return taskId; }

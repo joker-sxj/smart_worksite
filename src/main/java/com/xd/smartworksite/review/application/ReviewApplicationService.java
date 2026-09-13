@@ -139,6 +139,8 @@ public class ReviewApplicationService {
         ReviewRecord record = new ReviewRecord();
         record.setProjectId(request.getProjectId());
         record.setTemplateId(template.getTemplateId());
+        record.setTemplateName(template.getTemplateName());
+        record.setTemplateVersion(template.getVersionNo());
         if (schema != null) {
             record.setFieldSchemaId(schema.getId()); record.setFieldSchemaVersion(schema.getVersion());
             record.setInputFieldsJson(request.getFieldValues() == null ? "{}" : request.getFieldValues());
@@ -231,8 +233,8 @@ public class ReviewApplicationService {
     @Transactional
     public ReviewRecordResponse updateIssue(Long recordId, String issueId, ReviewIssueUpdateRequest request) {
         ReviewRecord record = requireRecordWritableAccess(recordId);
-        if (!ReviewStatus.COMPLETED.name().equals(record.getStatus())) {
-            throw new BusinessException(ErrorCode.CONFLICT, "only completed review record issues can be updated");
+        if (!List.of(ReviewStatus.COMPLETED.name(), ReviewStatus.PARTIAL_SUCCESS.name()).contains(record.getStatus())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "only completed or partially successful review record issues can be updated");
         }
         String normalizedIssueId = normalizeRequired(issueId, "issueId is required");
         String normalizedStatus = normalizeIssueStatus(request.getStatus());
@@ -250,7 +252,7 @@ public class ReviewApplicationService {
         }
         Map<String, Object> result = readMap(record.getResultJson());
         result.put("issues", issues);
-        int updated = reviewRecordRepository.markCompleted(recordId, writeJson(issues), writeJson(result), SecurityUtils.getCurrentUserId());
+        int updated = reviewRecordRepository.updateIssues(recordId, writeJson(issues), writeJson(result), SecurityUtils.getCurrentUserId());
         if (updated == 0) {
             throw new BusinessException(ErrorCode.CONFLICT, "review issue update failed");
         }
@@ -716,6 +718,8 @@ public class ReviewApplicationService {
         response.setRecordId(record.getId());
         response.setProjectId(record.getProjectId());
         response.setTemplateId(record.getTemplateId());
+        response.setTemplateName(record.getTemplateName());
+        response.setTemplateVersion(record.getTemplateVersion());
         response.setFileId(record.getFileId());
         response.setTaskId(record.getTaskId());
         response.setStatus(record.getStatus());

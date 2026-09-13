@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
+import { canUpdateReviewIssues, isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
 
 describe('review polling', () => {
   it('treats partial success as a terminal downloadable review result', () => {
@@ -10,6 +10,12 @@ describe('review polling', () => {
     expect(isReviewTerminal({ status: 'COMPLETED' } as never)).toBe(true);
     expect(isReviewTerminal({ status: 'FAILED' } as never)).toBe(true);
     expect(isReviewTerminal({ status: 'PROCESSING' } as never)).toBe(false);
+  });
+
+  it('keeps issues actionable for completed and partially successful reviews', () => {
+    expect(canUpdateReviewIssues('COMPLETED')).toBe(true);
+    expect(canUpdateReviewIssues('PARTIAL_SUCCESS')).toBe(true);
+    expect(canUpdateReviewIssues('FAILED')).toBe(false);
   });
 
   it('isolates persisted records by project', () => {

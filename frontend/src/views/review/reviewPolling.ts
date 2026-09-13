@@ -18,6 +18,10 @@ export function isReviewTerminal(record: Pick<ReviewRecord, 'status'>) {
   return TERMINAL_STATUSES.has(String(record.status).toUpperCase());
 }
 
+export function canUpdateReviewIssues(status?: string) {
+  return ['COMPLETED', 'PARTIAL_SUCCESS'].includes(String(status || '').toUpperCase());
+}
+
 export function reviewStorageKey(projectId: ID) {
   return `${STORAGE_PREFIX}${projectId}`;
 }

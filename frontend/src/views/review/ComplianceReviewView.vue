@@ -14,7 +14,7 @@ import { fetchKnowledgeBases, fetchKnowledgeDocuments } from '../../api/knowledg
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, KnowledgeDocument, ReviewField, ReviewFieldSchema, ReviewRecord, ReviewTemplate, TaskStageLog } from '../../api/types';
-import { isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
+import { canUpdateReviewIssues, isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
 import { exceedsReviewReferenceLimit } from './reviewSubmission';
 
 const router = useRouter();
@@ -65,7 +65,7 @@ function goTemplates() {
   router.push({ path: '/templates', query: { category: 'REVIEW', action: 'upload' } });
 }
 function progressOf(record: ReviewRecord) { return progressFromReviewState(record, logs.value); }
-function canUpdateIssue(record: ReviewRecord | null) { return canManageReview.value && record?.status === 'COMPLETED'; }
+function canUpdateIssue(record: ReviewRecord | null) { return canManageReview.value && canUpdateReviewIssues(record?.status); }
 
 function stopRecordPolling() {
   if (recordPollTimer) clearTimeout(recordPollTimer);
@@ -334,6 +334,7 @@ onUnmounted(stopRecordPolling);
     <template v-else-if="currentRecord">
       <el-card class="work-card">
         <h3 class="panel-title">{{ t('审查进度') }}</h3>
+        <p class="template-snapshot">审查模板：{{ currentRecord.templateName || `ID ${currentRecord.templateId}` }} · 版本 {{ currentRecord.templateVersion || '未记录' }}</p>
         <el-alert v-if="currentRecord.status === 'FAILED'" :title="currentRecord.errorMessage || t('审查失败，未生成结果。')" type="error" show-icon :closable="false" style="margin-bottom: 12px" />
         <TaskProgress :percentage="progressOf(currentRecord)" :status="currentRecord.status" :logs="logs" />
       </el-card>
@@ -401,6 +402,7 @@ onUnmounted(stopRecordPolling);
 .optional-upload { margin-top: 16px; }
 .reference-meta { float: right; margin-left: 20px; color: var(--sw-muted); }
 .reference-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.template-snapshot { margin: -4px 0 12px; color: var(--sw-muted); font-size: 13px; }
 .evidence-card { margin-top: 16px; }
 .schema-editor { margin: 18px 0; }
 .schema-row { display: grid; grid-template-columns: 1.2fr 1.2fr 1fr 1fr auto auto auto; gap: 8px; margin-bottom: 10px; align-items: center; }

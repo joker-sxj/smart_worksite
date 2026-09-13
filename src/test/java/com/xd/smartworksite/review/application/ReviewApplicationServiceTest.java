@@ -73,6 +73,7 @@ class ReviewApplicationServiceTest {
         when(fileService.openFileContent(99L, 1L, null)).thenReturn(new FileObjectContent(99L, 1L, null, "plan.pdf", "application/pdf", 7L, java.io.InputStream.nullInputStream()));
         TemplateApplicationService templateService = mock(TemplateApplicationService.class);
         when(templateService.getTemplate(10L)).thenReturn(template(10L, 1L, "REVIEW", "ENABLED"));
+        when(templateService.getTemplateForSystem(10L)).thenReturn(template(10L, 1L, "REVIEW", "ENABLED"));
         when(templateService.getTemplate(20L)).thenReturn(template(20L, 2L, "REVIEW", "ENABLED"));
         when(templateService.getTemplate(30L)).thenReturn(template(30L, 1L, "REPORT", "ENABLED"));
         service = new ReviewApplicationService(
@@ -96,6 +97,8 @@ class ReviewApplicationServiceTest {
         var response = service.submitReview(submitRequest(1L, 10L));
 
         assertThat(response.getStatus()).isEqualTo("COMPLETED");
+        assertThat(response.getTemplateName()).isEqualTo("review-template");
+        assertThat(response.getTemplateVersion()).isEqualTo("v-test");
         assertThat(response.getIssues()).singleElement().satisfies(issue -> {
             assertThat(issue.get("issueId")).isEqualTo("ISSUE-001");
             assertThat(issue.get("status")).isEqualTo("OPEN");
@@ -214,6 +217,21 @@ class ReviewApplicationServiceTest {
     }
 
     @Test
+    void updateIssueAllowsPartialSuccessBecauseItsIssuesAreActionable() {
+        var response = service.submitReview(submitRequest(1L, 10L));
+        reviewRecordRepository.findById(response.getRecordId()).orElseThrow().setStatus("PARTIAL_SUCCESS");
+        ReviewIssueUpdateRequest request = new ReviewIssueUpdateRequest();
+        request.setStatus("PROCESSING");
+
+        var updated = service.updateIssue(response.getRecordId(), "ISSUE-001", request);
+
+        assertThat(updated.getIssues()).singleElement()
+                .extracting(issue -> issue.get("status"))
+                .isEqualTo("PROCESSING");
+        assertThat(updated.getStatus()).isEqualTo("PARTIAL_SUCCESS");
+    }
+
+    @Test
     void allRuleFailuresKeepReviewFailedInsteadOfCompleted() {
         String status = ReflectionTestUtils.invokeMethod(service, "finalStatus", java.util.Map.of("finalStatus", "FAILED"));
 
@@ -318,6 +336,7 @@ class ReviewApplicationServiceTest {
         response.setTemplateCategory(category);
         response.setTemplateName("review-template");
         response.setTemplateType("SAFETY");
+        response.setVersionNo("v-test");
         response.setStatus(status);
         return response;
     }
@@ -422,12 +441,23 @@ class ReviewApplicationServiceTest {
 
         @Override
         public int markCompleted(Long recordId, String issuesJson, String resultJson, Long updatedBy) {
-            return findById(recordId).filter(record -> "PROCESSING".equals(record.getStatus()) || "COMPLETED".equals(record.getStatus()))
+            return findById(recordId).filter(record -> List.of("PROCESSING", "COMPLETED", "PARTIAL_SUCCESS").contains(record.getStatus()))
                     .map(record -> {
                         record.setStatus("COMPLETED");
                         record.setIssuesJson(issuesJson);
                         record.setResultJson(resultJson);
                         record.setErrorMessage(null);
+                        record.setUpdatedBy(updatedBy);
+                        return 1;
+                    }).orElse(0);
+        }
+
+        @Override
+        public int updateIssues(Long recordId, String issuesJson, String resultJson, Long updatedBy) {
+            return findById(recordId).filter(record -> List.of("COMPLETED", "PARTIAL_SUCCESS").contains(record.getStatus()))
+                    .map(record -> {
+                        record.setIssuesJson(issuesJson);
+                        record.setResultJson(resultJson);
                         record.setUpdatedBy(updatedBy);
                         return 1;
                     }).orElse(0);
