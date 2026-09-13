@@ -71,7 +71,7 @@ def test_paddle_readiness_requires_both_offline_model_directories(monkeypatch, t
     status = ocr_provider_status()
 
     assert status["status"] == "NOT_READY"
-    assert status["activeProvider"] == "QWEN_VL"
+    assert status["activeProvider"] == "NONE"
 
 
 def test_paddle_provider_selects_pp_ocrv5_model_names_for_local_directories(tmp_path):
@@ -105,6 +105,7 @@ def test_build_provider_reuses_engine_holder_for_same_runtime_configuration(monk
     monkeypatch.setenv("OCR_PADDLE_DET_MODEL_DIR", str(det))
     monkeypatch.setenv("OCR_PADDLE_REC_MODEL_DIR", str(rec))
     monkeypatch.setattr("app.services.ocr_provider.PaddleOcrV5Provider.available", staticmethod(lambda: True))
+    monkeypatch.setattr("app.services.ocr_provider.PaddleOcrV5Provider._engine", lambda self: object())
     clear_ocr_provider_cache()
 
     first = build_ocr_provider()
@@ -147,6 +148,8 @@ def test_auto_readiness_reports_paddle_when_local_models_are_available(monkeypat
     monkeypatch.setenv("OCR_PADDLE_DET_MODEL_DIR", str(det))
     monkeypatch.setenv("OCR_PADDLE_REC_MODEL_DIR", str(rec))
     monkeypatch.setattr("app.services.ocr_provider.PaddleOcrV5Provider.available", staticmethod(lambda: True))
+    monkeypatch.setattr("app.services.ocr_provider.PaddleOcrV5Provider._engine", lambda self: object())
+    clear_ocr_provider_cache()
 
     status = ocr_provider_status()
 
@@ -165,6 +168,51 @@ def test_paddle_readiness_rejects_empty_model_directories(monkeypatch, tmp_path)
     monkeypatch.setattr("app.services.ocr_provider.PaddleOcrV5Provider.available", staticmethod(lambda: True))
 
     assert ocr_provider_status()["status"] == "NOT_READY"
+
+
+def test_paddle_readiness_fails_closed_when_engine_initialization_fails(monkeypatch, tmp_path):
+    det = tmp_path / "det"
+    rec = tmp_path / "rec"
+    _write_model_fixture(det, "PP-OCRv5_server_det")
+    _write_model_fixture(rec, "PP-OCRv5_server_rec")
+    monkeypatch.setenv("OCR_PROVIDER", "PP_OCRV5")
+    monkeypatch.setenv("OCR_PADDLE_DET_MODEL_DIR", str(det))
+    monkeypatch.setenv("OCR_PADDLE_REC_MODEL_DIR", str(rec))
+    monkeypatch.setattr("app.services.ocr_provider.PaddleOcrV5Provider.available", staticmethod(lambda: True))
+    monkeypatch.setattr(
+        "app.services.ocr_provider.PaddleOcrV5Provider._engine",
+        lambda self: (_ for _ in ()).throw(RuntimeError("native runtime failed at /secret/path")),
+    )
+    clear_ocr_provider_cache()
+
+    status = ocr_provider_status()
+
+    assert status["status"] == "NOT_READY"
+    assert status["activeProvider"] == "NONE"
+    assert "error" not in status
+
+
+def test_paddle_readiness_reuses_initialized_engine(monkeypatch, tmp_path):
+    det = tmp_path / "det"
+    rec = tmp_path / "rec"
+    _write_model_fixture(det, "PP-OCRv5_server_det")
+    _write_model_fixture(rec, "PP-OCRv5_server_rec")
+    monkeypatch.setenv("OCR_PROVIDER", "PP_OCRV5")
+    monkeypatch.setenv("OCR_PADDLE_DET_MODEL_DIR", str(det))
+    monkeypatch.setenv("OCR_PADDLE_REC_MODEL_DIR", str(rec))
+    monkeypatch.setattr("app.services.ocr_provider.PaddleOcrV5Provider.available", staticmethod(lambda: True))
+    calls = []
+
+    def initialize(self):
+        calls.append(self)
+        return object()
+
+    monkeypatch.setattr("app.services.ocr_provider.PaddleOcrV5Provider._engine", initialize)
+    clear_ocr_provider_cache()
+
+    assert ocr_provider_status()["status"] == "READY"
+    assert ocr_provider_status()["status"] == "READY"
+    assert len(calls) == 1
 
 
 def _write_model_fixture(path, model_name):

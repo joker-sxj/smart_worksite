@@ -195,6 +195,7 @@ def _build_ocr_provider_cached(mode: str, det_dir: str, rec_dir: str, device: st
 
 def clear_ocr_provider_cache() -> None:
     _build_ocr_provider_cached.cache_clear()
+    _paddle_runtime_ready.cache_clear()
 
 
 def ocr_provider_status() -> dict[str, Any]:
@@ -217,15 +218,34 @@ def ocr_provider_status() -> dict[str, Any]:
     paddle_selected = mode in {"PP_OCRV5", "PADDLE", "PADDLEOCR"} or (
         mode == "AUTO" and dependency_ready and models_ready
     )
+    runtime_ready = (
+        _paddle_runtime_ready(mode, det_dir, rec_dir, os.getenv("OCR_PADDLE_DEVICE", "cpu"))
+        if paddle_selected and dependency_ready and models_ready
+        else False
+    )
+    paddle_ready = paddle_selected and dependency_ready and models_ready and runtime_ready
+    explicit_paddle = mode in {"PP_OCRV5", "PADDLE", "PADDLEOCR"}
     return {
         "configuredProvider": "PADDLE_OCRV5" if paddle_selected else mode,
-        "activeProvider": "PADDLE_OCRV5" if paddle_selected and dependency_ready and models_ready else "QWEN_VL",
+        "activeProvider": "PADDLE_OCRV5" if paddle_ready else ("NONE" if explicit_paddle else "QWEN_VL"),
         "model": "PP-OCRv5" if paddle_selected else "Qwen vision semantic OCR",
         "dependencyReady": dependency_ready,
         "modelsReady": models_ready if paddle_selected else True,
         "device": os.getenv("OCR_PADDLE_DEVICE", "cpu") if paddle_selected else "model-service",
-        "status": "READY" if not paddle_selected or (dependency_ready and models_ready) else "NOT_READY",
+        "status": "READY" if not paddle_selected or paddle_ready else "NOT_READY",
     }
+
+
+@lru_cache(maxsize=4)
+def _paddle_runtime_ready(mode: str, det_dir: str, rec_dir: str, device: str) -> bool:
+    try:
+        provider = _build_ocr_provider_cached(mode, det_dir, rec_dir, device)
+        if not isinstance(provider, PaddleOcrV5Provider):
+            return False
+        provider._engine()
+        return True
+    except Exception:
+        return False
 
 
 def _offline_models_ready(det_dir: str, rec_dir: str) -> bool:
