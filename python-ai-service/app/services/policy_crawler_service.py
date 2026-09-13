@@ -229,8 +229,12 @@ class PolicyCrawlerService:
 
     def _extract_article_links(self, html, base_url):
         extractor = _LinkExtractor(base_url); extractor.feed(html); seen = set(); links = []
+        base = urlparse(base_url)
         for url, title in extractor.links:
-            normalized = urlunparse(urlparse(url)._replace(fragment=""))
+            parsed = urlparse(url)
+            if base.scheme == "https" and parsed.scheme == "http" and parsed.hostname == base.hostname:
+                parsed = parsed._replace(scheme="https")
+            normalized = urlunparse(parsed._replace(fragment=""))
             if normalized not in seen and _looks_like_article_url(normalized): seen.add(normalized); links.append((normalized, title[:256]))
         return links
 

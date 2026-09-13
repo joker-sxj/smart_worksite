@@ -277,6 +277,17 @@ def test_policy_crawler_deduplicates_links_and_limits_articles():
     assert links[:service.settings.policy_crawler_max_articles] == [("https://public.example/2026/a.html", "A")]
 
 
+def test_policy_crawler_upgrades_same_host_article_links_to_source_https():
+    service = PolicyCrawlerService(crawler_settings())
+
+    links = service._extract_article_links(
+        '<a href="http://public.example/2026/a.html">A</a>',
+        "https://public.example/news/",
+    )
+
+    assert links == [("https://public.example/2026/a.html", "A")]
+
+
 def test_policy_crawler_reports_partial_article_failures(monkeypatch):
     import asyncio
 
