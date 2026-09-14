@@ -68,3 +68,5 @@ Supported OCR types are `ID_CARD`, `LICENSE_PLATE`, `INVOICE`, and `CUSTOM`. Con
 ## Policy Crawler
 
 Policy/news HTML extraction is available at `POST /v1/policy/crawl`. Java sends the project ID, source ID, URL, and optional last crawl time. The Python service downloads public HTML, removes common page noise, extracts title, content, publish date, and policy number, then returns structured articles. It does not write Java databases, MinIO, or vector stores directly; Java owns persistence, external-call logs, and RAG indexing.
+
+Production network access is deny-by-default (`POLICY_CRAWLER_NETWORK_ENABLED=false`). When enabled, the crawler validates and pins public DNS addresses for every source, redirect, and article request; blocks private/loopback/link-local/metadata/non-HTTP targets; honors `robots.txt`; uses an identifiable user agent and request interval; and enforces bounded redirects, retries, concurrency, article count, response bytes, and total duration. A target such as Zhihu may still return an explicit anti-bot failure; the crawler does not bypass access controls.

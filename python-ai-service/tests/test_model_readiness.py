@@ -11,12 +11,16 @@ def local_settings(**overrides):
         "ai_deployment_mode": "LOCAL_ONLY",
         "qwen_base_url": "http://local-llm:8000/v1",
         "qwen_model": "smart-worksite-chat",
+        "qwen_model_revision": "1111111111111111111111111111111111111111",
         "qwen_vl_endpoint": "http://local-llm:8000/v1/chat/completions",
         "qwen_vl_model": "smart-worksite-chat",
+        "qwen_vl_model_revision": "1111111111111111111111111111111111111111",
         "qwen_embedding_base_url": "http://local-embedding:8000/v1",
         "qwen_embedding_model": "smart-worksite-embedding",
+        "qwen_embedding_model_revision": "2222222222222222222222222222222222222222",
         "qwen_rerank_base_url": "http://local-reranker:8000/v1/rerank",
         "qwen_rerank_model": "smart-worksite-reranker",
+        "qwen_rerank_model_revision": "3333333333333333333333333333333333333333",
         "model_profile_name": "a6000x2-stable-16k",
         "chat_max_model_len": 16384,
         "context_output_reserve_tokens": 3072,
@@ -49,6 +53,10 @@ def test_model_readiness_reports_reachable_models_without_endpoint_or_secrets():
     }
     assert all(item["configured"] and item["reachable"] for item in result["dependencies"].values())
     assert all(item["endpointScope"] == "LOCAL" for item in result["dependencies"].values())
+    assert result["dependencies"]["chat"]["revision"] == "1111111111111111111111111111111111111111"
+    assert result["dependencies"]["vision"]["revision"] == "1111111111111111111111111111111111111111"
+    assert result["dependencies"]["embedding"]["revision"] == "2222222222222222222222222222222222222222"
+    assert result["dependencies"]["rerank"]["revision"] == "3333333333333333333333333333333333333333"
     assert "http://" not in str(result)
     assert "secret" not in str(result)
 

@@ -29,4 +29,9 @@ public class MyBatisAiRepository implements AiRepository {
     public DataSourceRecord findEnabledDataSource(Long projectId, Long dataSourceId) {
         return aiMapper.selectDataSourceById(projectId, dataSourceId);
     }
+
+    @Override
+    public boolean existsEnabledKnowledgeBase(Long projectId, Long knowledgeBaseId) {
+        return aiMapper.countEnabledKnowledgeBase(projectId, knowledgeBaseId) > 0;
+    }
 }

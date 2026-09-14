@@ -50,6 +50,7 @@ public class SystemDependencyHealthResponse {
         private Boolean reachable;
         private String provider;
         private String model;
+        private String revision;
         private String endpointScope;
 
         public String getStatus() { return status; }
@@ -62,6 +63,8 @@ public class SystemDependencyHealthResponse {
         public void setProvider(String provider) { this.provider = provider; }
         public String getModel() { return model; }
         public void setModel(String model) { this.model = model; }
+        public String getRevision() { return revision; }
+        public void setRevision(String revision) { this.revision = revision; }
         public String getEndpointScope() { return endpointScope; }
         public void setEndpointScope(String endpointScope) { this.endpointScope = endpointScope; }
     }

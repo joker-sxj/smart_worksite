@@ -65,4 +65,42 @@ class ReportStructuredContentRendererTest {
                     .anyMatch(text -> text.contains("未返回可用于统计的记录"));
         }
     }
+
+    @Test
+    void skipsMisleadingChartForTechnicalOnlyData() throws Exception {
+        StructuredReportTable table = new StructuredReportTable(
+                List.of("variable_id", "generation_status"),
+                List.of(Map.of("variable_id", 49, "generation_status", "PROCESSING")),
+                1, false, "数据源 1");
+        ReportStatistics statistics = new ReportStatistics(1, 1,
+                Map.of("generation_status", Map.of("PROCESSING", 1)), Map.of(), Map.of("variable_id", 49d));
+        StructuredReportSection section = new StructuredReportSection(
+                "var_risk", "风险统计", "", table, statistics, "没有有效风险数据", false, null);
+
+        try (XWPFDocument document = new XWPFDocument()) {
+            new ReportStructuredContentRenderer().append(document, List.of(section));
+
+            assertThat(document.getAllPictures()).isEmpty();
+            assertThat(document.getParagraphs().stream().map(p -> p.getText()).toList())
+                    .anyMatch(text -> text.contains("未生成业务图表"));
+        }
+    }
+
+    @Test
+    void embedsReadableBusinessChartWithDescriptiveCaption() throws Exception {
+        StructuredReportTable table = new StructuredReportTable(
+                List.of("risk_level"), List.of(Map.of("risk_level", "一级")), 1, false, "数据源 8");
+        ReportStatistics statistics = new ReportStatistics(1, 1,
+                Map.of("risk_level", Map.of("一级", 1)), Map.of(), Map.of());
+        StructuredReportSection section = new StructuredReportSection(
+                "var_risk", "风险统计", "", table, statistics, "一级风险1条", false, null);
+
+        try (XWPFDocument document = new XWPFDocument()) {
+            new ReportStructuredContentRenderer().append(document, List.of(section));
+
+            assertThat(document.getAllPictures()).hasSize(1);
+            assertThat(document.getParagraphs().stream().map(p -> p.getText()).toList())
+                    .anyMatch(text -> text.contains("风险等级分布") && text.contains("数据源 8"));
+        }
+    }
 }

@@ -71,4 +71,13 @@
           and status = 'ENABLED'
           and deleted = 0
     </select>
+
+    <select id="countEnabledKnowledgeBase" resultType="int">
+        select count(1)
+        from knowledge_base
+        where id = #{knowledgeBaseId}
+          and project_id = #{projectId}
+          and status = 'ENABLED'
+          and deleted = 0
+    </select>
 </mapper>

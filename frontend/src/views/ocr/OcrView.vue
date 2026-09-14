@@ -6,12 +6,13 @@ import AppTable from '../../components/common/AppTable.vue';
 import StatusTag from '../../components/common/StatusTag.vue';
 import EmptyState from '../../components/common/EmptyState.vue';
 import { fetchFileContent, fetchFileDetail } from '../../api/file';
-import { deleteOcrRecord, fetchOcrDownloadResult, fetchOcrRecord, fetchOcrRecords, fetchOcrTypes, retryOcrRecord, submitOcrRecord, updateOcrFields } from '../../api/ocr';
+import { confirmOcrRecord, deleteOcrRecord, fetchOcrDownloadResult, fetchOcrRecord, fetchOcrRecords, fetchOcrTypes, retryOcrRecord, submitOcrRecord, updateOcrFields } from '../../api/ocr';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, OcrRecord, OcrTypeTemplate } from '../../api/types';
 import { createOcrPreviewController } from './ocrPreview';
 import { normalizeCustomFields, serializeCustomFields, type OcrCustomField } from './ocrCustomFields';
+import { canConfirmOcrRecord, confidenceLabel, fieldLocationLabel, fieldReviewLabel, invoiceItems, invoiceValidation, ocrRuntimeMeta } from './ocrDetail';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -26,6 +27,7 @@ const total = ref(0);
 const retryingId = ref<ID | ''>('');
 const deletingId = ref<ID | ''>('');
 const downloadingId = ref<ID | ''>('');
+const confirming = ref(false);
 const OCR_TYPE_STORAGE_KEY = 'smart-worksite:ocr:type';
 const DEFAULT_OCR_TYPE = 'CUSTOM';
 function readStoredOcrType() {
@@ -61,6 +63,9 @@ const query = reactive({ pageNo: 1, pageSize: 10, status: '', ocrType: '' });
 const currentProjectId = computed(() => projectStore.currentProject?.projectId);
 const canManageOcr = computed(() => userStore.hasPermission('ocr:manage'));
 const canSubmit = computed(() => Boolean(canManageOcr.value && currentProjectId.value && file.value && !submitting.value));
+const runtimeMeta = computed(() => record.value ? ocrRuntimeMeta(record.value) : { provider: '', model: '', semanticProvider: '', semanticModel: '' });
+const activeInvoiceItems = computed(() => record.value ? invoiceItems(record.value) : []);
+const activeInvoiceValidation = computed(() => record.value ? invoiceValidation(record.value) : {});
 const isPreviewImage = computed(() => Boolean(recordPreviewUrl.value ? recordPreviewIsImage.value : file.value?.type.startsWith('image/') && previewUrl.value));
 const activePreviewUrl = computed(() => recordPreviewUrl.value || previewUrl.value);
 const activePreviewName = computed(() => recordPreviewName.value || file.value?.name || '');
@@ -68,6 +73,10 @@ const fallbackOcrTypes = [
   { label: '身份证识别', value: 'ID_CARD' },
   { label: '车牌识别', value: 'LICENSE_PLATE' },
   { label: '发票识别', value: 'INVOICE' },
+  { label: '护照识别', value: 'PASSPORT' },
+  { label: '港澳台通行证识别', value: 'TRAVEL_PERMIT' },
+  { label: '五星卡识别', value: 'FIVE_STAR_CARD' },
+  { label: '合同关键字段识别', value: 'CONTRACT' },
   { label: '自定义字段识别', value: 'CUSTOM' }
 ];
 const ocrTypeOptions = computed(() => {
@@ -101,6 +110,20 @@ function canDownloadRecord(item: OcrRecord) {
 
 function canSaveFields() {
   return Boolean(canManageOcr.value && record.value && ['SUCCESS', 'PARTIAL_SUCCESS'].includes(normalizeStatus(record.value.status)));
+}
+
+async function confirmResult() {
+  if (!record.value || !canManageOcr.value || !canConfirmOcrRecord(record.value)) return;
+  confirming.value = true;
+  try {
+    record.value = await confirmOcrRecord(record.value.recordId);
+    ElMessage.success('OCR 结果已人工确认');
+    await loadRecords();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'OCR 结果确认失败';
+  } finally {
+    confirming.value = false;
+  }
 }
 
 function ocrTypeLabel(type?: string) {
@@ -472,7 +495,10 @@ onUnmounted(() => {
       <el-card class="work-card" v-loading="loading || submitting">
         <div class="field-head">
           <h3 class="panel-title">识别字段</h3>
-          <el-button type="primary" :loading="loading" :disabled="!canSaveFields()" @click="saveFields">保存修订</el-button>
+          <div>
+            <el-button :loading="confirming" :disabled="!record || !canManageOcr || !canConfirmOcrRecord(record)" @click="confirmResult">{{ record?.manuallyConfirmed ? '已确认' : '确认结果' }}</el-button>
+            <el-button type="primary" :loading="loading" :disabled="!canSaveFields()" @click="saveFields">保存修订</el-button>
+          </div>
         </div>
         <EmptyState v-if="!record" description="暂无 OCR 记录，请上传文件后开始识别" />
         <template v-else>
@@ -480,20 +506,63 @@ onUnmounted(() => {
             <span>{{ ocrTypeLabel(record.ocrType) }}</span>
             <StatusTag :status="record.status" />
             <span>{{ record.updatedAt }}</span>
+            <el-tag v-if="record.manuallyConfirmed" type="success" size="small">人工已确认 {{ record.confirmedAt || '' }}</el-tag>
+          </div>
+          <div class="ocr-runtime-meta" role="status">
+            <span><b>字符识别：</b>{{ runtimeMeta.provider || '未提供' }} / {{ runtimeMeta.model || '未提供' }}</span>
+            <span><b>语义模型：</b>{{ runtimeMeta.semanticProvider || '未提供' }} / {{ runtimeMeta.semanticModel || '未提供' }}</span>
           </div>
           <AppTable
             :data="record.fields"
             max-height="360"
             :columns="[
-              { prop: 'fieldName', label: '字段' },
-              { prop: 'fieldValue', label: '识别值', slot: 'fieldValue' }
+              { prop: 'fieldName', label: '字段', width: 110 },
+              { prop: 'fieldValue', label: '识别值', slot: 'fieldValue' },
+              { prop: 'confidence', label: '置信度', width: 100, slot: 'confidence' },
+              { prop: 'location', label: '位置', width: 140, slot: 'location' },
+              { prop: 'evidence', label: '证据', width: 180, slot: 'evidence' },
+              { prop: 'review', label: '状态', width: 110, slot: 'review' }
             ]"
           >
             <template #empty><EmptyState description="暂无识别字段" /></template>
             <template #fieldValue="{ row }">
               <el-input v-model="row.fieldValue" :disabled="!canSaveFields()" placeholder="可修订识别值" />
             </template>
+            <template #confidence="{ row }">{{ confidenceLabel(row.confidence) }}</template>
+            <template #location="{ row }">{{ fieldLocationLabel(row) }}</template>
+            <template #evidence="{ row }"><span class="evidence-text">{{ row.evidence || '未提供' }}</span></template>
+            <template #review="{ row }"><el-tag :type="row.manualConfirmationRequired ? 'warning' : row.revised ? 'success' : 'info'" size="small">{{ fieldReviewLabel(row) }}</el-tag></template>
           </AppTable>
+          <div v-if="record.ocrType === 'INVOICE'" class="invoice-details">
+            <div class="invoice-detail-head">
+              <h4>发票明细</h4>
+              <div class="invoice-checks">
+                <el-tag :type="activeInvoiceValidation.itemAmountsConsistent === false ? 'danger' : 'success'" size="small">
+                  明细金额{{ activeInvoiceValidation.itemAmountsConsistent === false ? '不一致' : activeInvoiceValidation.itemAmountsConsistent === true ? '一致' : '未校验' }}
+                </el-tag>
+                <el-tag :type="activeInvoiceValidation.itemTaxConsistent === false ? 'danger' : 'success'" size="small">
+                  明细税额{{ activeInvoiceValidation.itemTaxConsistent === false ? '不一致' : activeInvoiceValidation.itemTaxConsistent === true ? '一致' : '未校验' }}
+                </el-tag>
+                <el-tag v-if="activeInvoiceValidation.itemsTruncated" type="warning" size="small">仅展示前 50 条</el-tag>
+              </div>
+            </div>
+            <AppTable
+              :data="activeInvoiceItems"
+              max-height="300"
+              :columns="[
+                { prop: 'name', label: '项目名称', width: 180 },
+                { prop: 'specification', label: '规格型号', width: 120 },
+                { prop: 'unit', label: '单位', width: 70 },
+                { prop: 'quantity', label: '数量', width: 90 },
+                { prop: 'unitPrice', label: '单价', width: 100 },
+                { prop: 'amount', label: '金额', width: 100 },
+                { prop: 'taxRate', label: '税率', width: 80 },
+                { prop: 'taxAmount', label: '税额', width: 100 }
+              ]"
+            >
+              <template #empty><EmptyState description="未识别到发票明细" /></template>
+            </AppTable>
+          </div>
         </template>
       </el-card>
     </div>
@@ -506,8 +575,14 @@ onUnmounted(() => {
 .upload-title { margin: 4px 0 10px; font-weight: 700; }
 .preview { min-height: 220px; margin-top: 14px; padding: 8px; border: 1px dashed var(--sw-border); border-radius: 12px; display: grid; place-items: center; color: var(--sw-muted); background: #f8fafc; overflow: auto; }
 .preview img { display: block; max-width: 100%; max-height: 420px; width: auto; height: auto; object-fit: contain; }
-.ocr-record-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; color: var(--sw-muted); font-size: 13px; }
+.ocr-record-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; color: var(--sw-muted); font-size: 13px; }
+.ocr-runtime-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; padding: 9px 12px; border: 1px solid var(--sw-border); border-radius: 8px; background: #f8fafc; color: var(--sw-muted); font-size: 12px; }
+.evidence-text { display: block; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .field-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.invoice-details { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--sw-border); }
+.invoice-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.invoice-detail-head h4 { margin: 0; }
+.invoice-checks { display: flex; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 768px) {
   .table-head { align-items: flex-start; flex-direction: column; }
 }

@@ -22,6 +22,8 @@ public interface ReviewRecordRepository {
 
     int markCompleted(Long recordId, String issuesJson, String resultJson, Long updatedBy);
 
+    int updateIssues(Long recordId, String issuesJson, String resultJson, Long updatedBy);
+
     default int markFinished(Long recordId, String status, String issuesJson, String resultJson, Long updatedBy) {
         return "COMPLETED".equals(status) ? markCompleted(recordId, issuesJson, resultJson, updatedBy) : 0;
     }

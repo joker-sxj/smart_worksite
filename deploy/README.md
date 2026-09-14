@@ -47,8 +47,10 @@ AI_ACCESS_LOG=false
 ```bash
 docker compose -f docker-compose-env.yml --env-file .env down
 docker compose -f docker-compose-env.yml --env-file .env up -d --build
-docker inspect -f '{{json .HostConfig.LogConfig}}' smart-worksite-python-ai-service
+docker inspect -f '{{json .HostConfig.LogConfig}}' "$(docker compose -f docker-compose-env.yml --env-file .env ps -q python-ai-service)"
 ```
+
+生产部署固定使用 Compose 项目名 `deploy`，以继续挂载现有 `deploy_*` 命名卷。不要在既有环境使用 `-p` 或 `COMPOSE_PROJECT_NAME` 切换项目名；这不会迁移数据，只会创建另一组卷。启动脚本发现其他项目遗留的 `smart-worksite-*` 固定名容器时会安全中止，不会自动停止或删除；应先用 `docker inspect` 核对其 Compose 标签、端口和挂载卷，再由运维人员决定迁移。
 
 ## 停止服务
 
@@ -112,6 +114,10 @@ license 复核记录或客户双 RTX A6000 性能报告；权重 checksum、lice
 性能结论必须按治理文档的取证命令补齐，不能由模型名称或 Profile 推测。
 
 当前固定推理镜像为 `vllm/vllm-openai:v0.27.1-cu129`，配置文件同时固定 Docker Hub manifest digest。vLLM 容器启用受支持的数据中心/专业显卡 CUDA Forward Compatibility。启动脚本不会仅凭驱动版本假定兼容：它会先检查驱动下限，再通过临时的 `docker run --rm --gpus all` 容器实测 NVIDIA Container Toolkit。随后启动的 vLLM 容器及模型健康检查才是所选 CUDA 12.9 推理镜像的最终兼容性门禁。任一环节失败都会在启动 Java 和前端前终止，并提示升级驱动或改用经验证的推理镜像。
+
+模型 profile 还必须引用 `deploy/model-manifests/` 下独立的逐文件 SHA-256 清单，并将 `MODEL_ARTIFACT_STATUS` 标记为 `VERIFIED`。使用 `./scripts/generate-model-artifact-manifest.sh PROFILE` 可在已预加载、已审查的缓存上生成清单；生成和验证容器均禁止网络，缓存与校验脚本只读挂载，模型运行容器也只读挂载 Hugging Face 缓存。每次启动会读取并哈希全部登记文件，当前 H100 制品约 37.4 GiB，因此会增加磁盘 I/O 和恢复时间。
+
+仓库内 H100 清单的 `provenance.type=LOCAL_CACHE_BASELINE` 且 `upstreamSignatureVerified=false`，只证明“当前缓存之后未偏离已审查基线”，不证明上游来源签名、授权或法律合规。三个 A6000 profile 明确为 `PENDING_CUSTOMER_CACHE`，在客户 BF16 制品预加载、生成独立清单并人工复核前会拒绝启动；禁止复制 H100 FP8 清单或将状态直接改为 `VERIFIED`。
 
 ### Linux 启动
 

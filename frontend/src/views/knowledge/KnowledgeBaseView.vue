@@ -6,7 +6,7 @@ import AppTable from '../../components/common/AppTable.vue';
 import StatusTag from '../../components/common/StatusTag.vue';
 import EmptyState from '../../components/common/EmptyState.vue';
 import { createKnowledgeBase, deleteKnowledgeBase, deleteKnowledgeDocument, disableKnowledgeBase, enableKnowledgeBase, fetchKnowledgeBaseDetail, fetchKnowledgeBases, fetchKnowledgeDocumentDetail, fetchKnowledgeDocuments, triggerDocumentIndex, updateKnowledgeBase, uploadKnowledgeDocument } from '../../api/knowledge';
-import { createFileParse, fetchLatestFileParseRecord, fetchLatestSuccessfulFileParseRecord, type FileParseRecord } from '../../api/file';
+import { createFileParse, downloadByFileId, fetchFileDownloadUrl, fetchFileParseContent, fetchFilePreviewUrl, fetchLatestFileParseRecord, fetchLatestSuccessfulFileParseRecord, type FileParseRecord } from '../../api/file';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, KnowledgeBase, KnowledgeDocument } from '../../api/types';
@@ -14,6 +14,7 @@ import { createFileParsePolling } from '../file/fileParsePolling';
 import { fileParseStatusText } from '../file/fileParseStatus';
 import { fileExtension, isParseableFileName, parseTargetFormatForFileName } from '../file/supportedFileParse';
 import { documentParseActionText, documentParseRecord, documentProcessingMessage, isDocumentParseReady, isKnowledgeDocumentIndexReady, isParseableKnowledgeDocument, knowledgeDocumentParseTargetFormat, setDocumentParseRecord, type DocumentParseRecords } from './knowledgeDocumentParseState';
+import { buildDocumentDetailView, selectSuccessfulContentRecord, type DocumentDetailView } from './knowledgeDocumentDetail';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -31,6 +32,8 @@ const dialogVisible = ref(false);
 const detailDrawerVisible = ref(false);
 const detailLoading = ref(false);
 const selectedDocument = ref<KnowledgeDocument | null>(null);
+const documentDetail = ref<DocumentDetailView | null>(null);
+const detailError = ref('');
 const selectedFiles = ref<File[]>([]);
 const indexingId = ref<ID>('');
 const parsingId = ref<ID>('');
@@ -246,12 +249,56 @@ async function openDocumentDetail(row: KnowledgeDocument) {
   detailDrawerVisible.value = true;
   detailLoading.value = true;
   selectedDocument.value = null;
+  documentDetail.value = null;
+  detailError.value = '';
   try {
-    selectedDocument.value = await fetchKnowledgeDocumentDetail(row.documentId);
+    const document = await fetchKnowledgeDocumentDetail(row.documentId);
+    selectedDocument.value = document;
+    let parseRecord: FileParseRecord | undefined;
+    let parseContent;
+    let previewUrl: string | undefined;
+    let downloadUrl: string | undefined;
+    if (document.fileId) {
+      try {
+        parseRecord = await fetchLatestFileParseRecord(document.fileId, document.projectId);
+        let contentRecord = selectSuccessfulContentRecord(parseRecord);
+        if (!contentRecord) {
+          const latestSuccessful = await fetchLatestSuccessfulFileParseRecord(document.fileId, document.projectId).catch(() => undefined);
+          contentRecord = selectSuccessfulContentRecord(parseRecord, latestSuccessful);
+        }
+        if (contentRecord) {
+          parseContent = await fetchFileParseContent(contentRecord.recordId);
+        }
+      } catch (err) {
+        detailError.value = err instanceof Error ? `解析详情加载失败：${err.message}` : '解析详情加载失败';
+      }
+      const [previewAccess, downloadAccess] = await Promise.all([
+        fetchFilePreviewUrl(document.fileId).catch(() => null),
+        fetchFileDownloadUrl(document.fileId).catch(() => null)
+      ]);
+      previewUrl = previewAccess?.url;
+      downloadUrl = downloadAccess?.url;
+    }
+    documentDetail.value = buildDocumentDetailView(document, parseRecord, parseContent, { preview: previewUrl, download: downloadUrl });
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '知识文档详情加载失败');
   } finally {
     detailLoading.value = false;
+  }
+}
+
+function previewOriginalFile() {
+  if (!documentDetail.value?.previewUrl) return ElMessage.warning('当前文件不支持在线预览或预览地址不可用');
+  window.open(documentDetail.value.previewUrl, '_blank', 'noopener,noreferrer');
+}
+
+async function downloadOriginalFile() {
+  const document = selectedDocument.value;
+  if (!document?.fileId) return ElMessage.warning('文档缺少 fileId，无法下载');
+  try {
+    await downloadByFileId(document.fileId, document.title);
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? `文件下载失败：${err.message}` : '文件下载失败');
   }
 }
 
@@ -350,20 +397,59 @@ onUnmounted(() => { stopDocsAutoRefresh(); parsePolling.stop(); });
       <el-card class="work-card"><h3 class="panel-title">文档处理状态</h3><el-alert v-if="docsError" :title="docsError" type="error" show-icon :closable="false" style="margin-bottom: 12px" /><AppTable :loading="docsLoading" :data="docs" :columns="[{ prop: 'title', label: '文档名称' }, { prop: 'sourceType', label: '来源类型', width: 120 }, { prop: 'parseStatus', label: '解析状态', slot: 'parseStatus', width: 110 }, { prop: 'indexStatus', label: '入库状态', slot: 'index', width: 110 }, { prop: 'errorMessage', label: '说明' }, { prop: 'createdAt', label: '创建时间', width: 180 }]"><template #empty><EmptyState description="暂无知识库文档，可先上传项目资料。" /></template><template #parseStatus="{ row }"><StatusTag :status="latestParse(row)?.status" :text="parseStatusText(row)" /></template><template #index="{ row }"><StatusTag :status="row.indexStatus" /></template><el-table-column label="操作" width="350"><template #default="{ row }"><el-button link type="primary" @click="openDocumentDetail(row)">详情</el-button><el-tooltip :disabled="canStartParse(row)" :content="parseDisabledReason(row)"><span><el-button link type="primary" :loading="String(parsingId) === String(row.documentId)" :disabled="!canStartParse(row)" @click="handleParse(row)">{{ parseActionText(row) }}</el-button></span></el-tooltip><el-button link type="primary" :loading="String(indexingId) === String(row.documentId)" :disabled="!canSubmitIndex(row)" @click="handleIndex(row)">{{ indexActionText(row) }}</el-button><el-button v-if="canManageKnowledge" link type="danger" @click="removeDocument(row)">删除</el-button></template></el-table-column></AppTable><template v-for="row in docs" :key="`processing-${row.documentId}`"><p v-if="processingMessage(row)" class="muted">{{ row.title }}：{{ processingMessage(row) }}</p></template></el-card>
     </template>
     <el-dialog v-model="dialogVisible" :title="form.knowledgeBaseId ? '编辑知识库' : '新建知识库'" width="520px"><el-form label-width="96px"><el-form-item label="知识库名称" required><el-input v-model="form.name" placeholder="请输入知识库名称" /></el-form-item><el-form-item label="领域"><el-input v-model="form.domain" placeholder="如 SAFETY、QUALITY" /></el-form-item><el-form-item label="描述"><el-input v-model="form.description" type="textarea" placeholder="请输入知识库描述" /></el-form-item></el-form><template #footer><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" :loading="creating" @click="submitCreate">保存</el-button></template></el-dialog>
-    <el-drawer v-model="detailDrawerVisible" title="知识文档详情" size="520px">
+    <el-drawer v-model="detailDrawerVisible" title="知识文档详情" size="min(760px, 92vw)">
       <div v-loading="detailLoading">
-        <EmptyState v-if="!selectedDocument" description="暂无文档详情。" />
-        <el-descriptions v-else :column="1" border>
-          <el-descriptions-item label="文档ID">{{ selectedDocument.documentId }}</el-descriptions-item>
-          <el-descriptions-item label="文件ID">{{ selectedDocument.fileId || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="标题">{{ selectedDocument.title }}</el-descriptions-item>
-          <el-descriptions-item label="来源">{{ selectedDocument.sourceType || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="解析状态"><StatusTag :status="latestParse(selectedDocument)?.status" :text="parseStatusText(selectedDocument)" /></el-descriptions-item>
-          <el-descriptions-item label="入库状态"><StatusTag :status="selectedDocument.indexStatus" /></el-descriptions-item>
-          <el-descriptions-item label="任务ID">{{ selectedDocument.taskId || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="错误信息">{{ selectedDocument.errorMessage || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="更新时间">{{ selectedDocument.updatedAt }}</el-descriptions-item>
+        <el-alert v-if="detailError" :title="detailError" type="warning" show-icon :closable="false" class="detail-section" />
+        <EmptyState v-if="!documentDetail" description="暂无文档详情。" />
+        <template v-else>
+        <div class="detail-actions">
+          <el-button :disabled="!documentDetail.previewUrl" @click="previewOriginalFile">预览原文件</el-button>
+          <el-button type="primary" :disabled="!documentDetail.downloadUrl" @click="downloadOriginalFile">下载原文件</el-button>
+        </div>
+        <el-descriptions :column="1" border class="detail-section">
+          <el-descriptions-item label="文档ID">{{ documentDetail.document.documentId }}</el-descriptions-item>
+          <el-descriptions-item label="文件ID">{{ documentDetail.document.fileId || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="标题">{{ documentDetail.document.title }}</el-descriptions-item>
+          <el-descriptions-item label="来源">{{ documentDetail.document.sourceType || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="文件格式">{{ documentDetail.fileFormat }}</el-descriptions-item>
+          <el-descriptions-item label="Content-Type">{{ documentDetail.contentType }}</el-descriptions-item>
+          <el-descriptions-item label="解析状态"><StatusTag :status="documentDetail.parseRecord?.status" :text="documentDetail.parseRecord ? fileParseStatusText(documentDetail.parseRecord.status) : '未解析'" /></el-descriptions-item>
+          <el-descriptions-item label="入库状态"><StatusTag :status="documentDetail.document.indexStatus" /></el-descriptions-item>
+          <el-descriptions-item label="任务ID">{{ documentDetail.document.taskId || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="创建时间">{{ documentDetail.document.createdAt || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="更新时间">{{ documentDetail.document.updatedAt || '-' }}</el-descriptions-item>
         </el-descriptions>
+        <h3 class="detail-heading">最新解析记录</h3>
+        <el-descriptions :column="1" border class="detail-section">
+          <el-descriptions-item label="解析记录ID">{{ documentDetail.parseRecord?.recordId || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="解析器 Provider">{{ documentDetail.parserProvider }}</el-descriptions-item>
+          <el-descriptions-item label="解析器 Model">{{ documentDetail.parserModel }}</el-descriptions-item>
+          <el-descriptions-item label="结果格式">{{ documentDetail.resultFormat }}</el-descriptions-item>
+          <el-descriptions-item label="进度 / 阶段">{{ documentDetail.parseRecord?.progress ?? '-' }}% / {{ documentDetail.parseRecord?.currentStage || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="开始时间">{{ documentDetail.parseRecord?.startedAt || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="结束时间">{{ documentDetail.parseRecord?.finishedAt || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="记录创建时间">{{ documentDetail.parseRecord?.createdAt || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="记录更新时间">{{ documentDetail.parseRecord?.updatedAt || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="错误信息">{{ documentDetail.parseRecord?.errorMessage || documentDetail.document.errorMessage || '-' }}</el-descriptions-item>
+        </el-descriptions>
+        <h3 class="detail-heading">格式识别</h3>
+        <el-descriptions :column="1" border class="detail-section">
+          <el-descriptions-item label="有效格式">{{ documentDetail.metadata.formats.effective || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="声明格式">{{ documentDetail.metadata.formats.declared || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="检测格式">{{ documentDetail.metadata.formats.detected || '-' }}</el-descriptions-item>
+        </el-descriptions>
+        <h3 class="detail-heading">内容预览</h3>
+        <pre class="content-preview">{{ documentDetail.contentPreview || '暂无成功解析内容。' }}</pre>
+        <p v-if="documentDetail.contentTruncated" class="muted">正文较长，当前仅展示前 6000 个字符。</p>
+        <h3 class="detail-heading">结构块摘要 <small v-if="documentDetail.metadata.totalBlocks">（展示 {{ documentDetail.metadata.blocks.length }} / {{ documentDetail.metadata.totalBlocks }}）</small></h3>
+        <el-table v-if="documentDetail.metadata.blocks.length" :data="documentDetail.metadata.blocks" border size="small">
+          <el-table-column prop="blockId" label="Block" width="130" show-overflow-tooltip />
+          <el-table-column prop="type" label="类型" width="90" />
+          <el-table-column prop="location" label="位置" min-width="150" show-overflow-tooltip />
+          <el-table-column prop="summary" label="摘要" min-width="220" show-overflow-tooltip />
+        </el-table>
+        <EmptyState v-else description="解析元数据中暂无结构块。" />
+        </template>
       </div>
     </el-drawer>
   </div>
@@ -377,4 +463,9 @@ onUnmounted(() => { stopDocsAutoRefresh(); parsePolling.stop(); });
 .base-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .panel-title { margin: 0 0 12px; font-size: 16px; }
 .upload-title { margin: 0 0 10px; font-weight: 700; }
+.detail-actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
+.detail-section { margin-bottom: 18px; }
+.detail-heading { margin: 18px 0 10px; font-size: 15px; }
+.detail-heading small { color: var(--sw-muted); font-weight: 400; }
+.content-preview { max-height: 320px; overflow: auto; margin: 0; padding: 14px; border: 1px solid var(--sw-border); border-radius: 8px; background: #f7f9fc; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.65 "Microsoft YaHei", sans-serif; }
 </style>

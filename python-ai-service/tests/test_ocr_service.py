@@ -6,6 +6,7 @@ from PIL import Image
 
 from app.models.schemas import OcrFilePayload, OcrRecognizeRequest
 from app.services.ocr_service import OcrService
+import pytest
 
 
 def _image_url() -> str:
@@ -52,6 +53,77 @@ def test_id_card_dual_pass_marks_conflicting_field_for_manual_confirmation():
     assert data.fields[0].manualConfirmationRequired is True
     assert data.extras["dualPass"]["conflicts"] == ["name"]
     assert usage["ocrPasses"] == 2
+
+
+def test_id_card_validates_checksum_and_birth_date_consistency():
+    raw = {
+        "ocrType": "ID_CARD",
+        "confidence": 0.96,
+        "fields": [
+            {"fieldKey": "birthDate", "fieldName": "出生日期", "fieldValue": "1949年12月31日", "confidence": 0.96},
+            {"fieldKey": "idNumber", "fieldName": "身份证号", "fieldValue": "110105 19491231 002x", "confidence": 0.96},
+        ],
+        "extras": {},
+    }
+
+    data = _recognize("ID_CARD", raw)
+    fields = {field.fieldKey: field for field in data.fields}
+
+    assert fields["idNumber"].fieldValue == "11010519491231002X"
+    assert fields["idNumber"].manualConfirmationRequired is False
+    assert data.extras["validation"]["idNumberValid"] is True
+    assert data.extras["validation"]["birthDateConsistent"] is True
+
+
+def test_id_card_marks_invalid_checksum_and_conflicting_birth_for_confirmation():
+    raw = {
+        "ocrType": "ID_CARD",
+        "confidence": 0.96,
+        "fields": [
+            {"fieldKey": "birthDate", "fieldName": "出生日期", "fieldValue": "1950-01-01", "confidence": 0.96},
+            {"fieldKey": "idNumber", "fieldName": "身份证号", "fieldValue": "110105194912310021", "confidence": 0.96},
+        ],
+        "extras": {},
+    }
+
+    data = _recognize("ID_CARD", raw)
+    fields = {field.fieldKey: field for field in data.fields}
+
+    assert fields["idNumber"].manualConfirmationRequired is True
+    assert fields["birthDate"].manualConfirmationRequired is True
+    assert data.extras["validation"]["idNumberValid"] is False
+    assert data.extras["validation"]["birthDateConsistent"] is False
+
+
+def test_id_card_accepts_non_zero_padded_chinese_birth_date():
+    raw = {
+        "ocrType": "ID_CARD",
+        "confidence": 0.96,
+        "fields": [
+            {"fieldKey": "birthDate", "fieldName": "出生日期", "fieldValue": "1992年1月18日", "confidence": 0.96},
+            {"fieldKey": "idNumber", "fieldName": "身份证号", "fieldValue": "510302199201182323", "confidence": 0.96},
+        ],
+        "extras": {},
+    }
+
+    data = _recognize("ID_CARD", raw)
+    fields = {field.fieldKey: field for field in data.fields}
+
+    assert data.extras["validation"]["birthDateConsistent"] is True
+    assert fields["birthDate"].manualConfirmationRequired is False
+
+
+@pytest.mark.parametrize("ocr_type,required_key", [
+    ("PASSPORT", "passportNumber"),
+    ("TRAVEL_PERMIT", "documentNumber"),
+    ("FIVE_STAR_CARD", "permanentResidentId"),
+    ("CONTRACT", "contractNumber"),
+])
+def test_specialized_document_types_have_explicit_field_contracts(ocr_type, required_key):
+    data = _recognize(ocr_type, {"ocrType": ocr_type, "fields": [], "extras": {}})
+
+    assert data.ocrType == ocr_type
+    assert required_key in {field.fieldKey for field in data.fields}
 
 
 def _recognize(ocr_type: str, raw: dict, *, options: dict | None = None):
@@ -108,6 +180,53 @@ def test_license_plate_marks_structurally_invalid_number_for_confirmation():
     assert data.extras["validation"]["plateNumberValid"] is False
 
 
+def test_license_plate_preserves_multiple_targets_instead_of_merging_numbers():
+    raw = {
+        "ocrType": "LICENSE_PLATE",
+        "confidence": 0.92,
+        "fields": [
+            {"fieldKey": "plateNumber", "fieldName": "车牌号", "fieldValue": "京 A·12345", "confidence": 0.95},
+        ],
+        "extras": {"plates": [
+            {"number": "京 A·12345", "confidence": 0.95, "bbox": [10, 20, 110, 60]},
+            {"number": "粤 B·D12345", "confidence": 0.91, "bbox": [150, 25, 260, 65]},
+        ]},
+    }
+
+    data = _recognize("LICENSE_PLATE", raw)
+
+    assert [item["number"] for item in data.extras["plates"]] == ["京A12345", "粤BD12345"]
+    assert data.extras["plates"][0]["bbox"] == [10, 20, 110, 60]
+    assert data.extras["plates"][1]["valid"] is True
+    assert data.extras["validation"]["plateNumberValid"] is True
+    assert data.extras["validation"]["plateNumberNormalized"] == "京A12345,粤BD12345"
+
+
+def test_license_plate_multi_target_normalization_ignores_malformed_entries_safely():
+    raw = {
+        "ocrType": "LICENSE_PLATE",
+        "confidence": 0.86,
+        "fields": [
+            {"fieldKey": "plateNumber", "fieldName": "车牌号", "fieldValue": "京A12345", "confidence": 0.9},
+        ],
+        "extras": {"plates": [
+            "not-an-object",
+            {"number": "ABC123", "confidence": 8, "bbox": [1, 2, 3]},
+            {"number": "  ", "confidence": -1, "bbox": None},
+        ]},
+    }
+
+    data = _recognize("LICENSE_PLATE", raw)
+
+    assert data.fields[0].fieldValue == "京A12345"
+    assert data.extras["plates"] == [{
+        "number": "ABC123",
+        "confidence": 1,
+        "bbox": None,
+        "valid": False,
+    }]
+
+
 def test_invoice_validates_amount_equation_with_decimal_currency_values():
     raw = {
         "ocrType": "INVOICE",
@@ -149,6 +268,68 @@ def test_invoice_marks_amounts_and_type_for_confirmation_when_checks_conflict():
     assert fields["amountWithoutTax"].manualConfirmationRequired is True
     assert fields["taxAmount"].manualConfirmationRequired is True
     assert fields["totalAmount"].manualConfirmationRequired is True
+
+
+def test_invoice_preserves_items_and_validates_line_and_invoice_totals():
+    raw = {
+        "ocrType": "INVOICE",
+        "confidence": 0.96,
+        "fields": [
+            {"fieldKey": "invoiceType", "fieldName": "发票类型", "fieldValue": "增值税普通发票", "confidence": 0.96},
+            {"fieldKey": "amountWithoutTax", "fieldName": "不含税金额", "fieldValue": "207.70", "confidence": 0.96},
+            {"fieldKey": "taxAmount", "fieldName": "税额", "fieldValue": "27.00", "confidence": 0.96},
+            {"fieldKey": "totalAmount", "fieldName": "价税合计", "fieldValue": "234.70", "confidence": 0.96},
+        ],
+        "extras": {"items": [{
+            "name": "汽油92号",
+            "specification": "车用汽油",
+            "unit": "升",
+            "quantity": "33.15",
+            "unitPrice": "6.26546003017",
+            "amount": "207.70",
+            "taxRate": "13%",
+            "taxAmount": "27.00",
+            "confidence": 0.93,
+        }]},
+    }
+
+    data = _recognize("INVOICE", raw, options={"invoiceType": "VAT_NORMAL"})
+
+    assert data.extras["items"][0]["name"] == "汽油92号"
+    assert data.extras["items"][0]["amountConsistent"] is True
+    assert data.extras["validation"]["itemCount"] == 1
+    assert data.extras["validation"]["itemAmountsConsistent"] is True
+    assert data.extras["validation"]["itemTaxConsistent"] is True
+
+
+def test_invoice_flags_inconsistent_items_and_safely_bounds_malformed_detail_rows():
+    raw = {
+        "ocrType": "INVOICE",
+        "confidence": 0.95,
+        "fields": [
+            {"fieldKey": "invoiceType", "fieldName": "发票类型", "fieldValue": "增值税专用发票", "confidence": 0.95},
+            {"fieldKey": "amountWithoutTax", "fieldName": "不含税金额", "fieldValue": "100.00", "confidence": 0.95},
+            {"fieldKey": "taxAmount", "fieldName": "税额", "fieldValue": "13.00", "confidence": 0.95},
+            {"fieldKey": "totalAmount", "fieldName": "价税合计", "fieldValue": "113.00", "confidence": 0.95},
+        ],
+        "extras": {"items": [
+            "invalid-row",
+            {"name": "安全帽", "quantity": "2", "unitPrice": "40", "amount": "90", "taxAmount": "12", "confidence": 4},
+            *({"name": f"附加项{i}", "amount": "0", "taxAmount": "0"} for i in range(60)),
+        ]},
+    }
+
+    data = _recognize("INVOICE", raw, options={"invoiceType": "VAT_SPECIAL"})
+    fields = {field.fieldKey: field for field in data.fields}
+
+    assert len(data.extras["items"]) == 50
+    assert data.extras["items"][0]["confidence"] == 1
+    assert data.extras["items"][0]["amountConsistent"] is False
+    assert data.extras["validation"]["itemsTruncated"] is True
+    assert data.extras["validation"]["itemAmountsConsistent"] is False
+    assert data.extras["validation"]["itemTaxConsistent"] is False
+    assert fields["amountWithoutTax"].manualConfirmationRequired is True
+    assert fields["taxAmount"].manualConfirmationRequired is True
 
 
 def test_custom_fields_reject_duplicate_keys_and_invalid_schema_before_model_call():

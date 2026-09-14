@@ -9,5 +9,11 @@ public record StructuredReportTable(
         List<Map<String, Object>> rows,
         int totalRows,
         boolean truncated,
-        String source) {
+        String source,
+        List<Map<String, Object>> analysisRows) {
+
+    public StructuredReportTable(List<String> columns, List<Map<String, Object>> rows,
+                                 int totalRows, boolean truncated, String source) {
+        this(columns, rows, totalRows, truncated, source, rows);
+    }
 }

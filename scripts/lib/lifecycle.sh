@@ -61,7 +61,11 @@ normalize_host_model_endpoints() {
 }
 
 effective_qwen_vl_model() {
-  printf '%s\n' "${1:-qwen-vl-plus}"
+  local configured="${1:-}" local_model="${2:-${QWEN_MODEL:-}}"
+  if [[ -z "$configured" || "$configured" == 'qwen-vl-plus' ]]; then
+    configured="$local_model"
+  fi
+  printf '%s\n' "${configured:-qwen-vl-plus}"
 }
 
 validate_host_model_configuration() {
@@ -162,7 +166,55 @@ docker_compose() {
   if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
     args+=(-f "$root/deploy/docker-compose-models.yml" --env-file "$MODEL_PROFILE_FILE")
   fi
-  docker compose "${args[@]}" "$@"
+  docker compose --project-name deploy "${args[@]}" "$@"
+}
+
+assert_legacy_container_migration_safe() {
+  local root="$1" container metadata project service working_dir mounts expected_mounts
+  local expected_working_dir="$root/deploy"
+  local -A expected_services=(
+    [smart-worksite-mysql]=mysql [smart-worksite-redis]=redis
+    [smart-worksite-minio]=minio [smart-worksite-minio-init]=minio-init
+    [smart-worksite-python-ai-service]=python-ai-service [smart-worksite-pgvector]=pgvector
+    [smart-worksite-milvus-etcd]=milvus-etcd [smart-worksite-milvus-minio]=milvus-minio
+    [smart-worksite-milvus]=milvus [smart-worksite-local-llm]=local-llm
+    [smart-worksite-local-embedding]=local-embedding [smart-worksite-local-reranker]=local-reranker
+  )
+  local -A expected_volumes=(
+    [smart-worksite-mysql]='deploy_mysql-data:/var/lib/mysql'
+    [smart-worksite-redis]='deploy_redis-data:/data'
+    [smart-worksite-minio]='deploy_minio-data:/data'
+    [smart-worksite-pgvector]='deploy_pgvector-data:/var/lib/postgresql/data'
+    [smart-worksite-milvus-etcd]='deploy_milvus-etcd-data:/etcd'
+    [smart-worksite-milvus-minio]='deploy_milvus-minio-data:/minio_data'
+    [smart-worksite-milvus]='deploy_milvus-data:/var/lib/milvus'
+    [smart-worksite-local-llm]='smart-worksite-model-cache:/root/.cache/huggingface smart-worksite-vllm-cache:/root/.cache/vllm'
+    [smart-worksite-local-embedding]='smart-worksite-model-cache:/root/.cache/huggingface smart-worksite-vllm-cache:/root/.cache/vllm'
+    [smart-worksite-local-reranker]='smart-worksite-model-cache:/root/.cache/huggingface smart-worksite-vllm-cache:/root/.cache/vllm'
+  )
+  for container in "${!expected_services[@]}"; do
+    if ! docker inspect "$container" >/dev/null 2>&1; then
+      continue
+    fi
+    metadata="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$container" 2>/dev/null || true)"
+    IFS='|' read -r project service working_dir <<< "$metadata"
+    mounts="$(docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}:{{.Destination}} {{end}}{{end}}' "$container" 2>/dev/null || true)"
+    mounts="${mounts% }"
+    expected_mounts="${expected_volumes[$container]:-}"
+    if [[ -n "$mounts" ]]; then
+      mounts="$(printf '%s\n' $mounts | sort | paste -sd' ' -)"
+    fi
+    if [[ -n "$expected_mounts" ]]; then
+      expected_mounts="$(printf '%s\n' $expected_mounts | sort | paste -sd' ' -)"
+    fi
+    if [[ "$project" == 'deploy' && "$service" == "${expected_services[$container]}" && "$working_dir" == "$expected_working_dir" ]]; then
+      if [[ "$mounts" == "$expected_mounts" ]]; then
+        continue
+      fi
+    fi
+    printf 'Legacy container %s does not match the expected deploy service, working directory, or named volumes. Refusing automatic migration; inspect and migrate it manually.\n' "$container" >&2
+    return 1
+  done
 }
 
 tcp_check() {
@@ -243,6 +295,32 @@ wait_http() {
   local name="$1" url="$2" timeout_seconds="${3:-120}" elapsed=0
   until http_health "$url"; do
     (( elapsed >= timeout_seconds )) && { printf '%s health check failed at %s after %s seconds.\n' "$name" "$url" "$timeout_seconds" >&2; return 1; }
+    sleep 2; elapsed=$((elapsed + 2))
+  done
+}
+
+model_ready() {
+  local url="$1" body
+  if command -v curl >/dev/null 2>&1; then
+    body="$(curl -fsS --max-time 5 "$url" 2>/dev/null)" || return 1
+  elif command -v python3 >/dev/null 2>&1; then
+    body="$(python3 - "$url" <<'PY'
+import sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
+    print(response.read().decode('utf-8'))
+PY
+)" || return 1
+  else
+    printf 'curl or python3 is required for model readiness checks.\n' >&2
+    return 1
+  fi
+  [[ "$body" == *'"status":"READY"'* || "$body" == *'"status": "READY"'* ]]
+}
+
+wait_model_ready() {
+  local name="$1" url="$2" timeout_seconds="${3:-3600}" elapsed=0
+  until model_ready "$url"; do
+    (( elapsed >= timeout_seconds )) && { printf '%s readiness check failed at %s after %s seconds.\n' "$name" "$url" "$timeout_seconds" >&2; return 1; }
     sleep 2; elapsed=$((elapsed + 2))
   done
 }

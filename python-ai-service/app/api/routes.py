@@ -1,5 +1,6 @@
 from uuid import uuid4
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from app.core.security import verify_service_key
 from app.core.settings import get_settings
 from app.models.schemas import (
@@ -44,6 +45,7 @@ from app.services.route_context_service import RouteService, ContextService
 from app.services.database_service import DatabaseQaService
 from app.services.agent_tools import ToolRegistry, ToolSpec
 from app.services.ocr_service import OcrService
+from app.services.ocr_provider import ocr_provider_status
 from app.services.policy_crawler_service import PolicyCrawlerService
 from app.services.document_understanding_service import DocumentUnderstandingService
 from app.services.context_budget import ContextBudgetPlanner
@@ -103,15 +105,27 @@ def services():
 
 @router.get("/health")
 async def health():
-    settings = get_settings()
-    readiness = await ModelReadinessService(settings).snapshot()
     return ok({
         "status": "UP",
+        "service": "python-ai-service",
+    })
+
+
+@router.get("/ready")
+async def ready():
+    settings = get_settings()
+    readiness = await ModelReadinessService(settings).snapshot()
+    ocr_readiness = ocr_provider_status()
+    overall_status = "READY" if readiness.get("status") == "READY" and ocr_readiness["status"] == "READY" else "DEGRADED"
+    status_code = 200 if overall_status == "READY" else 503
+    return JSONResponse(status_code=status_code, content=ok({
+        "status": overall_status,
         "service": "python-ai-service",
         "deploymentMode": settings.ai_deployment_mode.value,
         "dependencies": settings.safe_ai_dependency_descriptors(),
         "modelReadiness": readiness,
-    })
+        "ocrProvider": ocr_readiness,
+    }).model_dump())
 
 
 @router.post("/model/invoke", response_model=StandardResponse[ModelInvokeData])

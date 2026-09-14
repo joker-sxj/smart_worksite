@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from app.core.deployment import ModelPolicyViolation
 from app.core.settings import Settings, get_settings
 from app.main import app
 from app.models.schemas import Message
@@ -16,9 +17,13 @@ def local_settings(**overrides) -> Settings:
         "ai_deployment_mode": "LOCAL_ONLY",
         "chat_max_model_len": 16384,
         "qwen_base_url": "http://local-llm:8000/v1",
+        "qwen_model": "smart-worksite-chat",
         "qwen_vl_endpoint": "http://local-vlm:8000/v1/chat/completions",
+        "qwen_vl_model": "smart-worksite-chat",
         "qwen_embedding_base_url": "http://local-embedding:8000/v1",
+        "qwen_embedding_model": "smart-worksite-embedding",
         "qwen_rerank_base_url": "http://local-reranker:8000/v1/rerank",
+        "qwen_rerank_model": "smart-worksite-reranker",
         "qwen_api_key": "",
         "qwen_vl_api_key": "",
         "qwen_rerank_api_style": "QWEN3",
@@ -58,6 +63,15 @@ def test_example_env_matches_local_chat_topology():
 
     assert "QWEN_VL_ENDPOINT=http://local-llm:8000/v1/chat/completions" in env
     assert "QWEN_VL_MODEL=smart-worksite-chat" in env
+
+
+def test_local_only_replaces_legacy_cloud_vision_model_with_local_served_model():
+    settings = local_settings(
+        qwen_model="smart-worksite-chat",
+        qwen_vl_model="qwen-vl-plus",
+    )
+
+    assert settings.qwen_vl_model == "smart-worksite-chat"
 
 
 @pytest.mark.parametrize(
@@ -150,6 +164,73 @@ def test_local_openai_compatible_chat_does_not_require_api_key(monkeypatch):
     assert "Authorization" not in FakeAsyncClient.calls[0]["headers"]
 
 
+def test_local_chat_rejects_unapproved_model_before_http_call(monkeypatch):
+    install_fake_http(monkeypatch, {"choices": [{"message": {"content": "SHOULD_NOT_RUN"}}]})
+
+    with pytest.raises(RuntimeError, match="model is not allowed"):
+        asyncio.run(QwenClient(local_settings()).chat(
+            [Message(role="user", content="ping")], model="unapproved-model"
+        ))
+
+    assert FakeAsyncClient.calls == []
+
+
+def test_local_chat_cannot_override_model_through_parameters(monkeypatch):
+    install_fake_http(monkeypatch, {"choices": [{"message": {"content": "LOCAL_OK"}}]})
+
+    with pytest.raises(ModelPolicyViolation, match="reserved fields") as error:
+        asyncio.run(QwenClient(local_settings()).chat(
+            [Message(role="user", content="ping")],
+            parameters={"model": "unapproved-model"},
+        ))
+
+    assert error.value.code == "MODEL_REQUEST_INVALID"
+    assert FakeAsyncClient.calls == []
+
+
+def test_local_chat_cannot_override_messages_through_parameters(monkeypatch):
+    install_fake_http(monkeypatch, {"choices": [{"message": {"content": "LOCAL_OK"}}]})
+
+    with pytest.raises(ModelPolicyViolation, match="reserved fields") as error:
+        asyncio.run(QwenClient(local_settings()).chat(
+            [Message(role="user", content="ping")], parameters={"messages": []}
+        ))
+
+    assert error.value.code == "MODEL_REQUEST_INVALID"
+    assert FakeAsyncClient.calls == []
+
+
+def test_local_embedding_rejects_unapproved_model_before_http_call(monkeypatch):
+    install_fake_http(monkeypatch, {"data": [{"index": 0, "embedding": [0.1]}]})
+
+    with pytest.raises(RuntimeError, match="model is not allowed"):
+        asyncio.run(QwenClient(local_settings()).embed(["document"], model="unapproved-model"))
+
+    assert FakeAsyncClient.calls == []
+
+
+def test_cloud_mode_preserves_explicit_chat_model(monkeypatch):
+    install_fake_http(monkeypatch, {"choices": [{"message": {"content": "CLOUD_OK"}}]})
+    settings = Settings(_env_file=None, qwen_api_key="cloud-key")
+
+    asyncio.run(QwenClient(settings).chat(
+        [Message(role="user", content="ping")], model="approved-by-cloud-gateway"
+    ))
+
+    assert FakeAsyncClient.calls[0]["json"]["model"] == "approved-by-cloud-gateway"
+
+
+def test_cloud_mode_preserves_legacy_parameter_model_override(monkeypatch):
+    install_fake_http(monkeypatch, {"choices": [{"message": {"content": "CLOUD_OK"}}]})
+    settings = Settings(_env_file=None, qwen_api_key="cloud-key")
+
+    asyncio.run(QwenClient(settings).chat(
+        [Message(role="user", content="ping")], parameters={"model": "legacy-cloud-model"}
+    ))
+
+    assert FakeAsyncClient.calls[0]["json"]["model"] == "legacy-cloud-model"
+
+
 def test_all_local_model_calls_omit_authorization_without_key(monkeypatch):
     install_fake_http(
         monkeypatch,
@@ -169,6 +250,9 @@ def test_all_local_model_calls_omit_authorization_without_key(monkeypatch):
         "http://local-vlm:8000/v1/chat/completions",
     ]
     assert all("Authorization" not in call["headers"] for call in FakeAsyncClient.calls)
+    assert FakeAsyncClient.calls[0]["json"]["model"] == "smart-worksite-embedding"
+    assert FakeAsyncClient.calls[1]["json"]["model"] == "smart-worksite-reranker"
+    assert FakeAsyncClient.calls[2]["json"]["model"] == "smart-worksite-chat"
 
 
 def test_cloud_compatible_mode_still_requires_api_key():
@@ -190,7 +274,16 @@ def test_dependency_descriptors_do_not_expose_keys():
     assert "vision-secret" not in str(descriptors)
 
 
-def test_health_exposes_sanitized_local_dependency_configuration():
+def test_startup_logging_uses_safe_dependency_descriptors():
+    startup = Path(__file__).resolve().parents[1] / "app" / "main.py"
+    source = startup.read_text(encoding="utf-8")
+
+    assert "settings.safe_ai_dependency_descriptors()" in source
+    assert "settings.ai_dependency_descriptors()," not in source
+    assert 'logging.getLogger("httpx").setLevel(logging.WARNING)' in source
+
+
+def test_ready_exposes_sanitized_local_dependency_configuration():
     settings = local_settings(qwen_api_key="must-not-leak")
     app.dependency_overrides = {}
     get_settings.cache_clear()
@@ -201,7 +294,7 @@ def test_health_exposes_sanitized_local_dependency_configuration():
 
         original = routes.get_settings
         routes.get_settings = lambda: settings
-        response = TestClient(app).get("/v1/health")
+        response = TestClient(app).get("/v1/ready")
     finally:
         routes.get_settings = original
         app.dependency_overrides.clear()
@@ -211,6 +304,11 @@ def test_health_exposes_sanitized_local_dependency_configuration():
     assert body["deploymentMode"] == "LOCAL_ONLY"
     assert body["dependencies"]["chat"]["model"] == settings.qwen_model
     assert "must-not-leak" not in response.text
+
+
+def test_ready_endpoint_does_not_require_service_key():
+    response = TestClient(app).get("/v1/ready")
+    assert response.status_code != 401
 
 
 def test_local_only_validates_dedicated_embedding_endpoint():

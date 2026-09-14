@@ -2,6 +2,7 @@ package com.xd.smartworksite.report.application;
 
 import com.xd.smartworksite.report.domain.StructuredReportSection;
 import com.xd.smartworksite.report.domain.StructuredReportTable;
+import com.xd.smartworksite.report.domain.ReportChartSpec;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
@@ -14,9 +15,13 @@ import java.util.Map;
 import java.io.ByteArrayInputStream;
 
 import static org.apache.poi.xwpf.usermodel.Document.PICTURE_TYPE_PNG;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ReportStructuredContentRenderer {
+    private static final Logger log = LoggerFactory.getLogger(ReportStructuredContentRenderer.class);
     private final ReportChartRenderer chartRenderer = new ReportChartRenderer();
+    private final ReportChartPlanner chartPlanner = new ReportChartPlanner();
     public void append(XWPFDocument document, List<StructuredReportSection> sections) {
         for (StructuredReportSection section : sections == null ? List.<StructuredReportSection>of() : sections) {
             appendParagraph(document, section.title());
@@ -40,18 +45,22 @@ public class ReportStructuredContentRenderer {
     }
 
     private void appendChart(XWPFDocument document, StructuredReportSection section) {
-        if (section.statistics() == null || section.statistics().groupCounts().isEmpty()) {
+        String source = section.table() == null ? "" : safe(section.table().source());
+        ReportChartSpec spec = chartPlanner.plan(section.statistics(), source);
+        if (!spec.drawable()) {
+            appendParagraph(document, "数据图表：" + spec.reason() + "，未生成业务图表。");
             return;
         }
-        Map<String, Integer> values = section.statistics().groupCounts().values().iterator().next();
         try {
-            byte[] chart = chartRenderer.render("BAR", values);
+            byte[] chart = chartRenderer.render(spec);
             XWPFParagraph paragraph = document.createParagraph();
-            paragraph.createRun().setText("数据图表：分类统计");
+            paragraph.createRun().setText("数据图表：" + spec.title() + "（" + spec.source() + "）");
             paragraph.createRun().addPicture(new ByteArrayInputStream(chart), PICTURE_TYPE_PNG,
-                    "分类统计", Units.toEMU(500), Units.toEMU(280));
-        } catch (Exception ignored) {
-            appendParagraph(document, "数据图表：当前数据无法绘制");
+                    spec.title(), Units.toEMU(500), Units.toEMU(280));
+        } catch (Exception ex) {
+            log.warn("report chart rendering failed, variable={}, dimension={}, source={}",
+                    section.variableName(), spec.dimension(), spec.source(), ex);
+            appendParagraph(document, "数据图表：生成失败，表格及数据结论仍可使用。");
         }
     }
 

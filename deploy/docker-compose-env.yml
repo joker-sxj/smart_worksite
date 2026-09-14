@@ -10,7 +10,6 @@ services:
   mysql:
     logging: *default-logging
     image: mysql:${MYSQL_VERSION:-8.4}
-    container_name: smart-worksite-mysql
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
@@ -35,7 +34,6 @@ services:
   redis:
     logging: *default-logging
     image: redis:${REDIS_VERSION:-7.2-alpine}
-    container_name: smart-worksite-redis
     restart: unless-stopped
     ports:
       - "${REDIS_PORT:-6379}:6379"
@@ -51,7 +49,6 @@ services:
   minio:
     logging: *default-logging
     image: minio/minio:${MINIO_VERSION:-RELEASE.2025-04-22T22-12-26Z}
-    container_name: smart-worksite-minio
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -72,7 +69,6 @@ services:
   minio-init:
     logging: *default-logging
     image: minio/mc:${MINIO_MC_VERSION:-RELEASE.2025-04-16T18-13-26Z}
-    container_name: smart-worksite-minio-init
     depends_on:
       minio:
         condition: service_healthy
@@ -93,7 +89,6 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.python-ai-service
-    container_name: smart-worksite-python-ai-service
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -101,24 +96,42 @@ services:
       AI_SERVICE_PORT: 8015
       AI_SERVICE_API_KEY: ${AI_PYTHON_API_KEY:-dev-ai-service-key}
       AI_ACCESS_LOG: ${AI_ACCESS_LOG:-false}
+      OCR_PROVIDER: ${OCR_PROVIDER:-QWEN}
+      OCR_PADDLE_DEVICE: ${OCR_PADDLE_DEVICE:-cpu}
+      OCR_PADDLE_DET_MODEL_DIR: /app/models/ocr/detection
+      OCR_PADDLE_REC_MODEL_DIR: /app/models/ocr/recognition
       AI_DEPLOYMENT_MODE: ${AI_DEPLOYMENT_MODE:-LOCAL_ONLY}
       AI_ALLOW_REMOTE_INFERENCE: ${AI_ALLOW_REMOTE_INFERENCE:-false}
       AI_ALLOW_CLOUD_FALLBACK: ${AI_ALLOW_CLOUD_FALLBACK:-false}
       POLICY_CRAWLER_NETWORK_ENABLED: ${POLICY_CRAWLER_NETWORK_ENABLED:-false}
+      POLICY_CRAWLER_CONNECT_TIMEOUT_SECONDS: ${POLICY_CRAWLER_CONNECT_TIMEOUT_SECONDS:-8}
+      POLICY_CRAWLER_READ_TIMEOUT_SECONDS: ${POLICY_CRAWLER_READ_TIMEOUT_SECONDS:-20}
+      POLICY_CRAWLER_TOTAL_TIMEOUT_SECONDS: ${POLICY_CRAWLER_TOTAL_TIMEOUT_SECONDS:-90}
+      POLICY_CRAWLER_MAX_RESPONSE_BYTES: ${POLICY_CRAWLER_MAX_RESPONSE_BYTES:-2097152}
+      POLICY_CRAWLER_MAX_ARTICLES: ${POLICY_CRAWLER_MAX_ARTICLES:-20}
+      POLICY_CRAWLER_MAX_CONCURRENCY: ${POLICY_CRAWLER_MAX_CONCURRENCY:-3}
+      POLICY_CRAWLER_MAX_REDIRECTS: ${POLICY_CRAWLER_MAX_REDIRECTS:-5}
+      POLICY_CRAWLER_MAX_RETRIES: ${POLICY_CRAWLER_MAX_RETRIES:-2}
+      POLICY_CRAWLER_RETRY_BACKOFF_SECONDS: ${POLICY_CRAWLER_RETRY_BACKOFF_SECONDS:-0.5}
+      POLICY_CRAWLER_REQUEST_INTERVAL_SECONDS: ${POLICY_CRAWLER_REQUEST_INTERVAL_SECONDS:-0.5}
       MODEL_PROFILE_NAME: ${MODEL_PROFILE_NAME:-unconfigured}
       CHAT_MAX_MODEL_LEN: ${CHAT_MAX_MODEL_LEN:-0}
       MODEL_HEALTH_TIMEOUT_SECONDS: ${MODEL_HEALTH_TIMEOUT_SECONDS:-3}
       QWEN_BASE_URL: ${QWEN_BASE_URL:-http://local-llm:8000/v1}
       QWEN_API_KEY: ${QWEN_API_KEY:-}
       QWEN_MODEL: ${QWEN_MODEL:-smart-worksite-chat}
+      QWEN_MODEL_REVISION: ${QWEN_MODEL_REVISION:-}
       QWEN_VL_ENDPOINT: ${QWEN_VL_CONTAINER_ENDPOINT:-http://local-llm:8000/v1/chat/completions}
       QWEN_VL_API_KEY: ${QWEN_VL_API_KEY:-}
       QWEN_VL_MODEL: ${QWEN_VL_MODEL:-smart-worksite-chat}
+      QWEN_VL_MODEL_REVISION: ${QWEN_VL_MODEL_REVISION:-}
       QWEN_EMBEDDING_BASE_URL: ${QWEN_EMBEDDING_BASE_URL:-http://local-embedding:8000/v1}
       QWEN_EMBEDDING_MODEL: ${QWEN_EMBEDDING_MODEL:-smart-worksite-embedding}
+      QWEN_EMBEDDING_MODEL_REVISION: ${QWEN_EMBEDDING_MODEL_REVISION:-}
       QWEN_EMBEDDING_DIMENSIONS: ${QWEN_EMBEDDING_DIMENSIONS:-0}
       QWEN_RERANK_BASE_URL: ${QWEN_RERANK_BASE_URL:-http://local-reranker:8000/v1/rerank}
       QWEN_RERANK_MODEL: ${QWEN_RERANK_MODEL:-smart-worksite-reranker}
+      QWEN_RERANK_MODEL_REVISION: ${QWEN_RERANK_MODEL_REVISION:-}
       QWEN_RERANK_API_STYLE: ${QWEN_RERANK_API_STYLE:-QWEN3}
       RAG_PROVIDER: ${RAG_PROVIDER:-LOCAL}
       RAG_DATA_DIR: /app/data/rag
@@ -128,6 +141,7 @@ services:
       - "${AI_SERVICE_PORT:-8015}:8015"
     volumes:
       - ../python-ai-service/data:/app/data
+      - ${OCR_MODEL_ROOT:-../python-ai-service/models/ocr}:/app/models/ocr:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8015/v1/health', timeout=3)"]
       interval: 10s
@@ -137,7 +151,6 @@ services:
   pgvector:
     logging: *default-logging
     image: pgvector/pgvector:${PGVECTOR_VERSION:-pg16}
-    container_name: smart-worksite-pgvector
     restart: unless-stopped
     profiles: ["vector"]
     environment:
@@ -158,7 +171,6 @@ services:
   milvus-etcd:
     logging: *default-logging
     image: quay.io/coreos/etcd:${MILVUS_ETCD_VERSION:-v3.5.18}
-    container_name: smart-worksite-milvus-etcd
     profiles: ["vector"]
     environment:
       ETCD_AUTO_COMPACTION_MODE: revision
@@ -172,7 +184,6 @@ services:
   milvus-minio:
     logging: *default-logging
     image: minio/minio:${MINIO_VERSION:-RELEASE.2025-04-22T22-12-26Z}
-    container_name: smart-worksite-milvus-minio
     profiles: ["vector"]
     environment:
       MINIO_ACCESS_KEY: ${MILVUS_MINIO_ACCESS_KEY:-minioadmin}
@@ -186,7 +197,6 @@ services:
   milvus:
     logging: *default-logging
     image: milvusdb/milvus:${MILVUS_VERSION:-v2.5.4}
-    container_name: smart-worksite-milvus
     restart: unless-stopped
     profiles: ["vector"]
     command: ["milvus", "run", "standalone"]

@@ -4,6 +4,7 @@ import type { DataSourceConnectionTestResult, DataSourceForm, DataSourceItem, Da
 import { useModuleMock } from './mock';
 
 const useMock = useModuleMock('VITE_USE_DATASOURCE_MOCK', false);
+const DATABASE_QUERY_TIMEOUT_MS = 120_000;
 
 export async function fetchDataSources(params: PageQuery = {}) {
   if (useMock) {
@@ -71,5 +72,7 @@ export async function deleteDataSource(dataSourceId: ID) {
 
 export async function queryDataSource(data: { projectId: ID; question: string; dataSourceId: ID; context?: string }) {
   if (useMock) return { sql: "select count(*) as issue_count from safety_issue where status <> 'CLOSED';", columns: ['issue_count'], rows: [{ issue_count: 12 }], summary: '当前未闭环安全问题 12 项。' } satisfies DataSourceQueryResult;
-  return request.post<DataSourceQueryResult>('/ai/database/query', data);
+  return request.post<DataSourceQueryResult>('/ai/database/query', data, {
+    timeout: DATABASE_QUERY_TIMEOUT_MS
+  });
 }

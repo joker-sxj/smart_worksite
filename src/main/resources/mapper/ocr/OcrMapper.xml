@@ -12,13 +12,16 @@
         <result property="fieldsJson" column="fields_json"/>
         <result property="customFieldsJson" column="custom_fields_json"/>
         <result property="errorMessage" column="error_message"/>
+        <result property="manuallyConfirmed" column="manually_confirmed"/>
+        <result property="confirmedBy" column="confirmed_by"/>
+        <result property="confirmedAt" column="confirmed_at"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
     </resultMap>
 
     <sql id="OcrRecordColumns">
         id, project_id, ocr_type, file_id, task_id, status, fields_json,
-        custom_fields_json, error_message, created_at, updated_at
+        custom_fields_json, error_message, manually_confirmed, confirmed_by, confirmed_at, created_at, updated_at
     </sql>
 
     <insert id="insertRecord" useGeneratedKeys="true" keyProperty="id">
@@ -66,6 +69,9 @@
         update ocr_record
         set status = #{status},
             error_message = #{errorMessage},
+            manually_confirmed = 0,
+            confirmed_by = null,
+            confirmed_at = null,
             updated_by = 1
         where id = #{recordId}
           and deleted = 0
@@ -76,6 +82,9 @@
         set status = 'SUCCESS',
             fields_json = #{fieldsJson},
             error_message = null,
+            manually_confirmed = 0,
+            confirmed_by = null,
+            confirmed_at = null,
             updated_by = 1
         where id = #{recordId}
           and deleted = 0
@@ -86,6 +95,9 @@
         set status = 'PARTIAL_SUCCESS',
             fields_json = #{fieldsJson},
             error_message = #{errorMessage},
+            manually_confirmed = 0,
+            confirmed_by = null,
+            confirmed_at = null,
             updated_by = 1
         where id = #{recordId}
           and deleted = 0
@@ -94,8 +106,22 @@
     <update id="updateRecordFields">
         update ocr_record
         set fields_json = #{fieldsJson},
+            manually_confirmed = 0,
+            confirmed_by = null,
+            confirmed_at = null,
             updated_by = 1
         where id = #{recordId}
+          and deleted = 0
+    </update>
+
+    <update id="confirmRecord">
+        update ocr_record
+        set manually_confirmed = 1,
+            confirmed_by = #{confirmedBy},
+            confirmed_at = current_timestamp,
+            updated_by = #{confirmedBy}
+        where id = #{recordId}
+          and status in ('SUCCESS', 'PARTIAL_SUCCESS')
           and deleted = 0
     </update>
 

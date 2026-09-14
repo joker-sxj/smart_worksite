@@ -352,7 +352,7 @@ onMounted(loadProjects);
         <el-form-item label="数据保留天数"><el-input-number v-model="settingsForm.dataRetentionDays" :min="1" :max="3650" /></el-form-item>
         <el-form-item label="上传大小上限(MB)"><el-input-number v-model="settingsForm.uploadMaxSizeMb" :min="1" /></el-form-item>
         <el-form-item label="允许文件类型"><el-input v-model="allowedFileTypesText" placeholder="docx,pdf,jpg,png" /></el-form-item>
-        <el-form-item label="政策资讯 Mock 开关"><el-switch v-model="settingsForm.internetPolicyCrawlerEnabled" active-text="启用" inactive-text="停用" /></el-form-item>
+        <el-form-item label="政策资讯采集"><el-switch v-model="settingsForm.internetPolicyCrawlerEnabled" active-text="启用" inactive-text="停用" /></el-form-item>
         <el-form-item label="默认问答路由">
           <el-select v-model="settingsForm.defaultQaRouteMode" style="width: 220px">
             <el-option label="自动路由" value="AUTO" />

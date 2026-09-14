@@ -4,12 +4,31 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const runner = path.join(scriptDirectory, 'lib', 'run-with-log-limit.mjs');
 const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'smart-worksite-log-rotation-'));
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    throw error;
+  }
+}
+
+async function waitUntil(predicate, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('timed out waiting for process state');
+}
 
 try {
   const stdoutPath = path.join(tempDirectory, 'service.out.log');
@@ -123,6 +142,34 @@ try {
   ], { encoding: 'utf8', timeout: 5000 });
   assert.notEqual(writeFailureResult.error?.code, 'ETIMEDOUT', 'runner left child alive after a log write failure');
   assert.equal(writeFailureResult.status, 1, 'log write failure must fail the runner');
+
+  if (process.platform !== 'win32') {
+    const childPidPath = path.join(tempDirectory, 'managed-child.pid');
+    const managedRunner = spawn(process.execPath, [
+      runner,
+      '--cwd', tempDirectory,
+      '--stdout', path.join(tempDirectory, 'managed.out.log'),
+      '--stderr', path.join(tempDirectory, 'managed.err.log'),
+      '--max-size-bytes', '256',
+      '--max-files', '2',
+      '--retention-days', '30',
+      '--', process.execPath, '-e',
+      `require('node:fs').writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid)); setInterval(() => {}, 1000)`,
+    ], { stdio: 'ignore' });
+    try {
+      await waitUntil(() => fs.existsSync(childPidPath));
+      const managedChildPid = Number(fs.readFileSync(childPidPath, 'utf8'));
+      process.kill(managedRunner.pid, 'SIGHUP');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      assert.equal(processExists(managedRunner.pid), true, 'runner must survive SSH terminal hangup');
+      assert.equal(processExists(managedChildPid), true, 'managed service must survive SSH terminal hangup');
+      process.kill(managedRunner.pid, 'SIGTERM');
+      await waitUntil(() => !processExists(managedRunner.pid));
+      await waitUntil(() => !processExists(managedChildPid));
+    } finally {
+      if (managedRunner.pid && processExists(managedRunner.pid)) process.kill(managedRunner.pid, 'SIGKILL');
+    }
+  }
 
   process.stdout.write('PASS: bounded host log rotation works.\n');
 } finally {

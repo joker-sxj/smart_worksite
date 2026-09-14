@@ -6,11 +6,18 @@ public class ReviewRecord {
     private Long id;
     private Long projectId;
     private Long templateId;
+    private String templateName;
+    private String templateVersion;
     private Long fileId;
     private Long taskId;
     private String status;
     private String issuesJson;
     private String resultJson;
+    private Long fieldSchemaId;
+    private Integer fieldSchemaVersion;
+    private String inputFieldsJson;
+    private String documentFieldsJson;
+    private String resultFieldsJson;
     private String errorMessage;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -23,6 +30,10 @@ public class ReviewRecord {
     public void setProjectId(Long projectId) { this.projectId = projectId; }
     public Long getTemplateId() { return templateId; }
     public void setTemplateId(Long templateId) { this.templateId = templateId; }
+    public String getTemplateName() { return templateName; }
+    public void setTemplateName(String templateName) { this.templateName = templateName; }
+    public String getTemplateVersion() { return templateVersion; }
+    public void setTemplateVersion(String templateVersion) { this.templateVersion = templateVersion; }
     public Long getFileId() { return fileId; }
     public void setFileId(Long fileId) { this.fileId = fileId; }
     public Long getTaskId() { return taskId; }
@@ -33,6 +44,16 @@ public class ReviewRecord {
     public void setIssuesJson(String issuesJson) { this.issuesJson = issuesJson; }
     public String getResultJson() { return resultJson; }
     public void setResultJson(String resultJson) { this.resultJson = resultJson; }
+    public Long getFieldSchemaId() { return fieldSchemaId; }
+    public void setFieldSchemaId(Long fieldSchemaId) { this.fieldSchemaId = fieldSchemaId; }
+    public Integer getFieldSchemaVersion() { return fieldSchemaVersion; }
+    public void setFieldSchemaVersion(Integer fieldSchemaVersion) { this.fieldSchemaVersion = fieldSchemaVersion; }
+    public String getInputFieldsJson() { return inputFieldsJson; }
+    public void setInputFieldsJson(String inputFieldsJson) { this.inputFieldsJson = inputFieldsJson; }
+    public String getDocumentFieldsJson() { return documentFieldsJson; }
+    public void setDocumentFieldsJson(String documentFieldsJson) { this.documentFieldsJson = documentFieldsJson; }
+    public String getResultFieldsJson() { return resultFieldsJson; }
+    public void setResultFieldsJson(String resultFieldsJson) { this.resultFieldsJson = resultFieldsJson; }
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
     public LocalDateTime getCreatedAt() { return createdAt; }

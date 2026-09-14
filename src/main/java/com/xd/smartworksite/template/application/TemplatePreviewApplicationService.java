@@ -8,10 +8,12 @@ import com.xd.smartworksite.project.application.ProjectAccessApplicationService;
 import com.xd.smartworksite.template.domain.Template;
 import com.xd.smartworksite.template.dto.TemplatePreviewFile;
 import com.xd.smartworksite.template.infra.TemplateFileSupport;
+import com.xd.smartworksite.file.infra.DocumentFormatDetector;
 import com.xd.smartworksite.template.repository.TemplateRepository;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
 
 @Service
 public class TemplatePreviewApplicationService {
@@ -33,16 +35,32 @@ public class TemplatePreviewApplicationService {
         projectAccessApplicationService.requireProjectAccess(template.getProjectId());
         FileObjectContent file = fileObjectApplicationService.openFileContent(
                 template.getFileId(), template.getProjectId(), template.getId());
-        if (!TemplateFileSupport.isSupported(file.getFileName())) {
+        byte[] bytes;
+        try {
+            bytes = file.getInputStream().readAllBytes();
+        } catch (IOException ex) {
             closeQuietly(file);
-            String format = TemplateFileSupport.isPdf(file.getFileName()) ? "PDF" : TemplateFileSupport.extension(file.getFileName());
-            throw new BusinessException(ErrorCode.PARAM_ERROR, "unsupported template preview format: " + format);
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "读取模板文件失败");
         }
+        String actualFormat = DocumentFormatDetector.detect(bytes);
+        if ("unknown".equals(actualFormat)) {
+            actualFormat = TemplateFileSupport.extension(file.getFileName());
+        }
+        if (!TemplateFileSupport.isSupportedExtension(actualFormat)) {
+            closeQuietly(file);
+            throw new BusinessException(ErrorCode.PARAM_ERROR, "unsupported template preview format: " + actualFormat);
+        }
+        String previewFileName = file.getFileName();
+        if (!actualFormat.equals(TemplateFileSupport.extension(previewFileName))) {
+            previewFileName = TemplateFileSupport.replaceExtension(previewFileName, actualFormat);
+        }
+        String contentType = TemplateFileSupport.contentTypeForExtension(actualFormat);
+        closeQuietly(file);
         return new TemplatePreviewFile(
-                file.getFileName(),
-                TemplateFileSupport.resolveContentType(file.getFileName(), file.getContentType()),
-                file.getFileSize(),
-                file.getInputStream()
+                previewFileName,
+                contentType,
+                bytes.length,
+                new ByteArrayInputStream(bytes)
         );
     }
 

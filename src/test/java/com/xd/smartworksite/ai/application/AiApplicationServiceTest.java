@@ -16,6 +16,7 @@ import com.xd.smartworksite.ai.dto.ModelInvokeRequest;
 import com.xd.smartworksite.ai.dto.ModelInvokeResponse;
 import com.xd.smartworksite.ai.dto.RagSearchRequest;
 import com.xd.smartworksite.ai.dto.RagSearchResponse;
+import com.xd.smartworksite.ai.dto.RagIndexRequest;
 import com.xd.smartworksite.ai.infra.AiProviderResponse;
 import com.xd.smartworksite.ai.infra.AiPythonServiceClient;
 import com.xd.smartworksite.ai.infra.AiPythonServiceProperties;
@@ -115,7 +116,9 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
-        AiApplicationService service = new AiApplicationService(properties, pythonClient, mock(AiRepository.class),
+        AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
+        AiApplicationService service = new AiApplicationService(properties, pythonClient, aiRepository,
                 mock(SafeSqlExecutor.class), projectAccess);
         AiProviderResponse providerResponse = new AiProviderResponse();
         providerResponse.setTraceId("dynamic-trace");
@@ -123,6 +126,7 @@ class AiApplicationServiceTest {
         converted.setEvidenceStatus("PARTIAL");
         when(pythonClient.toMap(any())).thenReturn(new LinkedHashMap<>(Map.of(
                 "projectId", 1L, "knowledgeBaseIds", List.of(10L))));
+        when(aiRepository.existsEnabledKnowledgeBase(1L, 10L)).thenReturn(true);
         when(pythonClient.postNoRetry(eq("/v1/rag/dynamic-search"), eq("RAG_DYNAMIC_SEARCH"),
                 eq(1L), any(), eq(50_000))).thenReturn(providerResponse);
         when(pythonClient.convertData(providerResponse, RagSearchResponse.class)).thenReturn(converted);
@@ -143,6 +147,25 @@ class AiApplicationServiceTest {
                             && List.of(10L).equals(scope.get("knowledgeBaseIds"));
                 }), eq(50_000));
         verify(pythonClient, never()).post(eq("/v1/rag/dynamic-search"), any(), any(), any());
+    }
+
+    @Test
+    void knowledgeIndexRejectsKnowledgeBaseOutsideRequestedProjectBeforeCallingPython() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
+        ProjectAccessApplicationService access = mock(ProjectAccessApplicationService.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, mock(SafeSqlExecutor.class), access);
+        RagIndexRequest request = new RagIndexRequest();
+        request.setProjectId(1L);
+        request.setKnowledgeBaseId(20L);
+
+        assertThatThrownBy(() -> service.indexKnowledge(request))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(ErrorCode.FORBIDDEN.getCode()));
+        verify(pythonClient, never()).post(any(), any(), any(), any());
     }
 
     @Test
@@ -187,6 +210,7 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
         AiApplicationService service = new AiApplicationService(
@@ -238,6 +262,7 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -281,6 +306,7 @@ class AiApplicationServiceTest {
         properties.getDatabase().setQueryMaxAttempts(4);
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -325,6 +351,7 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -369,6 +396,7 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -403,6 +431,7 @@ class AiApplicationServiceTest {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -428,10 +457,58 @@ class AiApplicationServiceTest {
     }
 
     @Test
+    void exposesAndAuditsDatabaseExecutionWithoutPersistingParameterValues() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        DataSourceRecord dataSource = dataSource();
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource);
+        when(sqlExecutor.describeSchema(dataSource)).thenReturn("safety_issue(project_id, status)");
+        String sql = "SELECT COUNT(*) AS total FROM safety_issue WHERE project_id = ? AND status <> ?";
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("p1", 1);
+        parameters.put("p2", "CLOSED");
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(provider("generate", Map.of("sql", sql, "parameters", parameters)));
+        when(sqlExecutor.execute(dataSource, sql, parameters)).thenReturn(
+                new SafeSqlExecutor.QueryResult(List.of("total"), List.of(Map.of("total", 3L))));
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseSummarizeResult()),
+                eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), any()))
+                .thenReturn(provider("summary", Map.of("summary", "未闭环3项", "warnings", List.of())));
+        when(aiRepository.saveExternalCallLog(any())).thenAnswer(invocation -> {
+            ((ExternalCallLog) invocation.getArgument(0)).setId(99L);
+            return 1;
+        });
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getParameters()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                "p1", "[REDACTED]", "p2", "[REDACTED]"));
+        assertThat(response.getExecutionTimeMs()).isNotNegative();
+        assertThat(response.getMaskingRules()).contains("敏感列按列名识别并替换为[MASKED]");
+        verify(aiRepository).saveExternalCallLog(argThat(log ->
+                "DATABASE".equals(log.getServiceName())
+                        && "DATABASE_QUERY_EXECUTION".equals(log.getCallType())
+                        && log.getRequestSummary().contains("dataSourceId=2")
+                        && log.getRequestSummary().contains(sql)
+                        && log.getRequestSummary().contains("p1=[REDACTED]")
+                        && !log.getRequestSummary().contains("CLOSED")
+                        && log.getResponseSummary().contains("columns=[total]")
+                        && log.getResponseSummary().contains("rowCount=1")
+                        && !log.getResponseSummary().contains("未闭环3项")));
+    }
+
+    @Test
     void doesNotRepairDatabaseSqlForConnectionOrAuthenticationErrors() {
         AiPythonServiceProperties properties = new AiPythonServiceProperties();
         AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
         AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
         SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
         AiApplicationService service = new AiApplicationService(
                 properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
@@ -449,6 +526,119 @@ class AiApplicationServiceTest {
                 .hasMessageContaining("Access denied");
         verify(pythonClient).post(eq(properties.getPaths().getDatabaseGenerateQuery()),
                 eq("DATABASE_GENERATE_QUERY"), eq(1L), any());
+    }
+
+    @Test
+    void rejectsExplicitDatabaseWriteIntentBeforeSchemaOrModelAccess() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, projectAccess);
+        DatabaseQueryRequest request = databaseRequest();
+        request.setQuestion("执行 UPDATE user_account SET status = 'DISABLED' WHERE id = 1");
+
+        assertThatThrownBy(() -> service.queryDatabaseForSystem(request))
+                .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                    assertThat(ex.getCode()).isEqualTo(ErrorCode.FORBIDDEN.getCode());
+                    assertThat(ex.getMessage()).contains("只读");
+                });
+
+        verify(aiRepository, never()).findEnabledDataSource(any(), any());
+        verify(sqlExecutor, never()).describeSchema(any());
+        verify(pythonClient, never()).post(any(), any(), any(), any());
+    }
+
+    @Test
+    void allowsReadOnlyQuestionsAboutUpdateStatistics() {
+        AiRepository aiRepository = mock(AiRepository.class);
+        ProjectAccessApplicationService projectAccess = mock(ProjectAccessApplicationService.class);
+        AiApplicationService service = new AiApplicationService(
+                new AiPythonServiceProperties(), mock(AiPythonServiceClient.class), aiRepository,
+                mock(SafeSqlExecutor.class), projectAccess);
+        DatabaseQueryRequest request = databaseRequest();
+        request.setQuestion("按更新时间统计当前项目文档数量");
+
+        assertThatThrownBy(() -> service.queryDatabaseForSystem(request))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getCode()).isEqualTo(ErrorCode.NOT_FOUND.getCode()));
+
+        verify(projectAccess).requireProjectWritableForSystem(1L);
+        verify(aiRepository).findEnabledDataSource(1L, 2L);
+    }
+
+    @Test
+    void repairsQueryWhenProjectScopeIsHardCodedInsteadOfParameterized() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        DataSourceRecord dataSource = dataSource();
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource);
+        when(sqlExecutor.describeSchema(dataSource)).thenReturn("generate_task(project_id, created_at)");
+        String unsafeSql = "SELECT COUNT(*) total FROM generate_task WHERE project_id = 1";
+        String scopedSql = "SELECT COUNT(*) total FROM generate_task WHERE project_id = ?";
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(
+                        provider("generate-1", Map.of("sql", unsafeSql, "parameters", Map.of(),
+                                "plan", Map.of("projectScopeField", "project_id"))),
+                        provider("generate-2", Map.of("sql", scopedSql, "parameters", Map.of("p1", 1),
+                                "plan", Map.of("projectScopeField", "project_id")))
+                );
+        when(sqlExecutor.execute(dataSource, scopedSql, Map.of("p1", 1))).thenReturn(
+                new SafeSqlExecutor.QueryResult(List.of("total"), List.of(Map.of("total", 5))));
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseSummarizeResult()),
+                eq("DATABASE_SUMMARIZE_RESULT"), eq(1L), any()))
+                .thenReturn(provider("summary", Map.of("summary", "共5项", "warnings", List.of())));
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getSql()).isEqualTo(scopedSql);
+        verify(sqlExecutor, never()).execute(dataSource, unsafeSql, Map.of());
+        verify(pythonClient).post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), argThat(payload -> {
+                    Map<?, ?> map = (Map<?, ?>) payload;
+                    return unsafeSql.equals(map.get("failedSql"))
+                            && String.valueOf(map.get("databaseError")).contains("项目范围")
+                            && Integer.valueOf(2).equals(map.get("attempt"));
+                }));
+    }
+
+    @Test
+    void repairsQueryWhenOnlyNonScopeFilterIsParameterized() {
+        AiPythonServiceProperties properties = new AiPythonServiceProperties();
+        AiPythonServiceClient pythonClient = mock(AiPythonServiceClient.class);
+        AiRepository aiRepository = mock(AiRepository.class);
+        when(aiRepository.findEnabledDataSource(1L, 2L)).thenReturn(dataSource());
+        when(aiRepository.saveExternalCallLog(any())).thenReturn(1);
+        SafeSqlExecutor sqlExecutor = mock(SafeSqlExecutor.class);
+        when(sqlExecutor.describeSchema(any())).thenReturn("policy_article(project_id, title)");
+        AiApplicationService service = new AiApplicationService(
+                properties, pythonClient, aiRepository, sqlExecutor, mock(ProjectAccessApplicationService.class));
+        String unsafeSql = "SELECT COUNT(*) total FROM policy_article WHERE project_id = 1 AND title = ?";
+        String scopedSql = "SELECT COUNT(*) total FROM policy_article WHERE project_id = ? AND title = ?";
+        when(pythonClient.post(eq(properties.getPaths().getDatabaseGenerateQuery()),
+                eq("DATABASE_GENERATE_QUERY"), eq(1L), any()))
+                .thenReturn(
+                        provider("generate-1", Map.of("sql", unsafeSql, "parameters", Map.of("p1", "公告"),
+                                "plan", Map.of("projectScopeField", "project_id"))),
+                        provider("generate-2", Map.of("sql", scopedSql,
+                                "parameters", Map.of("p1", 1, "p2", "公告"),
+                                "plan", Map.of("projectScopeField", "project_id")))
+                );
+        when(sqlExecutor.execute(any(), eq(scopedSql), eq(Map.of("p1", 1, "p2", "公告"))))
+                .thenReturn(new SafeSqlExecutor.QueryResult(List.of("total"), List.of()));
+
+        DatabaseQueryResponse response = service.queryDatabaseForSystem(databaseRequest());
+
+        assertThat(response.getSql()).isEqualTo(scopedSql);
+        verify(sqlExecutor, never()).execute(any(), eq(unsafeSql), any());
     }
 
     private static AiProviderResponse provider(String traceId, Map<String, Object> data) {
@@ -496,6 +686,7 @@ class AiApplicationServiceTest {
         }
 
         @Override public DataSourceRecord findEnabledDataSource(Long projectId, Long dataSourceId) { return null; }
+        @Override public boolean existsEnabledKnowledgeBase(Long projectId, Long knowledgeBaseId) { return true; }
     }
 
     private static class InMemoryProjectRepository implements ProjectRepository {
@@ -534,3 +725,4 @@ class AiApplicationServiceTest {
         @Override public List<ProjectMember> selectEnabledByUserId(Long userId) { return List.of(); }
     }
 }
+

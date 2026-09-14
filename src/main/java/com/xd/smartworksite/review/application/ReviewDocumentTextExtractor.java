@@ -8,9 +8,9 @@ import com.xd.smartworksite.file.domain.FileObject;
 import com.xd.smartworksite.file.domain.PreparedDocument;
 import com.xd.smartworksite.file.infra.DocumentParser;
 import com.xd.smartworksite.file.infra.DocumentParserRegistry;
+import com.xd.smartworksite.file.infra.DocumentFormatDetector;
 import com.xd.smartworksite.file.infra.PdfDocumentParser;
 import org.apache.poi.hwpf.HWPFDocument;
-import org.apache.poi.hwpf.extractor.WordExtractor;
 import org.apache.poi.xwpf.extractor.XWPFWordExtractor;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,19 +48,19 @@ public class ReviewDocumentTextExtractor {
     private ExtractedText extractWithLimit(FileObjectContent content, int textLimit) {
         try (var inputStream = content.getInputStream()) {
             byte[] bytes = readAll(inputStream);
-            String ext = extension(content.getFileName());
+            String ext = resolveFormat(content.getFileName(), content.getContentType(), bytes);
             String contentType = normalizeContentType(content.getContentType());
             String text;
             boolean parserTruncated = false;
             List<EvidenceBlock> blocks = List.of();
-            if ("pdf".equals(ext) || "application/pdf".equals(contentType)) {
+            if ("pdf".equals(ext)) {
                 PreparedDocument prepared = extractPdf(content, bytes, ext, contentType);
                 text = prepared.getTextContent();
                 parserTruncated = prepared.isTruncated();
                 blocks = evidenceBlocks(prepared);
-            } else if ("docx".equals(ext) || "application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(contentType)) {
+            } else if ("docx".equals(ext)) {
                 text = extractDocx(bytes);
-            } else if ("doc".equals(ext) || "application/msword".equals(contentType)) {
+            } else if ("doc".equals(ext)) {
                 text = extractDoc(bytes);
             } else {
                 PreparedDocument prepared = extractPrepared(content, bytes, ext, contentType);
@@ -117,9 +117,8 @@ public class ReviewDocumentTextExtractor {
     }
 
     private String extractDoc(byte[] bytes) throws Exception {
-        try (HWPFDocument document = new HWPFDocument(new ByteArrayInputStream(bytes));
-             WordExtractor extractor = new WordExtractor(document)) {
-            return extractor.getText();
+        try (HWPFDocument document = new HWPFDocument(new ByteArrayInputStream(bytes))) {
+            return document.getRange().text();
         }
     }
 
@@ -136,6 +135,19 @@ public class ReviewDocumentTextExtractor {
         }
         int dot = fileName.lastIndexOf('.');
         return dot < 0 ? "" : fileName.substring(dot + 1).toLowerCase(Locale.ROOT);
+    }
+
+    String resolveFormat(String fileName, String contentType, byte[] bytes) {
+        String detected = DocumentFormatDetector.detect(bytes);
+        if (!"unknown".equals(detected)) {
+            return detected;
+        }
+        String extension = extension(fileName);
+        String normalizedType = normalizeContentType(contentType);
+        if ("application/pdf".equals(normalizedType)) return "pdf";
+        if ("application/vnd.openxmlformats-officedocument.wordprocessingml.document".equals(normalizedType)) return "docx";
+        if ("application/msword".equals(normalizedType)) return "doc";
+        return extension;
     }
 
     private Map<String, Object> locationMap(com.xd.smartworksite.file.domain.DocumentLocation location) {

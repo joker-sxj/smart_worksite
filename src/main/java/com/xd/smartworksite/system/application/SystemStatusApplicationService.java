@@ -116,7 +116,7 @@ public class SystemStatusApplicationService {
         try {
             String base = aiProperties.getBaseUrl().replaceAll("/+$", "");
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(base + "/v1/health"))
+                    .uri(URI.create(base + "/v1/ready"))
                     .timeout(Duration.ofMillis(Math.max(1, aiProperties.getReadTimeoutMs())))
                     .header("Accept", "application/json")
                     .GET().build();
@@ -140,6 +140,7 @@ public class SystemStatusApplicationService {
                 model.setReachable(node.path("reachable").isBoolean() ? node.path("reachable").asBoolean() : null);
                 model.setProvider(node.path("provider").asText(null));
                 model.setModel(node.path("model").asText(null));
+                model.setRevision(node.path("revision").asText(null));
                 model.setEndpointScope(node.path("endpointScope").asText(null));
                 models.put(entry.getKey(), model);
             });

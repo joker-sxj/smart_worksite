@@ -39,6 +39,10 @@ public final class TemplateFileSupport {
         return SUPPORTED_EXTENSIONS.contains(extension(fileName));
     }
 
+    public static boolean isSupportedExtension(String extension) {
+        return extension != null && SUPPORTED_EXTENSIONS.contains(extension.toLowerCase(Locale.ROOT));
+    }
+
     public static boolean isPdf(String fileName) {
         return "pdf".equals(extension(fileName));
     }
@@ -52,5 +56,18 @@ public final class TemplateFileSupport {
             return storedContentType.trim();
         }
         return DEFAULT_CONTENT_TYPES.getOrDefault(extension, "application/octet-stream");
+    }
+
+    public static String contentTypeForExtension(String extension) {
+        return DEFAULT_CONTENT_TYPES.getOrDefault(extension, "application/octet-stream");
+    }
+
+    public static String replaceExtension(String fileName, String extension) {
+        if (fileName == null || fileName.isBlank()) {
+            return fileName;
+        }
+        int dot = fileName.lastIndexOf('.');
+        String base = dot < 0 ? fileName : fileName.substring(0, dot);
+        return base + "." + extension;
     }
 }

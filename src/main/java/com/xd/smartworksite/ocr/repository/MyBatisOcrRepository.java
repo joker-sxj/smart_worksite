@@ -60,6 +60,11 @@ public class MyBatisOcrRepository implements OcrRepository {
     }
 
     @Override
+    public int confirmRecord(Long recordId, Long confirmedBy) {
+        return ocrMapper.confirmRecord(recordId, confirmedBy);
+    }
+
+    @Override
     public void saveFieldRevision(OcrFieldRevision revision) {
         ocrMapper.insertFieldRevision(revision);
     }

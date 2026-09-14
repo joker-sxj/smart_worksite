@@ -960,6 +960,29 @@ def test_source_scope_does_not_match_empty_or_generic_title_core():
     assert source_scope_strength(query, '规定.pdf') == 0.0
 
 
+def test_title_match_score_matches_quoted_filename_without_extension():
+    from app.services.vector_store import title_match_score
+
+    assert title_match_score(
+        '《问题详细情况》记录的是哪些历史故障？',
+        '问题详细情况.docx',
+    ) >= 1.0
+
+
+def test_title_match_score_rejects_similar_or_short_titles():
+    from app.services.vector_store import title_match_score
+
+    query = '《问题详细情况》记录了哪些内容？'
+    assert title_match_score(query, '问题详细情况补充说明.docx') == 0.0
+    assert title_match_score('《报告》有哪些内容？', '报告模板.docx') == 0.0
+
+
+def test_explicitly_named_title_terms_normalize_extension_and_deduplicate():
+    from app.services.vector_store import explicitly_named_title_terms
+
+    assert explicitly_named_title_terms('《问题详细情况.docx》和《问题详细情况》') == ['问题详细情况']
+
+
 def test_rag_search_tolerates_missing_batch_adjacency_entries(tmp_path):
     from app.services.vector_store import ChunkRecord
 

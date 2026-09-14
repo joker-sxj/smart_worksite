@@ -16,7 +16,7 @@ from app.models.schemas import (
     RetrievalAttempt,
     EvidenceAssessment,
 )
-from app.services.rag_service import RagService
+from app.services.rag_service import RagService, direct_evidence_priority
 from app.services.rag_service import MAX_MERGED_CANDIDATES, hash_embedding, merge_candidates
 from app.services.retrieval_orchestrator import (
     MAX_DYNAMIC_CANDIDATES,
@@ -103,6 +103,25 @@ def test_query_fingerprint_preserves_semantic_character_order():
     assert query_fingerprint(request(query="甲方允许乙方施工吗")) != query_fingerprint(
         request(query="乙方允许甲方施工吗")
     )
+
+
+def test_requirement_question_prioritizes_chunk_with_explicit_handling_rule():
+    query = "模板和脚手架搬运时有什么要求？"
+    target = ChunkRecord(
+        "target", 7, 11, "doc", "安全措施",
+        "模板、脚手架支设、拆除及搬运，必须轻拿轻放。上下、左右有人传递，不得抛扔。",
+        "DOCUMENT", None, {}, [],
+    )
+    distractor = ChunkRecord(
+        "distractor", 7, 11, "doc", "施工部署",
+        "模板和脚手架材料加工、堆放场地应合理布置，确保施工顺利进行。",
+        "DOCUMENT", None, {}, [],
+    )
+
+    target_priority = direct_evidence_priority(query, target)[0:2]
+    distractor_priority = direct_evidence_priority(query, distractor)[0:2]
+
+    assert target_priority > distractor_priority
 
 
 def test_top_k_has_a_hard_limit_and_legacy_search_defaults_remain_compatible():

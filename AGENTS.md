@@ -254,7 +254,7 @@ Request IDs are handled by `common.config.RequestIdFilter`. The response header 
 - Template upload UI should restrict report/review template files to formats the backend can parse for variables or review context; do not present unsupported template formats as normal upload options.
 - Single-file business flows such as template upload, review submit, and OCR submit must render upload controls as single-file controls; do not allow multi-select and then silently submit only the first file.
 - Single-file upload controls should replace the existing selected file when the user selects another file, instead of keeping stale preview or upload state.
-- Policy/news crawler UI may use an explicit `VITE_USE_POLICY_MOCK` switch until Java backend policy APIs exist; frontend must still never crawl external websites or call Python services directly.
+- Policy/news crawler UI must call Java policy APIs only; frontend must never provide a mock crawl path, crawl external websites, or call Python services directly.
 - AI results should expose traceable information where available, such as sources, confidence, raw JSON, or document references.
 - Frontend report-template upload APIs must pass explicit `templateName` and `templateType`; do not derive them from the filename or rely on backend fallback metadata.
 - Template center must display the backend `templateId` and fetch preview content only through the Java `GET /api/templates/{templateId}/preview` API. PDF, DOCX, XLSX/CSV, and text previews should be rendered locally from the returned Blob, and unsupported formats or preview failures must remain visible to users. REPORT rows must expose a template-variable dialog that loads current variable descriptions from Java, keeps variable names read-only, and submits the complete non-blank description list through the backend update API.
@@ -281,6 +281,7 @@ Request IDs are handled by `common.config.RequestIdFilter`. The response header 
 - Qwen API keys must stay in the Python service `.env` or environment variables and must not be written to Java config, docs, SQL, or logs.
 - Java backend calls Python through `app.ai.python-service.*` and sends `X-AI-Service-Key` when configured.
 - Policy/news crawler extraction is exposed by `python-ai-service` at `/v1/policy/crawl`; Python only downloads and extracts public HTML content and must not write Java databases, MinIO, or vector stores directly.
+- Production policy crawling is network-disabled by default and must validate and pin public IPs for sources, redirects, and article links; it must honor robots.txt and enforce bounded response size, content type, concurrency, article count, request interval, retries, redirects, and total timeout. The policy frontend must never expose a mock execution path.
 - OCR recognition may use Qwen VL, but Qwen VL must be wrapped by `python-ai-service`; Java OCR modules must call the Python OCR API instead of calling `QWEN_VL_ENDPOINT` directly.
 - For image OCR, Python should download Java-generated temporary MinIO URLs and send Qwen VL `data:image/...;base64,...` image URLs instead of forwarding signed MinIO URLs to the cloud provider.
 - Database Q&A uses Python to generate SQL and summaries, but Java must validate and execute only safe MySQL read-only SQL.

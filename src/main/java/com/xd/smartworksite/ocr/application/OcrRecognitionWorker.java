@@ -69,7 +69,43 @@ public class OcrRecognitionWorker {
                     new FieldDefinition("sellerTaxNumber", "销售方纳税人识别号", List.of()),
                     new FieldDefinition("amountWithoutTax", "不含税金额", List.of()),
                     new FieldDefinition("taxAmount", "税额", List.of()),
-                    new FieldDefinition("totalAmount", "价税合计", List.of())));
+                    new FieldDefinition("totalAmount", "价税合计", List.of())),
+            "PASSPORT", List.of(
+                    new FieldDefinition("passportNumber", "护照号码", List.of("护照号")),
+                    new FieldDefinition("name", "姓名", List.of()),
+                    new FieldDefinition("nationality", "国籍", List.of()),
+                    new FieldDefinition("gender", "性别", List.of()),
+                    new FieldDefinition("birthDate", "出生日期", List.of()),
+                    new FieldDefinition("placeOfBirth", "出生地点", List.of()),
+                    new FieldDefinition("issueDate", "签发日期", List.of()),
+                    new FieldDefinition("expiryDate", "有效期至", List.of()),
+                    new FieldDefinition("issuingAuthority", "签发机关", List.of()),
+                    new FieldDefinition("mrz", "机读码", List.of())),
+            "TRAVEL_PERMIT", List.of(
+                    new FieldDefinition("documentNumber", "证件号码", List.of()),
+                    new FieldDefinition("name", "姓名", List.of()),
+                    new FieldDefinition("gender", "性别", List.of()),
+                    new FieldDefinition("birthDate", "出生日期", List.of()),
+                    new FieldDefinition("validPeriod", "有效期限", List.of()),
+                    new FieldDefinition("issueCount", "签发次数", List.of()),
+                    new FieldDefinition("issuingAuthority", "签发机关", List.of())),
+            "FIVE_STAR_CARD", List.of(
+                    new FieldDefinition("permanentResidentId", "永久居留证件号码", List.of("证件号码")),
+                    new FieldDefinition("name", "姓名", List.of()),
+                    new FieldDefinition("gender", "性别", List.of()),
+                    new FieldDefinition("birthDate", "出生日期", List.of()),
+                    new FieldDefinition("nationality", "国籍", List.of()),
+                    new FieldDefinition("validPeriod", "有效期限", List.of()),
+                    new FieldDefinition("issuingAuthority", "签发机关", List.of())),
+            "CONTRACT", List.of(
+                    new FieldDefinition("contractNumber", "合同编号", List.of()),
+                    new FieldDefinition("partyA", "甲方", List.of()),
+                    new FieldDefinition("partyB", "乙方", List.of()),
+                    new FieldDefinition("contractAmount", "合同金额", List.of()),
+                    new FieldDefinition("paymentTerms", "付款条件", List.of()),
+                    new FieldDefinition("signDate", "签订日期", List.of()),
+                    new FieldDefinition("effectiveDate", "生效日期", List.of()),
+                    new FieldDefinition("projectName", "项目名称", List.of())));
     private static final Map<String, Set<String>> AUXILIARY_FIELDS = Map.of(
             "ID_CARD", Set.of("haswatermark"));
 
@@ -221,12 +257,22 @@ public class OcrRecognitionWorker {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("ocrType", data.getOrDefault("ocrType", record.getOcrType()));
         summary.put("confidence", data.getOrDefault("confidence", 0));
-        summary.put("provider", "QWEN_VL");
         summary.put("providerTraceId", providerResponse.getTraceId());
         summary.put("elapsedMs", elapsedMs);
-        Object model = providerResponse.getUsage() == null ? null : providerResponse.getUsage().get("model");
+        Map<String, Object> usage = providerResponse.getUsage() == null ? Map.of() : providerResponse.getUsage();
+        Object semanticProvider = usage.get("provider");
+        Object semanticModel = usage.get("model");
+        Object provider = usage.getOrDefault("ocrProvider", semanticProvider == null ? "QWEN_VL" : semanticProvider);
+        Object model = usage.getOrDefault("ocrModel", semanticModel);
+        summary.put("provider", provider);
         if (model != null) {
             summary.put("model", model);
+        }
+        if (semanticProvider != null) {
+            summary.put("semanticProvider", semanticProvider);
+        }
+        if (semanticModel != null) {
+            summary.put("semanticModel", semanticModel);
         }
         Map<String, Object> extras = normalizeMap(data.get("extras"));
         if (!reconciliation.unmappedFields().isEmpty() && !extras.containsKey("unmappedFields")) {
@@ -241,9 +287,6 @@ public class OcrRecognitionWorker {
 
     private boolean requiresManualConfirmation(OcrRecord record, List<Map<String, Object>> fields) {
         String ocrType = record.getOcrType() == null ? "" : record.getOcrType().trim().toUpperCase();
-        if ("CONTRACT".equals(ocrType)) {
-            ocrType = "CUSTOM";
-        }
         if ("CUSTOM".equals(ocrType)) {
             Set<String> requiredKeys = requiredCustomFieldKeys(record);
             if (requiredKeys.isEmpty()) {
@@ -289,9 +332,6 @@ public class OcrRecognitionWorker {
 
     private List<FieldDefinition> requiredFieldDefinitions(OcrRecord record) {
         String ocrType = record.getOcrType() == null ? "" : record.getOcrType().trim().toUpperCase();
-        if ("CONTRACT".equals(ocrType)) {
-            ocrType = "CUSTOM";
-        }
         if (!"CUSTOM".equals(ocrType)) {
             return STANDARD_FIELDS.getOrDefault(ocrType, List.of());
         }

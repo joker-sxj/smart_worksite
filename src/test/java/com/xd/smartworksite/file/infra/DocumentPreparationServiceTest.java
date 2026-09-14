@@ -121,6 +121,9 @@ class DocumentPreparationServiceTest {
         PreparedDocument prepared = service.prepare(fileObject);
 
         assertThat(prepared.getInputFormat()).isEqualTo("xlsx");
+        assertThat(prepared.getDetectedFormat()).isEqualTo("unknown");
+        assertThat(prepared.getFormatDetectionSource()).isEqualTo("DECLARED");
+        assertThat(prepared.isFormatMismatch()).isFalse();
     }
     private DocumentPreparationService serviceFor(FileObject fileObject, byte[] content) {
         StorageAdapter storageAdapter = mock(StorageAdapter.class);

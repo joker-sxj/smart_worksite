@@ -31,10 +31,13 @@ required_files=(
   deploy/docker-compose-models.yml
   scripts/check-gpu-runtime.sh
   scripts/check-local-models.sh
+  scripts/check-model-cache.sh
+  scripts/model-artifact-manifest.py
+  scripts/generate-model-artifact-manifest.sh
 )
 for file in "${required_files[@]}"; do assert_file "$file"; done
 
-for file in scripts/check-gpu-runtime.sh scripts/check-local-models.sh scripts/start-all.sh scripts/status.sh; do
+for file in scripts/check-gpu-runtime.sh scripts/check-local-models.sh scripts/check-model-cache.sh scripts/generate-model-artifact-manifest.sh scripts/start-all.sh scripts/status.sh; do
   [[ -f "$repo_root/$file" ]] && bash -n "$repo_root/$file" || fail "Bash syntax error or missing script: $file"
 done
 
@@ -54,6 +57,21 @@ for profile in h100-fp8 a6000x2-bf16 a6000x2-production-32k a6000x2-stable-16k; 
   grep -Eq '^QWEN_VL_CONTAINER_ENDPOINT=http://local-llm:8000/v1/chat/completions$' "$repo_root/$file" || fail "$profile must route container-side vision to the local multimodal model"
   grep -Eq '^QWEN_EMBEDDING_BASE_URL=http://local-embedding:8000/v1$' "$repo_root/$file" || fail "$profile must route embeddings locally"
   grep -Eq '^QWEN_RERANK_BASE_URL=http://local-reranker:8000/v1/rerank$' "$repo_root/$file" || fail "$profile must route reranking locally"
+  grep -Eq '^HF_HUB_OFFLINE=1$' "$repo_root/$file" || fail "$profile must forbid runtime model downloads"
+  grep -Eq '^TRANSFORMERS_OFFLINE=1$' "$repo_root/$file" || fail "$profile must forbid runtime transformer downloads"
+  grep -Eq '^HF_DATASETS_OFFLINE=1$' "$repo_root/$file" || fail "$profile must forbid runtime dataset downloads"
+  grep -Eq '^MODEL_ARTIFACT_MANIFEST=deploy/model-manifests/[a-z0-9-]+\.json$' "$repo_root/$file" || fail "$profile must select an exact model artifact checksum manifest"
+  if [[ "$profile" == h100-fp8 ]]; then
+    grep -Eq '^MODEL_ARTIFACT_STATUS=VERIFIED$' "$repo_root/$file" || fail "$profile must mark its generated and reviewed manifest as VERIFIED"
+    [[ -f "$repo_root/deploy/model-manifests/h100-fp8.json" ]] || fail 'H100 verified profile must include its checksum manifest.'
+  else
+    grep -Eq '^MODEL_ARTIFACT_STATUS=PENDING_CUSTOMER_CACHE$' "$repo_root/$file" || fail "$profile must explicitly block startup until customer A6000 artifacts are present"
+  fi
+  [[ "$(load_profile_value "$file" QWEN_MODEL)" == "$(load_profile_value "$file" CHAT_MODEL_NAME)" ]] || fail "$profile chat served/client model names must match exactly"
+  [[ "$(load_profile_value "$file" QWEN_VL_MODEL)" == "$(load_profile_value "$file" CHAT_MODEL_NAME)" ]] || fail "$profile vision served/client model names must match exactly"
+  [[ "$(load_profile_value "$file" QWEN_EMBEDDING_MODEL)" == "$(load_profile_value "$file" EMBEDDING_MODEL_NAME)" ]] || fail "$profile embedding served/client model names must match exactly"
+  [[ "$(load_profile_value "$file" QWEN_RERANK_MODEL)" == "$(load_profile_value "$file" RERANK_MODEL_NAME)" ]] || fail "$profile rerank served/client model names must match exactly"
+  [[ "$(load_profile_value "$file" RERANK_MODEL_NAME)" == "smart-worksite-reranker" ]] || fail "$profile must use the canonical smart-worksite-reranker served name"
 done
 
 grep -Eq '^QWEN_VL_ENDPOINT=http://127\.0\.0\.1:18000/v1/chat/completions$' \
@@ -71,6 +89,11 @@ grep -Fq 'QWEN_VL_ENDPOINT: ${QWEN_VL_CONTAINER_ENDPOINT:-http://local-llm:8000/
 grep -Fq 'QWEN_RERANK_BASE_URL: ${QWEN_RERANK_BASE_URL:-http://local-reranker:8000/v1/rerank}' \
   "$repo_root/deploy/docker-compose-env.yml" \
   || fail 'The Python container reranker default must use the local-reranker service port 8000.'
+
+for key in QWEN_MODEL_REVISION QWEN_VL_MODEL_REVISION QWEN_EMBEDDING_MODEL_REVISION QWEN_RERANK_MODEL_REVISION; do
+  grep -Fq "${key}:" "$repo_root/deploy/docker-compose-env.yml" \
+    || fail "The Python container must receive $key for safe runtime provenance."
+done
 
 if ! bash -c 'set -euo pipefail; source "$1"; CHAT_HOST_PORT=19000; QWEN_VL_ENDPOINT=http://local-vlm:8000/v1/chat/completions; normalize_host_model_endpoints; [[ "$QWEN_VL_ENDPOINT" == http://127.0.0.1:19000/v1/chat/completions ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
   fail 'Lifecycle must migrate the legacy Docker-only vision endpoint for the host-side Java parser.'
@@ -144,9 +167,12 @@ if ! bash -c 'set -euo pipefail; source "$1"; validate_host_model_configuration 
   fail 'Static host model validation must reject an invalid chat-completions path without making a network call.'
 fi
 
-if ! bash -c 'set -euo pipefail; source "$1"; [[ "$(effective_qwen_vl_model "")" == qwen-vl-plus ]]; [[ "$(effective_qwen_vl_model smart-worksite-chat)" == smart-worksite-chat ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
-  fail 'Host model validation must use the same default Qwen VL model as the Java application.'
+if ! bash -c 'set -euo pipefail; source "$1"; [[ "$(effective_qwen_vl_model "" smart-worksite-chat)" == smart-worksite-chat ]]; [[ "$(effective_qwen_vl_model qwen-vl-plus smart-worksite-chat)" == smart-worksite-chat ]]; [[ "$(effective_qwen_vl_model dedicated-local-vlm smart-worksite-chat)" == dedicated-local-vlm ]]' bash "$repo_root/scripts/lib/lifecycle.sh"; then
+  fail 'Host model validation must migrate the stale cloud Qwen VL default to the configured local chat/vision model while preserving dedicated local vision models.'
 fi
+
+grep -q 'effective_qwen_vl_model.*QWEN_MODEL' "$repo_root/scripts/start-all.sh" \
+  || fail 'Linux startup must resolve the local vision model against the configured chat/vision model.'
 
 if grep -q '^for command_name in .*python3' "$repo_root/scripts/start-all.sh"; then
   fail 'Cloud-only startup must not require host Python 3 when no local model preflight is needed.'
@@ -243,6 +269,9 @@ if [[ -f "$repo_root/$compose" ]]; then
   assert_contains "$compose" 'EMBEDDING_MODEL_REVISION' 'Embedding model revision must be pinned and configurable.'
   assert_contains "$compose" 'RERANK_MODEL_REVISION' 'Reranker model revision must be pinned and configurable.'
   assert_contains "$compose" 'HF_ENDPOINT:.*HF_ENDPOINT' 'Model containers must receive the configurable Hugging Face download endpoint.'
+  [[ "$(grep -Ec '^      HF_HUB_OFFLINE:' "$repo_root/$compose")" == 3 ]] || fail 'Every model service must enable Hugging Face offline mode.'
+  [[ "$(grep -Ec '^      TRANSFORMERS_OFFLINE:' "$repo_root/$compose")" == 3 ]] || fail 'Every model service must enable Transformers offline mode.'
+  [[ "$(grep -Ec 'model-cache:/root/.cache/huggingface:ro$' "$repo_root/$compose")" == 3 ]] || fail 'Every model service must mount approved Hugging Face artifacts read-only.'
   if grep -q -- '--task' "$repo_root/$compose"; then
     fail 'Model Compose must not use the removed vLLM --task argument.'
   fi
@@ -281,7 +310,12 @@ fi
 grep -q -- '--model-profile' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must accept --model-profile.'
 grep -q 'docker-compose-models.yml' "$repo_root/scripts/lib/lifecycle.sh" || fail 'Linux lifecycle must compose model services when a profile is selected.'
 grep -q 'check-gpu-runtime.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must run GPU preflight before starting local models.'
+grep -q 'check-model-cache.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must reject incomplete offline model caches before starting local models.'
+grep -Eq 'docker_compose "\$root" up -d --pull never local-llm local-embedding local-reranker' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must forbid implicit model image pulls.'
+grep -Eq 'docker_compose "\$root" up -d --build --pull never' "$repo_root/scripts/start-all.sh" || fail 'Full Compose startup must retain the no-pull guarantee.'
+grep -Eq 'docker run .*--pull never' "$repo_root/scripts/check-gpu-runtime.sh" || fail 'GPU preflight must not download its runtime image.'
 grep -q 'check-local-models.sh' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must verify each local model dependency.'
+grep -q '/v1/ready' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must wait for Python AI model readiness, not liveness only.'
 grep -Eq 'check-local-models.sh.*--smoke' "$repo_root/scripts/start-all.sh" || fail 'Linux startup must run bounded generation, embedding, and rerank smoke checks.'
 grep -q 'chat boundary smoke' "$repo_root/scripts/check-local-models.sh" || fail 'Local model checks must exercise the configured context boundary.'
 grep -q 'Local model configuration:' "$repo_root/scripts/status.sh" || fail 'Status must distinguish model configuration from readiness.'

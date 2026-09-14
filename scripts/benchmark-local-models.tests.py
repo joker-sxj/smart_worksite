@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -41,6 +42,16 @@ class BenchmarkLocalModelsTest(unittest.TestCase):
     def test_output_tokens_per_second_excludes_ttft(self):
         self.assertEqual(benchmark.output_tokens_per_second(21, 0.5, 2.5), 10.0)
         self.assertIsNone(benchmark.output_tokens_per_second(0, 0.5, 2.5))
+
+    def test_summary_reports_client_dispatch_wait(self):
+        samples = [
+            {"concurrency": 2, "status": "PASS", "clientDispatchWaitSeconds": 0.1, "durationSeconds": 1.0},
+            {"concurrency": 2, "status": "PASS", "clientDispatchWaitSeconds": 0.3, "durationSeconds": 1.2},
+        ]
+
+        summary = benchmark.summarize_by_concurrency(samples)["2"]
+
+        self.assertEqual(summary["clientDispatchWaitSeconds"]["p50"], 0.2)
 
     def test_percentile_and_grouping_are_deterministic(self):
         samples = [
@@ -109,6 +120,134 @@ class BenchmarkLocalModelsTest(unittest.TestCase):
 
         self.assertEqual(values["MODEL_PROFILE_NAME"], "test")
         self.assertEqual(values["RERANK_HF_OVERRIDES"], '{"a":true}')
+
+    def test_hardware_validation_requires_exact_customer_gpu_inventory(self):
+        profile = {
+            "GPU_COUNT": "2",
+            "GPU_MIN_MEMORY_GB": "48",
+            "GPU_EXPECTED_MODEL_REGEX": "RTX A6000",
+        }
+        valid = {
+            "available": True,
+            "gpus": [
+                {"name": "NVIDIA RTX A6000", "memoryTotalMiB": 49140},
+                {"name": "NVIDIA RTX A6000", "memoryTotalMiB": 49140},
+            ],
+        }
+
+        self.assertEqual(benchmark.validate_hardware(profile, valid), [])
+        errors = benchmark.validate_hardware(profile, {
+            "available": True,
+            "gpus": [{"name": "NVIDIA H100 PCIe", "memoryTotalMiB": 81559}],
+        })
+        self.assertIn("expected 2 GPUs, found 1", errors)
+        self.assertTrue(any("does not match" in error for error in errors))
+
+    def test_prompt_token_evidence_rejects_missing_or_materially_short_inputs(self):
+        self.assertEqual(benchmark.validate_prompt_tokens(32000, 32024, 32768), [])
+        self.assertTrue(any("missing" in error for error in benchmark.validate_prompt_tokens(32000, None, 32768)))
+        self.assertTrue(any("below" in error for error in benchmark.validate_prompt_tokens(32000, 12000, 32768)))
+        self.assertTrue(any("exceeds" in error for error in benchmark.validate_prompt_tokens(32000, 33000, 32768)))
+
+    def test_gpu_monitor_samples_during_long_running_operation(self):
+        captures = []
+
+        def capture():
+            sample = {"capturedAt": str(len(captures)), "gpus": [{"memoryUsedMiB": len(captures) * 100}]}
+            captures.append(sample)
+            return sample
+
+        monitor = benchmark.GpuMonitor(interval_seconds=0.005, capture=capture)
+        monitor.start()
+        deadline = time.monotonic() + 0.5
+        while len(captures) < 3 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        samples = monitor.stop()
+
+        self.assertGreaterEqual(len(samples), 3)
+        self.assertEqual(benchmark.gpu_peak_summary(samples)["0"]["memoryUsedPeakMiB"], (len(samples) - 1) * 100)
+
+    def test_auxiliary_contention_monitor_collects_embedding_and_reranker_samples(self):
+        calls = []
+
+        def run(name):
+            calls.append(name)
+            return {"status": "PASS", "durationSeconds": 0.01}
+
+        monitor = benchmark.AuxiliaryContentionMonitor(
+            interval_seconds=0.005,
+            runners={"embedding": lambda: run("embedding"), "reranker": lambda: run("reranker")},
+        )
+        monitor.start()
+        deadline = time.monotonic() + 0.5
+        while len(calls) < 4 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        result = monitor.stop()
+
+        self.assertGreaterEqual(len(result["embedding"]), 2)
+        self.assertGreaterEqual(len(result["reranker"]), 2)
+
+    def test_customer_acceptance_requires_successful_auxiliary_contention(self):
+        profile = {
+            "MODEL_PROFILE_NAME": "a6000x2-production-32k", "GPU_COUNT": "2",
+            "GPU_MIN_MEMORY_GB": "48", "GPU_EXPECTED_MODEL_REGEX": "RTX A6000",
+            "CHAT_MAX_MODEL_LEN": "32768",
+        }
+        hardware = {"available": True, "gpus": [
+            {"name": "NVIDIA RTX A6000", "memoryTotalMiB": 49140},
+            {"name": "NVIDIA RTX A6000", "memoryTotalMiB": 49140},
+        ]}
+        samples = [{"status": "PASS", "length": 2000, "concurrency": 1, "promptTokens": 2020}]
+        smoke = {"embedding": {"status": "PASS"}, "reranker": {"status": "PASS"}}
+
+        result = benchmark.evaluate_acceptance(
+            profile, hardware, samples, smoke, True, [2000], [1], 1,
+            "a6000x2-production-32k", contention={"embedding": [], "reranker": []},
+        )
+
+        self.assertFalse(result["passed"])
+        self.assertTrue(any("embedding contention" in error for error in result["errors"]))
+        self.assertTrue(any("reranker contention" in error for error in result["errors"]))
+
+    def test_acceptance_gate_checks_active_profile_matrix_and_prompt_evidence(self):
+        profile = {
+            "MODEL_PROFILE_NAME": "a6000x2-production-32k",
+            "GPU_COUNT": "2",
+            "GPU_MIN_MEMORY_GB": "48",
+            "GPU_EXPECTED_MODEL_REGEX": "RTX A6000",
+            "CHAT_MAX_MODEL_LEN": "32768",
+        }
+        hardware = {
+            "available": True,
+            "gpus": [
+                {"name": "NVIDIA RTX A6000", "memoryTotalMiB": 49140},
+                {"name": "NVIDIA RTX A6000", "memoryTotalMiB": 49140},
+            ],
+            "gpuSamples": [{"capturedAt": "now", "gpus": []}],
+        }
+        samples = [
+            {"status": "PASS", "length": 2000, "concurrency": 1, "promptTokens": 2020},
+            {"status": "PASS", "length": 8000, "concurrency": 1, "promptTokens": 8020},
+        ]
+        smoke = {"embedding": {"status": "PASS"}, "reranker": {"status": "PASS"}}
+
+        result = benchmark.evaluate_acceptance(
+            profile, hardware, samples, smoke, True,
+            lengths=[2000, 8000], concurrencies=[1], runs=1,
+            active_profile="a6000x2-production-32k",
+            contention={"embedding": [{"status": "PASS"}], "reranker": [{"status": "PASS"}]},
+        )
+        self.assertTrue(result["passed"])
+
+        failed = benchmark.evaluate_acceptance(
+            profile, hardware, samples[:1], smoke, True,
+            lengths=[2000, 8000], concurrencies=[1], runs=1,
+            active_profile="a6000x2-stable-16k",
+            contention={"embedding": [{"status": "PASS"}], "reranker": [{"status": "PASS"}]},
+        )
+        self.assertFalse(failed["passed"])
+        self.assertTrue(any("active profile" in error for error in failed["errors"]))
+        self.assertTrue(any("matrix cell" in error for error in failed["errors"]))
 
 
 if __name__ == "__main__":

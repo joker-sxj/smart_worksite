@@ -249,6 +249,8 @@ export interface ReviewRecord {
   taskId?: ID;
   fileId?: ID;
   templateId: ID;
+  templateName?: string;
+  templateVersion?: string;
   status: Status;
   issues: ReviewIssue[];
   result?: Record<string, unknown>;
@@ -257,6 +259,26 @@ export interface ReviewRecord {
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ReviewField {
+  key: string;
+  label?: string;
+  stage: 'INPUT' | 'DOCUMENT' | 'RESULT';
+  type: 'STRING' | 'TEXT' | 'NUMBER' | 'BOOLEAN' | 'DATE' | 'ENUM';
+  required: boolean;
+  options: string[];
+  sort: number;
+  validation: Record<string, unknown>;
+}
+
+export interface ReviewFieldSchema {
+  id?: ID;
+  projectId: ID;
+  templateId: ID;
+  version: number;
+  status: string;
+  fields: ReviewField[];
 }
 
 export interface ReviewReference {
@@ -396,6 +418,7 @@ export interface OcrField {
   pageNo?: number;
   evidence?: string;
   revised?: boolean;
+  manualConfirmationRequired?: boolean;
 }
 
 export interface OcrRecord {
@@ -404,10 +427,14 @@ export interface OcrRecord {
   projectId: ID;
   taskId: ID;
   fileId: ID;
-  ocrType: 'ID_CARD' | 'LICENSE_PLATE' | 'INVOICE' | 'CUSTOM';
+  ocrType: 'ID_CARD' | 'LICENSE_PLATE' | 'INVOICE' | 'PASSPORT' | 'TRAVEL_PERMIT' | 'FIVE_STAR_CARD' | 'CONTRACT' | 'CUSTOM';
   status: Status;
   progress: number;
   fields: OcrField[];
+  rawResult?: Record<string, unknown>;
+  manuallyConfirmed?: boolean;
+  confirmedBy?: ID;
+  confirmedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -520,6 +547,12 @@ export interface DataSourceQueryResult {
   columns: string[];
   rows: Record<string, unknown>[];
   summary?: string;
+  warnings?: string[];
+  providerTraceId?: string;
+  dataSourceId?: ID;
+  parameters?: Record<string, unknown>;
+  executionTimeMs?: number;
+  maskingRules?: string[];
 }
 
 export interface PolicySource {
@@ -551,6 +584,7 @@ export interface PolicyCrawlTask {
   progress?: number;
   fetchedCount: number;
   indexedCount: number;
+  failedCount?: number;
   message?: string;
   startedAt?: string;
   finishedAt?: string;
@@ -564,6 +598,7 @@ export interface PolicyArticle {
   title: string;
   url: string;
   summary: string;
+  content?: string;
   publishDate?: string;
   category?: string;
   indexStatus: Status | string;

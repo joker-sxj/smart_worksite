@@ -18,7 +18,9 @@ import {
   qaEvidenceRecovery,
   qaSuggestedFollowUps,
   runSuggestedFollowUpSubmission,
-  qaValidityCaution
+  qaValidityCaution,
+  syncSubmittedSuggestionKeys,
+  acceptSessionMessages
 } from './QaView.vue';
 import { restoreSubmittedSuggestionKeys } from './qaMessagePolling';
 import qaViewSource from './QaView.vue?raw';
@@ -162,6 +164,40 @@ describe('QaView persisted follow-up suggestions', () => {
     ] as QaMessage[];
 
     expect([...restoreSubmittedSuggestionKeys(records)]).toEqual(['7:1']);
+  });
+
+  it('synchronizes persisted suggestion keys when switching or refreshing a session', () => {
+    const state = { pending: false, submittedKeys: new Set<string>() };
+    syncSubmittedSuggestionKeys(state, [
+      { messageId: 11, sourceSuggestionMessageId: 7, clientRequestId: 'suggestion-3-7-1' },
+      { messageId: 12 }
+    ] as QaMessage[]);
+
+    expect([...state.submittedKeys]).toEqual(['7:1']);
+  });
+
+  it.each(['switch', 'poll', 'send'])('rejects stale %s responses from a previous session', () => {
+    const state = { pending: false, submittedKeys: new Set(['current:0']) };
+    const stale = [{
+      messageId: 11, sessionId: 1, projectId: 1, status: 'SUCCESS',
+      sourceSuggestionMessageId: 7, clientRequestId: 'suggestion-1-7-1',
+      createdAt: '', updatedAt: ''
+    }] as QaMessage[];
+
+    expect(acceptSessionMessages(state, 1, 2, stale)).toBeNull();
+    expect([...state.submittedKeys]).toEqual(['current:0']);
+  });
+
+  it('accepts messages only for the currently active session', () => {
+    const state = { pending: false, submittedKeys: new Set<string>() };
+    const records = [{
+      messageId: 11, sessionId: 2, projectId: 1, status: 'SUCCESS',
+      sourceSuggestionMessageId: 7, clientRequestId: 'suggestion-2-7-1',
+      createdAt: '', updatedAt: ''
+    }] as QaMessage[];
+
+    expect(acceptSessionMessages(state, 2, '2', records)).toBe(records);
+    expect([...state.submittedKeys]).toEqual(['7:1']);
   });
 
   it('unlocks suggestion submission after a failed send', async () => {

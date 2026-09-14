@@ -89,6 +89,17 @@ export async function updateOcrFields(recordId: ID, fields: OcrField[]) {
   return request.put<OcrRecord>(`/ocr/records/${recordId}/fields`, { fields });
 }
 
+export async function confirmOcrRecord(recordId: ID) {
+  if (useMock) {
+    const item = mockRecords.find((record) => String(record.recordId) === String(recordId));
+    if (!item) throw new Error(`OCR record not found: ${recordId}`);
+    item.manuallyConfirmed = true;
+    item.confirmedAt = new Date().toISOString();
+    return item;
+  }
+  return request.post<OcrRecord>(`/ocr/records/${recordId}/confirm`);
+}
+
 export async function retryOcrRecord(recordId: ID) {
   if (useMock) return { recordId, taskId: Number(recordId) + 1, status: 'PENDING' };
   return request.post<{ recordId: ID; taskId: ID; status: string }>(`/ocr/records/${recordId}/retry`);

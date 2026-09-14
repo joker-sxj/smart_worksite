@@ -8,13 +8,13 @@ import JsonViewer from '../../components/common/JsonViewer.vue';
 import TaskProgress from '../../components/common/TaskProgress.vue';
 import StatusTag from '../../components/common/StatusTag.vue';
 import EmptyState from '../../components/common/EmptyState.vue';
-import { fetchReviewRecord, fetchReviewTemplates, submitReviewRecord, updateReviewIssue } from '../../api/review';
+import { fetchReviewFieldSchema, fetchReviewRecord, fetchReviewTemplates, saveReviewFieldSchema, submitReviewRecord, updateReviewIssue } from '../../api/review';
 import { fetchTaskStages } from '../../api/task';
 import { fetchKnowledgeBases, fetchKnowledgeDocuments } from '../../api/knowledge';
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
-import type { ID, KnowledgeDocument, ReviewRecord, ReviewTemplate, TaskStageLog } from '../../api/types';
-import { isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
+import type { ID, KnowledgeDocument, ReviewField, ReviewFieldSchema, ReviewRecord, ReviewTemplate, TaskStageLog } from '../../api/types';
+import { canUpdateReviewIssues, isReviewTerminal, progressFromReviewState, reviewStorageKey } from './reviewPolling';
 import { exceedsReviewReferenceLimit } from './reviewSubmission';
 
 const router = useRouter();
@@ -32,6 +32,12 @@ const file = ref<File | null>(null);
 const referenceFiles = ref<File[]>([]);
 const referenceDocuments = ref<KnowledgeDocument[]>([]);
 const selectedReferenceDocumentIds = ref<ID[]>([]);
+const fieldSchema = ref<ReviewFieldSchema | null>(null);
+const fieldValues = ref<Record<string, unknown>>({});
+const schemaDraft = ref<ReviewField[]>([]);
+const savingSchema = ref(false);
+const schemaError = ref('');
+const schemaLoading = ref(false);
 const currentRecord = ref<ReviewRecord | null>(null);
 const submittedInfo = ref<{ recordId?: ID; taskId?: ID; status?: string } | null>(null);
 const logs = ref<TaskStageLog[]>([]);
@@ -40,7 +46,7 @@ let recordPollTimer: ReturnType<typeof setTimeout> | null = null;
 const RECORD_POLL_INTERVAL_MS = 2000;
 const canManageReview = computed(() => userStore.hasPermission('review:manage'));
 const reviewManageTip = '当前账号没有合规审查管理权限';
-const canSubmit = computed(() => Boolean(canManageReview.value && templates.value.length && selectedTemplateId.value && file.value && !submitting.value));
+const canSubmit = computed(() => Boolean(canManageReview.value && templates.value.length && selectedTemplateId.value && file.value && !submitting.value && !schemaLoading.value && !schemaError.value));
 const ruleResults = computed(() => Array.isArray(currentRecord.value?.result?.ruleResults) ? currentRecord.value?.result?.ruleResults as Array<Record<string, unknown>> : []);
 const issueStatusOptions = [
   { label: '待处理', value: 'OPEN' },
@@ -59,7 +65,7 @@ function goTemplates() {
   router.push({ path: '/templates', query: { category: 'REVIEW', action: 'upload' } });
 }
 function progressOf(record: ReviewRecord) { return progressFromReviewState(record, logs.value); }
-function canUpdateIssue(record: ReviewRecord | null) { return canManageReview.value && record?.status === 'COMPLETED'; }
+function canUpdateIssue(record: ReviewRecord | null) { return canManageReview.value && canUpdateReviewIssues(record?.status); }
 
 function stopRecordPolling() {
   if (recordPollTimer) clearTimeout(recordPollTimer);
@@ -101,6 +107,32 @@ async function loadTemplates() {
   } finally {
     loading.value = false;
   }
+}
+
+async function loadFieldSchema() {
+  const projectId = projectStore.currentProject?.projectId;
+  if (!projectId || !selectedTemplateId.value) { fieldSchema.value = null; return; }
+  schemaLoading.value = true; schemaError.value = '';
+  try { fieldSchema.value = await fetchReviewFieldSchema(projectId, selectedTemplateId.value); schemaDraft.value = fieldSchema.value.fields.map((item) => ({ ...item, options: [...item.options], validation: { ...item.validation } })); }
+  catch (err) { fieldSchema.value = null; schemaError.value = err instanceof Error ? err.message : '审查字段配置加载失败，已阻止提交'; }
+  finally { schemaLoading.value = false; }
+}
+
+function setValidation(field: ReviewField, key: string, value: unknown) {
+  field.validation = { ...field.validation, [key]: value === '' ? undefined : value };
+}
+
+function addSchemaField() {
+  schemaDraft.value.push({ key: '', label: '', stage: 'INPUT', type: 'STRING', required: false, options: [], sort: schemaDraft.value.length + 1, validation: {} });
+}
+
+async function persistSchema() {
+  const projectId = projectStore.currentProject?.projectId;
+  if (!projectId || !selectedTemplateId.value) return;
+  savingSchema.value = true;
+  try { fieldSchema.value = await saveReviewFieldSchema(projectId, selectedTemplateId.value, schemaDraft.value); ElMessage.success('审查字段配置已保存为新版本'); }
+  catch (err) { ElMessage.error(err instanceof Error ? err.message : '审查字段配置保存失败'); }
+  finally { savingSchema.value = false; }
 }
 
 async function loadReferenceDocuments() {
@@ -146,6 +178,8 @@ async function submit() {
   }
   const projectId = projectStore.currentProject?.projectId;
   if (!projectId) return ElMessage.warning(t('请先选择项目'));
+  const missing = (fieldSchema.value?.fields || []).filter((item) => item.stage === 'INPUT' && item.required && (fieldValues.value[item.key] == null || fieldValues.value[item.key] === '')).map((item) => item.label || item.key);
+  if (missing.length) return ElMessage.warning(`请填写必填审查字段：${missing.join('、')}`);
   submitting.value = true;
   resultNotice.value = '';
   stageNotice.value = '';
@@ -153,7 +187,7 @@ async function submit() {
     const result = await submitReviewRecord({
       projectId, templateId: selectedTemplateId.value, file: file.value,
       referenceDocumentIds: selectedReferenceDocumentIds.value,
-      referenceFiles: referenceFiles.value
+      referenceFiles: referenceFiles.value, fieldValues: fieldValues.value, schemaVersion: fieldSchema.value?.version
     });
     submittedInfo.value = result;
     ElMessage.success(t('审查任务已提交'));
@@ -198,6 +232,7 @@ watch(() => projectStore.currentProject?.projectId, async (projectId, previousPr
   await loadReferenceDocuments();
   await restoreLastRecord(projectId);
 });
+watch(selectedTemplateId, loadFieldSchema, { immediate: true });
 onUnmounted(stopRecordPolling);
 </script>
 
@@ -207,6 +242,7 @@ onUnmounted(stopRecordPolling);
     <el-alert v-if="submitError" :title="submitError" type="error" show-icon :closable="false" style="margin-bottom: 12px" />
     <el-alert v-if="resultNotice" :title="resultNotice" type="info" show-icon :closable="false" style="margin-bottom: 12px" />
     <el-alert v-if="stageNotice" :title="stageNotice" type="warning" show-icon :closable="false" style="margin-bottom: 12px" />
+    <el-alert v-if="schemaError" :title="`审查字段配置加载失败：${schemaError}`" type="error" show-icon :closable="false" style="margin-bottom: 12px" />
     <div class="page-header">
       <div>
         <h2 class="page-title">{{ t('合规审查') }}</h2>
@@ -249,6 +285,34 @@ onUnmounted(stopRecordPolling);
             <el-button v-if="canManageReview" type="primary" :loading="submitting" :disabled="!canSubmit" @click="submit">{{ t('3. 发起审查') }}</el-button>
           </el-form-item>
         </el-form>
+        <el-form v-if="fieldSchema?.fields.some((item) => item.stage === 'INPUT')" label-position="top" class="review-fields">
+          <el-form-item v-for="item in fieldSchema.fields.filter((field) => field.stage === 'INPUT')" :key="item.key" :label="`${item.label || item.key}${item.required ? ' *' : ''}`">
+            <el-select v-if="item.type === 'ENUM'" v-model="fieldValues[item.key]" style="width: 100%"><el-option v-for="option in item.options" :key="option" :label="option" :value="option" /></el-select>
+            <el-input-number v-else-if="item.type === 'NUMBER'" v-model="fieldValues[item.key] as number" style="width: 100%" />
+            <el-switch v-else-if="item.type === 'BOOLEAN'" v-model="fieldValues[item.key] as boolean" />
+            <el-date-picker v-else-if="item.type === 'DATE'" v-model="fieldValues[item.key]" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+            <el-input v-else v-model="fieldValues[item.key] as string" :type="item.type === 'TEXT' ? 'textarea' : 'text'" />
+          </el-form-item>
+        </el-form>
+        <el-collapse v-if="canManageReview" class="schema-editor">
+          <el-collapse-item title="配置独立审查字段（保存后生成新版本）">
+            <div v-for="(item, index) in schemaDraft" :key="index" class="schema-row">
+              <el-input v-model="item.key" placeholder="稳定 key" /><el-input v-model="item.label" placeholder="字段名称" />
+              <el-select v-model="item.stage"><el-option label="审查前输入" value="INPUT" /><el-option label="文档抽取" value="DOCUMENT" /><el-option label="审查结果" value="RESULT" /></el-select>
+              <el-select v-model="item.type"><el-option v-for="type in ['STRING','TEXT','NUMBER','BOOLEAN','DATE','ENUM']" :key="type" :label="type" :value="type" /></el-select>
+              <el-checkbox v-model="item.required">必填</el-checkbox><el-input-number v-model="item.sort" :min="0" />
+              <el-button type="danger" plain @click="schemaDraft.splice(index, 1)">删除</el-button>
+              <el-select v-if="item.type === 'ENUM'" v-model="item.options" multiple filterable allow-create default-first-option placeholder="枚举选项" class="wide-field" />
+              <div class="validation-fields wide-field">
+                <el-input-number v-if="item.type === 'NUMBER'" :model-value="item.validation.min as number" placeholder="最小值" @update:model-value="setValidation(item, 'min', $event)" />
+                <el-input-number v-if="item.type === 'NUMBER'" :model-value="item.validation.max as number" placeholder="最大值" @update:model-value="setValidation(item, 'max', $event)" />
+                <el-input-number v-else :model-value="item.validation.maxLength as number" placeholder="最大长度" @update:model-value="setValidation(item, 'maxLength', $event)" />
+                <el-input :model-value="item.validation.pattern as string" placeholder="正则格式（可选）" @update:model-value="setValidation(item, 'pattern', $event)" />
+              </div>
+            </div>
+            <div class="schema-actions"><el-button @click="addSchemaField">添加字段</el-button><el-button type="primary" :loading="savingSchema" @click="persistSchema">保存新版本</el-button></div>
+          </el-collapse-item>
+        </el-collapse>
         <div class="upload-title required-label">2. 上传待审文件</div>
         <AppUpload v-if="canManageReview" :model-value="file ? [file] : []" accept=".doc,.docx,.pdf" :max-size-mb="100" :multiple="false" :uploading="submitting" @update:model-value="file = $event[0] || null" />
         <p class="upload-tip">支持 Word、PDF。选择模板和文件后，点击“发起审查”。</p>
@@ -270,6 +334,7 @@ onUnmounted(stopRecordPolling);
     <template v-else-if="currentRecord">
       <el-card class="work-card">
         <h3 class="panel-title">{{ t('审查进度') }}</h3>
+        <p class="template-snapshot">审查模板：{{ currentRecord.templateName || `ID ${currentRecord.templateId}` }} · 版本 {{ currentRecord.templateVersion || '未记录' }}</p>
         <el-alert v-if="currentRecord.status === 'FAILED'" :title="currentRecord.errorMessage || t('审查失败，未生成结果。')" type="error" show-icon :closable="false" style="margin-bottom: 12px" />
         <TaskProgress :percentage="progressOf(currentRecord)" :status="currentRecord.status" :logs="logs" />
       </el-card>
@@ -337,8 +402,15 @@ onUnmounted(stopRecordPolling);
 .optional-upload { margin-top: 16px; }
 .reference-meta { float: right; margin-left: 20px; color: var(--sw-muted); }
 .reference-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.template-snapshot { margin: -4px 0 12px; color: var(--sw-muted); font-size: 13px; }
 .evidence-card { margin-top: 16px; }
+.schema-editor { margin: 18px 0; }
+.schema-row { display: grid; grid-template-columns: 1.2fr 1.2fr 1fr 1fr auto auto auto; gap: 8px; margin-bottom: 10px; align-items: center; }
+.wide-field { grid-column: 1 / -1; width: 100%; }
+.validation-fields { display: flex; gap: 8px; }
+.schema-actions { display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 900px) {
   .review-guide { grid-template-columns: 1fr; }
+  .schema-row { grid-template-columns: 1fr; }
 }
 </style>

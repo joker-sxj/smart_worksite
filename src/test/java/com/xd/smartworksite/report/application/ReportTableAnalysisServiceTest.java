@@ -84,4 +84,78 @@ class ReportTableAnalysisServiceTest {
                 .doesNotContain("无风险")
                 .doesNotContain("全部闭环");
     }
+
+    @Test
+    void excludesTechnicalDatesFromBusinessTrend() {
+        var table = new ReportTableAnalysisService().normalize(
+                List.of("created_at", "generation_time"),
+                List.of(Map.of("created_at", "2026-09-01", "generation_time", "2026-09-02")), "source");
+
+        assertThat(new ReportTableAnalysisService().statistics(table).monthlyTrend()).isEmpty();
+    }
+
+    @Test
+    void computesStatisticsFromAllRowsWhileDisplayingOnlyFirstHundred() {
+        List<Map<String, Object>> rows = java.util.stream.IntStream.range(0, 150)
+                .mapToObj(i -> Map.<String, Object>of("risk_level", i < 120 ? "一级" : "二级"))
+                .toList();
+        var table = new ReportTableAnalysisService().normalize(List.of("risk_level"), rows, "source");
+
+        var statistics = new ReportTableAnalysisService().statistics(table);
+
+        assertThat(table.rows()).hasSize(100);
+        assertThat(statistics.nonEmptyRows()).isEqualTo(150);
+        assertThat(statistics.groupCounts().get("risk_level"))
+                .containsEntry("一级", 120).containsEntry("二级", 30);
+    }
+
+    @Test
+    void weightsGroupedCategoriesByAnExplicitCountColumn() {
+        var table = new ReportTableAnalysisService().normalize(
+                List.of("risk_level", "total_risks", "latest_discovery_time"),
+                List.of(
+                        Map.of("risk_level", "一级", "total_risks", 2, "latest_discovery_time", "2026-09-09"),
+                        Map.of("risk_level", "二级", "total_risks", 4, "latest_discovery_time", "2026-09-05"),
+                        Map.of("risk_level", "三级", "total_risks", 4, "latest_discovery_time", "2026-08-30"),
+                        Map.of("risk_level", "四级", "total_risks", 2, "latest_discovery_time", "2026-08-24")),
+                "source");
+
+        var statistics = new ReportTableAnalysisService().statistics(table);
+
+        assertThat(statistics.groupCounts().get("risk_level"))
+                .containsEntry("一级", 2).containsEntry("二级", 4)
+                .containsEntry("三级", 4).containsEntry("四级", 2);
+        assertThat(statistics.monthlyTrend()).containsEntry("2026-09", 6).containsEntry("2026-08", 6);
+    }
+
+    @Test
+    void doesNotTreatIdentifiersOrAmountsAsCategoryWeights() {
+        var table = new ReportTableAnalysisService().normalize(
+                List.of("risk_level", "record_id", "amount"),
+                List.of(
+                        Map.of("risk_level", "一级", "record_id", 1001, "amount", 5000),
+                        Map.of("risk_level", "一级", "record_id", 1002, "amount", 3000)),
+                "source");
+
+        var statistics = new ReportTableAnalysisService().statistics(table);
+
+        assertThat(statistics.groupCounts().get("risk_level")).containsEntry("一级", 2);
+    }
+
+    @Test
+    void describesGroupedResultsAsGroupsAndBusinessRecordCount() {
+        var table = new ReportTableAnalysisService().normalize(
+                List.of("risk_level", "total_risks"),
+                List.of(
+                        Map.of("risk_level", "一级", "total_risks", 2),
+                        Map.of("risk_level", "二级", "total_risks", 4),
+                        Map.of("risk_level", "三级", "total_risks", 4),
+                        Map.of("risk_level", "四级", "total_risks", 2)),
+                "source");
+
+        String conclusion = new ReportTableAnalysisService().standardConclusion(
+                new ReportTableAnalysisService().statistics(table));
+
+        assertThat(conclusion).contains("4组汇总记录").contains("合计12条业务记录");
+    }
 }

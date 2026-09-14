@@ -149,7 +149,7 @@
     </update>
     <update id="updateCrawlTaskProgress">
         update policy_crawl_task set status = #{status}, progress = #{progress}, fetched_count = #{fetchedCount}, indexed_count = #{indexedCount}, failed_count = #{failedCount}, message = #{message}, error_message = #{errorMessage},
-            finished_at = case when #{status} in ('SUCCESS','FAILED','CANCELED') then current_timestamp else finished_at end,
+              finished_at = case when #{status} in ('SUCCESS','PARTIAL_SUCCESS','FAILED','CANCELED') then current_timestamp else finished_at end,
             updated_by = #{updatedBy}
         where task_id = #{taskId} and deleted = 0
     </update>

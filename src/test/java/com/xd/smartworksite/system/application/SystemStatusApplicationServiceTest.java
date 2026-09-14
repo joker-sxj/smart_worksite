@@ -72,7 +72,7 @@ class SystemStatusApplicationServiceTest {
                 "modelReadiness":{"status":"READY","profile":"a6000x2-production-32k",
                 "maxContextTokens":32768,"dependencies":{"chat":{"status":"READY",
                 "configured":true,"reachable":true,"provider":"OPENAI_COMPATIBLE",
-                "model":"smart-worksite-chat","endpointScope":"LOCAL",
+                "model":"smart-worksite-chat","revision":"1111111111111111111111111111111111111111","endpointScope":"LOCAL",
                 "endpoint":"http://private-model:8000/v1","authorization":"Bearer secret"}}}}}
                 """;
         try (TestHttpServer server = new TestHttpServer(body)) {
@@ -88,6 +88,7 @@ class SystemStatusApplicationServiceTest {
             assertThat(localAi.getProfile()).isEqualTo("a6000x2-production-32k");
             assertThat(localAi.getMaxContextTokens()).isEqualTo(32768L);
             assertThat(localAi.getModels().get("chat").getModel()).isEqualTo("smart-worksite-chat");
+            assertThat(localAi.getModels().get("chat").getRevision()).isEqualTo("1111111111111111111111111111111111111111");
             assertThat(localAi.getModels().get("chat").getEndpointScope()).isEqualTo("LOCAL");
             assertThat(serialized).doesNotContain("secret-api-key", "Bearer secret", "private-model", "http://", "apiKey", "authorization");
         }
@@ -159,7 +160,7 @@ class SystemStatusApplicationServiceTest {
         TestHttpServer(String healthBody) throws IOException {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/minio/health/live", exchange -> respond(exchange, 200, ""));
-            server.createContext("/v1/health", exchange -> respond(exchange, 200, healthBody));
+            server.createContext("/v1/ready", exchange -> respond(exchange, 200, healthBody));
             server.start();
         }
 

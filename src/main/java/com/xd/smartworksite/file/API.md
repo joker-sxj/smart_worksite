@@ -484,7 +484,7 @@ curl --noproxy '*' -X POST http://127.0.0.1:8080/api/files/{fileId}/parse \
 查看文件对象：
 
 ```bash
-docker exec -it smart-worksite-mysql mysql -uroot -proot smart_worksite
+docker compose -f deploy/docker-compose-env.yml --env-file deploy/.env exec mysql mysql -uroot -proot smart_worksite
 ```
 
 ```sql

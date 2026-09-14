@@ -51,6 +51,77 @@ def test_health_without_key_when_service_key_is_configured(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_model_invoke_returns_stable_policy_error_for_unapproved_local_model(monkeypatch):
+    from app.api import routes
+
+    settings = Settings(
+        _env_file=None,
+        ai_deployment_mode="LOCAL_ONLY",
+        chat_max_model_len=16384,
+        qwen_base_url="http://local-llm:8000/v1",
+        qwen_model="smart-worksite-chat",
+        qwen_vl_endpoint="http://local-llm:8000/v1/chat/completions",
+        qwen_vl_model="smart-worksite-chat",
+        qwen_embedding_base_url="http://local-embedding:8000/v1",
+        qwen_rerank_base_url="http://local-reranker:8000/v1/rerank",
+    )
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post("/v1/model/invoke", json={
+        "prompt": "ping",
+        "modelName": "unapproved-model",
+    })
+
+    assert response.status_code == 422
+    assert response.json()["errorCode"] == "MODEL_NOT_ALLOWED"
+    assert response.json()["traceId"]
+    assert "http://" not in response.text
+
+
+def test_model_invoke_rejects_parameter_model_override_with_specific_error(monkeypatch):
+    from app.api import routes
+
+    settings = Settings(
+        _env_file=None, ai_deployment_mode="LOCAL_ONLY", chat_max_model_len=16384,
+        qwen_base_url="http://local-llm:8000/v1", qwen_model="smart-worksite-chat",
+        qwen_vl_endpoint="http://local-llm:8000/v1/chat/completions",
+        qwen_vl_model="smart-worksite-chat",
+        qwen_embedding_base_url="http://local-embedding:8000/v1",
+        qwen_rerank_base_url="http://local-reranker:8000/v1/rerank",
+    )
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+
+    response = TestClient(app, raise_server_exceptions=False).post("/v1/model/invoke", json={
+        "prompt": "ping", "parameters": {"model": "unapproved-model"},
+    })
+
+    assert response.status_code == 422
+    assert response.json()["errorCode"] == "MODEL_REQUEST_INVALID"
+    assert response.json()["errorMessage"] == "Model request contains protected fields"
+
+
+def test_agent_invoke_rejects_parameter_model_override(monkeypatch):
+    from app.api import routes
+
+    settings = Settings(
+        _env_file=None, ai_deployment_mode="LOCAL_ONLY", chat_max_model_len=16384,
+        qwen_base_url="http://local-llm:8000/v1", qwen_model="smart-worksite-chat",
+        qwen_vl_endpoint="http://local-llm:8000/v1/chat/completions",
+        qwen_vl_model="smart-worksite-chat",
+        qwen_embedding_base_url="http://local-embedding:8000/v1",
+        qwen_rerank_base_url="http://local-reranker:8000/v1/rerank",
+    )
+    monkeypatch.setattr(routes, "get_settings", lambda: settings)
+
+    response = TestClient(app, raise_server_exceptions=False).post("/v1/agent/invoke", json={
+        "goal": "inspect safety", "parameters": {"model": "unapproved-model"},
+    })
+
+    assert response.status_code == 422
+    assert response.json()["errorCode"] == "MODEL_REQUEST_INVALID"
+
+
 def test_rag_index_and_search_local_hash():
     client = TestClient(app)
     index_response = client.post("/v1/rag/index", json={
@@ -618,6 +689,41 @@ def test_global_500_does_not_leak_internal_url_token_or_path(monkeypatch):
     assert response.json()["errorCode"] == "INTERNAL_ERROR"
     assert secret not in response.text
     assert "token=secret" not in response.text
+
+
+def test_policy_crawler_errors_return_safe_actionable_diagnostics(monkeypatch):
+    from app.api import routes
+    from app.services.policy_crawler_service import (
+        PolicyCrawlerNetworkDisabledError,
+        PolicyCrawlerBlockedError,
+        PolicyCrawlerResponseError,
+        PolicyCrawlerTimeoutError,
+        PolicyCrawlerUrlError,
+    )
+
+    cases = [
+        (PolicyCrawlerNetworkDisabledError("internal config"), 503, "POLICY_CRAWLER_NETWORK_DISABLED", "政策爬虫网络访问未启用"),
+        (PolicyCrawlerUrlError("policy crawler is disallowed by robots.txt"), 422, "POLICY_CRAWLER_ROBOTS_DENIED", "目标网站的 robots.txt 禁止抓取"),
+        (PolicyCrawlerUrlError("private host: token=secret"), 422, "POLICY_CRAWLER_URL_REJECTED", "目标地址不符合安全抓取规则"),
+        (PolicyCrawlerBlockedError("secret target response"), 502, "POLICY_CRAWLER_TARGET_BLOCKED", "目标网站拒绝了抓取请求"),
+        (PolicyCrawlerTimeoutError("secret timeout target"), 504, "POLICY_CRAWLER_TIMEOUT", "目标网站响应超时"),
+        (PolicyCrawlerResponseError("policy crawler requires an HTML Content-Type"), 502, "POLICY_CRAWLER_INVALID_RESPONSE", "目标网站未返回可解析的 HTML 内容"),
+    ]
+
+    for error, status, code, message in cases:
+        class FailingPolicy:
+            async def crawl(self, _request):
+                raise error
+
+        monkeypatch.setattr(routes, "services", lambda: {"policy": FailingPolicy()})
+        response = TestClient(app, raise_server_exceptions=False).post("/v1/policy/crawl", json={
+            "projectId": 1, "sourceId": 1, "url": "https://example.gov/policy",
+        })
+
+        assert response.status_code == status
+        assert response.json()["errorCode"] == code
+        assert response.json()["errorMessage"] == message
+        assert "token=secret" not in response.text
 
 
 def test_request_validation_error_returns_safe_field_summary_without_input_value():
@@ -1440,8 +1546,15 @@ def test_ocr_prompt_only_requests_type_specific_extras():
     assert "extras.watermark" not in plate_prompt
     assert "extras.items" not in plate_prompt
 
+    invoice_prompt = service._build_prompt(
+        OcrRecognizeRequest(projectId=1, recordId=3, ocrType="INVOICE", file=file, options={"invoiceType": "VAT_NORMAL"}),
+        "INVOICE",
+    )
+    assert "quantity、unitPrice、amount" in invoice_prompt
+    assert "最多50条" in invoice_prompt
 
-def test_health_separates_liveness_configuration_and_model_readiness(monkeypatch):
+
+def test_ready_separates_liveness_configuration_and_model_readiness(monkeypatch):
     from app.api import routes
 
     async def fake_snapshot(_self):
@@ -1462,14 +1575,55 @@ def test_health_separates_liveness_configuration_and_model_readiness(monkeypatch
         }
 
     monkeypatch.setattr(routes.ModelReadinessService, "snapshot", fake_snapshot)
-    response = TestClient(app).get("/v1/health")
+    response = TestClient(app).get("/v1/ready")
     body = response.json()["data"]
 
-    assert body["status"] == "UP"
+    assert response.status_code == 503
+    assert body["status"] == "DEGRADED"
     assert body["modelReadiness"]["status"] == "DEGRADED"
     assert body["modelReadiness"]["maxContextTokens"] == 32768
     assert "http://" not in response.text
     assert "api_key" not in response.text.lower()
+
+
+def test_health_is_liveness_and_does_not_probe_models(monkeypatch):
+    from app.api import routes
+
+    async def must_not_probe(_self):
+        raise AssertionError("liveness must not probe model dependencies")
+
+    monkeypatch.setattr(routes.ModelReadinessService, "snapshot", must_not_probe)
+    response = TestClient(app).get("/v1/health")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"status": "UP", "service": "python-ai-service"}
+
+
+def test_ready_returns_503_with_sanitized_dependency_details(monkeypatch):
+    from app.api import routes
+
+    async def fake_snapshot(_self):
+        return {"status": "DEGRADED", "dependencies": {"chat": {"status": "CONNECT_ERROR", "endpointScope": "LOCAL"}}}
+
+    monkeypatch.setattr(routes.ModelReadinessService, "snapshot", fake_snapshot)
+    response = TestClient(app).get("/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json()["data"]["modelReadiness"]["status"] == "DEGRADED"
+    assert "http://" not in response.text
+
+
+def test_ready_returns_200_when_all_models_are_ready(monkeypatch):
+    from app.api import routes
+
+    async def fake_snapshot(_self):
+        return {"status": "READY", "dependencies": {}}
+
+    monkeypatch.setattr(routes.ModelReadinessService, "snapshot", fake_snapshot)
+    response = TestClient(app).get("/v1/ready")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "READY"
 
 # Task 4: model API context-budget integration
 

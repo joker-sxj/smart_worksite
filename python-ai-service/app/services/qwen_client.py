@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from app.core.deployment import AiDeploymentMode, is_local_model_endpoint
+from app.core.deployment import AiDeploymentMode, ModelPolicyViolation, is_local_model_endpoint
 from app.core.settings import Settings
 from app.models.schemas import Message
 from app.services.token_counter import LocalTokenizationError, TokenCount
@@ -84,8 +84,15 @@ class OpenAICompatibleProvider:
 
     async def chat(self, messages: list[Message], model: str | None = None, parameters: dict[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
         self._require_api_key(self.settings.qwen_api_key, "QWEN_API_KEY")
+        selected_model = self._allowed_model(model, self.settings.qwen_model, "chat")
+        reserved = {"model", "messages"}.intersection(parameters or {})
+        if self.settings.ai_deployment_mode == AiDeploymentMode.LOCAL_ONLY and reserved:
+            raise ModelPolicyViolation(
+                "model request parameters contain reserved fields",
+                code="MODEL_REQUEST_INVALID",
+            )
         payload: dict[str, Any] = {
-            "model": model or self.settings.qwen_model,
+            "model": selected_model,
             "messages": [{"role": item.role, "content": item.content} for item in messages],
         }
         if parameters:
@@ -155,7 +162,7 @@ class OpenAICompatibleProvider:
 
     async def _post_qwen_vl(self, content: list[dict[str, Any]], headers: dict[str, str]) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "model": self.settings.qwen_vl_model,
+            "model": self._allowed_model(None, self.settings.qwen_vl_model, "vision"),
             "messages": [{"role": "user", "content": content}],
             "response_format": {"type": "json_object"},
             "presence_penalty": 1.5,
@@ -400,9 +407,10 @@ class OpenAICompatibleProvider:
         if not texts:
             return [], {}
         self._require_api_key(self.settings.qwen_api_key, "QWEN_API_KEY")
+        selected_model = self._allowed_model(model, self.settings.qwen_embedding_model, "embedding")
         texts = [self._bounded_embedding_text(text) for text in texts]
         payload: dict[str, Any] = {
-            "model": model or self.settings.qwen_embedding_model,
+            "model": selected_model,
             "input": texts,
         }
         if self.settings.qwen_embedding_dimensions > 0:
@@ -469,6 +477,17 @@ class OpenAICompatibleProvider:
         if not api_key and self.settings.ai_deployment_mode != AiDeploymentMode.LOCAL_ONLY:
             raise RuntimeError(f"{setting_name} is not configured")
 
+    def _allowed_model(self, requested: str | None, configured: str, capability: str) -> str:
+        selected = requested or configured
+        if (
+            self.settings.ai_deployment_mode == AiDeploymentMode.LOCAL_ONLY
+            and selected != configured
+        ):
+            raise ModelPolicyViolation(
+                f"requested {capability} model is not allowed by LOCAL_ONLY policy"
+            )
+        return selected
+
     def _json_headers(self, api_key: str) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json",
@@ -478,7 +497,7 @@ class OpenAICompatibleProvider:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
     def _build_rerank_payload(self, query: str, documents: list[str], top_n: int) -> dict[str, Any]:
-        model = self.settings.qwen_rerank_model
+        model = self._allowed_model(None, self.settings.qwen_rerank_model, "rerank")
         api_style = self.settings.qwen_rerank_api_style.upper()
         if api_style == "QWEN3" or (api_style == "AUTO" and model == "qwen3-rerank"):
             return {

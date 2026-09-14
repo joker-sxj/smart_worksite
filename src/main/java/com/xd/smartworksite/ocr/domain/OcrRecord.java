@@ -12,6 +12,9 @@ public class OcrRecord {
     private String fieldsJson;
     private String customFieldsJson;
     private String errorMessage;
+    private Boolean manuallyConfirmed;
+    private Long confirmedBy;
+    private LocalDateTime confirmedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -33,6 +36,12 @@ public class OcrRecord {
     public void setCustomFieldsJson(String customFieldsJson) { this.customFieldsJson = customFieldsJson; }
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+    public Boolean getManuallyConfirmed() { return manuallyConfirmed; }
+    public void setManuallyConfirmed(Boolean manuallyConfirmed) { this.manuallyConfirmed = manuallyConfirmed; }
+    public Long getConfirmedBy() { return confirmedBy; }
+    public void setConfirmedBy(Long confirmedBy) { this.confirmedBy = confirmedBy; }
+    public LocalDateTime getConfirmedAt() { return confirmedAt; }
+    public void setConfirmedAt(LocalDateTime confirmedAt) { this.confirmedAt = confirmedAt; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }

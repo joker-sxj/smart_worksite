@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+from datetime import datetime
 import re
 from typing import Any
 
@@ -6,6 +7,7 @@ from app.models.schemas import OcrRecognizeRequest, OcrRecognizeData, OcrFieldDa
 from .qwen_client import QwenClient
 from .normalization import as_dict, optional_int, optional_string
 from .id_card_preprocessor import IdCardPreprocessor
+from .ocr_provider import build_ocr_provider
 
 
 STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
@@ -43,12 +45,53 @@ STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
         {"fieldKey": "taxAmount", "fieldName": "税额"},
         {"fieldKey": "totalAmount", "fieldName": "价税合计"},
     ],
+    "PASSPORT": [
+        {"fieldKey": "passportNumber", "fieldName": "护照号码"},
+        {"fieldKey": "name", "fieldName": "姓名"},
+        {"fieldKey": "nationality", "fieldName": "国籍"},
+        {"fieldKey": "gender", "fieldName": "性别"},
+        {"fieldKey": "birthDate", "fieldName": "出生日期"},
+        {"fieldKey": "placeOfBirth", "fieldName": "出生地点"},
+        {"fieldKey": "issueDate", "fieldName": "签发日期"},
+        {"fieldKey": "expiryDate", "fieldName": "有效期至"},
+        {"fieldKey": "issuingAuthority", "fieldName": "签发机关"},
+        {"fieldKey": "mrz", "fieldName": "机读码"},
+    ],
+    "TRAVEL_PERMIT": [
+        {"fieldKey": "documentNumber", "fieldName": "证件号码"},
+        {"fieldKey": "name", "fieldName": "姓名"},
+        {"fieldKey": "gender", "fieldName": "性别"},
+        {"fieldKey": "birthDate", "fieldName": "出生日期"},
+        {"fieldKey": "validPeriod", "fieldName": "有效期限"},
+        {"fieldKey": "issueCount", "fieldName": "签发次数"},
+        {"fieldKey": "issuingAuthority", "fieldName": "签发机关"},
+    ],
+    "FIVE_STAR_CARD": [
+        {"fieldKey": "permanentResidentId", "fieldName": "永久居留证件号码"},
+        {"fieldKey": "name", "fieldName": "姓名"},
+        {"fieldKey": "gender", "fieldName": "性别"},
+        {"fieldKey": "birthDate", "fieldName": "出生日期"},
+        {"fieldKey": "nationality", "fieldName": "国籍"},
+        {"fieldKey": "validPeriod", "fieldName": "有效期限"},
+        {"fieldKey": "issuingAuthority", "fieldName": "签发机关"},
+    ],
+    "CONTRACT": [
+        {"fieldKey": "contractNumber", "fieldName": "合同编号"},
+        {"fieldKey": "partyA", "fieldName": "甲方"},
+        {"fieldKey": "partyB", "fieldName": "乙方"},
+        {"fieldKey": "contractAmount", "fieldName": "合同金额"},
+        {"fieldKey": "paymentTerms", "fieldName": "付款条件"},
+        {"fieldKey": "signDate", "fieldName": "签订日期"},
+        {"fieldKey": "effectiveDate", "fieldName": "生效日期"},
+        {"fieldKey": "projectName", "fieldName": "项目名称"},
+    ],
 }
 
 
 class OcrService:
-    def __init__(self, qwen: QwenClient):
+    def __init__(self, qwen: QwenClient, ocr_provider=None):
         self.qwen = qwen
+        self.ocr_provider = ocr_provider
 
     async def recognize(self, request: OcrRecognizeRequest) -> tuple[OcrRecognizeData, dict[str, Any]]:
         ocr_type = self._normalize_type(request.ocrType)
@@ -57,6 +100,22 @@ class OcrService:
         file_sources = request.file.dataUrls or ([request.file.downloadUrl] if request.file.downloadUrl else [])
         if not file_sources:
             raise ValueError("OCR file requires dataUrls or downloadUrl")
+        provider = self.ocr_provider or build_ocr_provider()
+        local_text = ""
+        local_usage: dict[str, Any] = {}
+        if file_sources and all(source.startswith("data:image/") for source in file_sources):
+            try:
+                import asyncio
+                local_result = await asyncio.to_thread(provider.recognize, file_sources)
+                local_text = local_result.text
+                local_usage = {
+                    "ocrProvider": local_result.provider,
+                    "ocrModel": local_result.model,
+                    "ocrLineCount": len(local_result.lines),
+                }
+            except (RuntimeError, ValueError):
+                if provider.provider_name != "QWEN_VL":
+                    raise
         first_sources = file_sources
         prepared = None
         if ocr_type == "ID_CARD" and all(source.startswith("data:image/") for source in file_sources):
@@ -66,27 +125,92 @@ class OcrService:
             except ValueError:
                 # Keep provider compatibility for opaque test/legacy data URLs; real image inputs use both passes.
                 prepared = None
+        if local_text:
+            prompt += f"\n本地字符OCR初步结果（仅作证据，不得盲目信任）：{local_text[:12000]}"
         raw, usage = await self.qwen.vision_json_chat(
             prompt,
             first_sources,
             request.file.contentType,
         )
         data = self._normalize_response(raw, ocr_type, field_definitions)
-        data = self._apply_type_validation(data, request.options)
         if prepared is not None:
             enhanced_sources = prepared.enhanced_sources
             enhanced_raw, _ = await self.qwen.vision_json_chat(prompt, enhanced_sources, request.file.contentType)
             data = self._merge_dual_pass(data, self._normalize_response(enhanced_raw, ocr_type, field_definitions))
             usage = dict(usage)
             usage["ocrPasses"] = 2
+        data = self._apply_type_validation(data, request.options)
+        usage = {**usage, **local_usage}
         return data, usage
 
     def _apply_type_validation(self, data: OcrRecognizeData, options: dict[str, Any]) -> OcrRecognizeData:
+        if data.ocrType == "ID_CARD":
+            return self._validate_id_card(data)
         if data.ocrType == "LICENSE_PLATE":
             return self._validate_license_plate(data)
         if data.ocrType == "INVOICE":
             return self._validate_invoice(data, options)
         return data
+
+    def _validate_id_card(self, data: OcrRecognizeData) -> OcrRecognizeData:
+        fields = list(data.fields)
+        by_key = {field.fieldKey: index for index, field in enumerate(fields)}
+        id_index = by_key.get("idNumber")
+        birth_index = by_key.get("birthDate")
+        if id_index is None:
+            return data
+        id_value = re.sub(r"[\s-]", "", fields[id_index].fieldValue).upper() if id_index is not None else ""
+        if not id_value:
+            return data
+        structurally_valid = bool(re.fullmatch(r"\d{17}[0-9X]", id_value))
+        date_valid = False
+        if structurally_valid:
+            try:
+                datetime.strptime(id_value[6:14], "%Y%m%d")
+                date_valid = True
+            except ValueError:
+                date_valid = False
+            weights = (7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2)
+            checks = "10X98765432"
+            checksum_valid = checks[sum(int(value) * weight for value, weight in zip(id_value[:17], weights)) % 11] == id_value[-1]
+        else:
+            checksum_valid = False
+        id_valid = structurally_valid and date_valid and checksum_valid
+        if id_index is not None:
+            fields[id_index] = fields[id_index].model_copy(update={
+                "fieldValue": id_value or fields[id_index].fieldValue,
+                "manualConfirmationRequired": fields[id_index].manualConfirmationRequired or not id_valid,
+            })
+        birth_consistent = None
+        if structurally_valid and birth_index is not None:
+            birth_value = self._normalized_date_digits(fields[birth_index].fieldValue)
+            birth_consistent = birth_value == id_value[6:14]
+            if not birth_consistent:
+                fields[birth_index] = fields[birth_index].model_copy(update={"manualConfirmationRequired": True})
+        extras = dict(data.extras)
+        validation = as_dict(extras.get("validation"))
+        validation.update({"idNumberValid": id_valid, "birthDateConsistent": birth_consistent})
+        extras["validation"] = validation
+        return data.model_copy(update={"fields": fields, "extras": extras})
+
+    def _normalized_date_digits(self, value: str) -> str | None:
+        text = str(value or "").strip()
+        compact = re.sub(r"\D", "", text)
+        if len(compact) == 8:
+            try:
+                datetime.strptime(compact, "%Y%m%d")
+                return compact
+            except ValueError:
+                return None
+        match = re.search(r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})", text)
+        if not match:
+            return None
+        normalized = f"{match.group(1)}{int(match.group(2)):02d}{int(match.group(3)):02d}"
+        try:
+            datetime.strptime(normalized, "%Y%m%d")
+            return normalized
+        except ValueError:
+            return None
 
     def _validate_license_plate(self, data: OcrRecognizeData) -> OcrRecognizeData:
         fields = list(data.fields)
@@ -99,13 +223,34 @@ class OcrService:
             r"^[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领]"
             r"[A-Z](?:[A-HJ-NP-Z0-9]{5}|[DF][A-HJ-NP-Z0-9][0-9]{4}|[0-9]{5}[DF])$"
         )
-        valid = bool(pattern.fullmatch(normalized))
+        extras = dict(data.extras)
+        plates = extras.get("plates")
+        normalized_plates = []
+        if isinstance(plates, list):
+            for item in plates:
+                if not isinstance(item, dict):
+                    continue
+                number = re.sub(r"[\s·•・.\-]", "", str(item.get("number") or "")).upper()
+                if not number:
+                    continue
+                normalized_item = dict(item)
+                normalized_item["number"] = number
+                normalized_item["valid"] = bool(pattern.fullmatch(number))
+                normalized_item["confidence"] = self._confidence(item.get("confidence"))
+                bbox = item.get("bbox")
+                normalized_item["bbox"] = bbox if isinstance(bbox, list) and len(bbox) == 4 else None
+                normalized_plates.append(normalized_item)
+            extras["plates"] = normalized_plates
+        if len(normalized_plates) > 1:
+            normalized = ",".join(item["number"] for item in normalized_plates)
+            valid = all(item["valid"] for item in normalized_plates)
+        else:
+            valid = bool(pattern.fullmatch(normalized))
         fields[plate_index] = plate.model_copy(update={
             "fieldValue": normalized,
             "recognized": bool(normalized),
             "manualConfirmationRequired": plate.manualConfirmationRequired or not valid,
         })
-        extras = dict(data.extras)
         validation = as_dict(extras.get("validation"))
         validation["plateNumberValid"] = valid
         validation["plateNumberNormalized"] = normalized
@@ -139,14 +284,101 @@ class OcrService:
                 fields[index] = fields[index].model_copy(update={"manualConfirmationRequired": True})
 
         extras = dict(data.extras)
+        items, item_validation = self._normalize_invoice_items(extras.get("items"), amounts)
+        extras["items"] = items
+        if item_validation["itemAmountsConsistent"] is False and "amountWithoutTax" in by_key:
+            index = by_key["amountWithoutTax"]
+            fields[index] = fields[index].model_copy(update={"manualConfirmationRequired": True})
+        if item_validation["itemTaxConsistent"] is False and "taxAmount" in by_key:
+            index = by_key["taxAmount"]
+            fields[index] = fields[index].model_copy(update={"manualConfirmationRequired": True})
         validation = as_dict(extras.get("validation"))
         validation.update({
             "invoiceTypeConsistent": type_consistent,
             "amountsAvailable": amounts_available,
             "amountsConsistent": amounts_consistent if amounts_available else None,
+            **item_validation,
         })
         extras["validation"] = validation
         return data.model_copy(update={"fields": fields, "extras": extras})
+
+    def _normalize_invoice_items(
+        self,
+        raw_items: Any,
+        header_amounts: dict[str, Decimal | None],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        source_items = [item for item in raw_items if isinstance(item, dict)] if isinstance(raw_items, list) else []
+        normalized_items: list[dict[str, Any]] = []
+        line_amount_checks: list[bool] = []
+        line_tax_checks: list[bool] = []
+        item_amounts: list[Decimal] = []
+        item_taxes: list[Decimal] = []
+        all_amounts_available = True
+        all_taxes_available = True
+
+        for source in source_items[:50]:
+            item = dict(source)
+            item["confidence"] = self._confidence(source.get("confidence"))
+            quantity = self._money(str(source.get("quantity") or ""))
+            unit_price = self._money(str(source.get("unitPrice") or ""))
+            amount = self._money(str(source.get("amount") or ""))
+            tax_amount = self._money(str(source.get("taxAmount") or ""))
+            tax_rate = self._rate(source.get("taxRate"))
+
+            amount_check = None
+            if quantity is not None and unit_price is not None and amount is not None:
+                amount_check = abs(quantity * unit_price - amount) <= Decimal("0.01")
+                line_amount_checks.append(amount_check)
+            tax_check = None
+            if amount is not None and tax_rate is not None and tax_amount is not None:
+                tax_check = abs(amount * tax_rate - tax_amount) <= Decimal("0.01")
+                line_tax_checks.append(tax_check)
+            item["amountConsistent"] = amount_check
+            item["taxConsistent"] = tax_check
+            normalized_items.append(item)
+
+            if amount is None:
+                all_amounts_available = False
+            else:
+                item_amounts.append(amount)
+            if tax_amount is None:
+                all_taxes_available = False
+            else:
+                item_taxes.append(tax_amount)
+
+        header_amount = header_amounts.get("amountWithoutTax")
+        aggregate_amount_check = (
+            abs(sum(item_amounts, Decimal("0")) - header_amount) <= Decimal("0.01")
+            if normalized_items and all_amounts_available and header_amount is not None else None
+        )
+        header_tax = header_amounts.get("taxAmount")
+        aggregate_tax_check = (
+            abs(sum(item_taxes, Decimal("0")) - header_tax) <= Decimal("0.01")
+            if normalized_items and all_taxes_available and header_tax is not None else None
+        )
+        return normalized_items, {
+            "itemCount": len(normalized_items),
+            "itemsTruncated": len(source_items) > 50,
+            "itemAmountsConsistent": self._combine_checks(line_amount_checks, aggregate_amount_check),
+            "itemTaxConsistent": self._combine_checks(line_tax_checks, aggregate_tax_check),
+        }
+
+    def _combine_checks(self, line_checks: list[bool], aggregate_check: bool | None) -> bool | None:
+        checks = [*line_checks, *([aggregate_check] if aggregate_check is not None else [])]
+        return all(checks) if checks else None
+
+    def _rate(self, value: Any) -> Decimal | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        normalized = text[:-1] if text.endswith("%") else text
+        try:
+            rate = Decimal(normalized)
+        except InvalidOperation:
+            return None
+        if text.endswith("%") or rate > 1:
+            rate /= Decimal("100")
+        return rate if Decimal("0") <= rate <= Decimal("1") else None
 
     def _money(self, value: str) -> Decimal | None:
         normalized = re.sub(r"[^0-9.\-]", "", value or "")
@@ -179,9 +411,7 @@ class OcrService:
 
     def _normalize_type(self, ocr_type: str) -> str:
         normalized = (ocr_type or "").upper()
-        if normalized == "CONTRACT":
-            return "CUSTOM"
-        if normalized not in {"ID_CARD", "LICENSE_PLATE", "INVOICE", "CUSTOM"}:
+        if normalized not in {"ID_CARD", "LICENSE_PLATE", "INVOICE", "PASSPORT", "TRAVEL_PERMIT", "FIVE_STAR_CARD", "CONTRACT", "CUSTOM"}:
             raise ValueError("unsupported ocrType")
         return normalized
 
@@ -194,8 +424,12 @@ class OcrService:
         fields = fields or self._field_definitions(request, ocr_type)
         type_instruction = {
             "ID_CARD": "身份证正反面字段都必须保留；仅在extras.watermark中返回detected、type、text、confidence；extras不要包含其他类型结构。",
-            "LICENSE_PLATE": "仅在extras.plate中返回number、backgroundColor、fontColor、plateType、bbox；extras不要包含其他类型结构。",
-            "INVOICE": "仅在extras.items中返回最多50条可见明细，并在extras.validation中返回金额校验结果。",
+            "LICENSE_PLATE": "单车牌在extras.plate中返回number、backgroundColor、fontColor、plateType、bbox；检测到多个车牌时还必须在extras.plates数组中逐目标返回，禁止把多个号码拼接为一个字符串。",
+            "INVOICE": "仅在extras.items中返回最多50条可见明细；每条明细尽量返回name、specification、unit、quantity、unitPrice、amount、taxRate、taxAmount、confidence，并在extras.validation中返回明细金额和税额校验结果。",
+            "PASSPORT": "核对护照资料页和机读码；不可见字段留空，禁止根据国籍或姓名猜测。",
+            "TRAVEL_PERMIT": "识别港澳台通行证可见字段；证件号码和有效期不完整时留空。",
+            "FIVE_STAR_CARD": "识别外国人永久居留身份证可见字段；中英文姓名分别按证面证据抽取。",
+            "CONTRACT": "从合同正文和签章页提取关键字段；金额、日期和当事方必须带证据位置。",
             "CUSTOM": "extras返回空对象，自定义字段尽量返回evidence和pageNo。",
         }[ocr_type]
         return (

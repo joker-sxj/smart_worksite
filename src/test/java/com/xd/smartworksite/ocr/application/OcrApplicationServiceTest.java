@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -56,6 +57,56 @@ class OcrApplicationServiceTest {
         OcrRecordResponse response = fixture.service.get(1L);
 
         assertThat(response.getFields().get(0).getFieldValue()).isEqualTo("370202199001011234");
+    }
+
+    @Test
+    void confirmsCompletedOcrRecordAndPersistsAuditIdentity() {
+        Fixture fixture = fixture(List.of("PLATFORM_ADMIN"), List.of("ocr:view", "ocr:manage"));
+        OcrRecord record = recordWithIdNumber();
+        when(fixture.repository.findRecordById(1L)).thenReturn(Optional.of(record));
+        OcrRecord confirmed = recordWithIdNumber();
+        confirmed.setManuallyConfirmed(true);
+        when(fixture.repository.findRecordById(1L)).thenReturn(Optional.of(record), Optional.of(confirmed));
+        when(fixture.repository.confirmRecord(1L, 7L)).thenReturn(1);
+
+        OcrRecordResponse response = fixture.service.confirm(1L);
+
+        assertThat(response.getManuallyConfirmed()).isTrue();
+        org.mockito.Mockito.verify(fixture.repository).confirmRecord(1L, 7L);
+    }
+
+    @Test
+    void refusesConfirmationWhileRecognitionIsNotCompleted() {
+        Fixture fixture = fixture(List.of("PLATFORM_ADMIN"), List.of("ocr:view", "ocr:manage"));
+        OcrRecord record = recordWithIdNumber();
+        record.setStatus("PROCESSING");
+        when(fixture.repository.findRecordById(1L)).thenReturn(Optional.of(record));
+
+        assertThatThrownBy(() -> fixture.service.confirm(1L))
+                .isInstanceOf(com.xd.smartworksite.common.exception.BusinessException.class)
+                .hasMessageContaining("识别尚未完成");
+        org.mockito.Mockito.verify(fixture.repository, org.mockito.Mockito.never()).confirmRecord(1L, 7L);
+    }
+
+    @Test
+    void refusesConfirmationWhenAFieldStillRequiresManualReview() {
+        Fixture fixture = fixture(List.of("PLATFORM_ADMIN"), List.of("ocr:view", "ocr:manage"));
+        OcrRecord record = recordWithIdNumber();
+        record.setFieldsJson("{\"fields\":[{\"fieldKey\":\"name\",\"fieldName\":\"姓名\",\"fieldValue\":\"\",\"manualConfirmationRequired\":true}]}");
+        when(fixture.repository.findRecordById(1L)).thenReturn(Optional.of(record));
+
+        assertThatThrownBy(() -> fixture.service.confirm(1L))
+                .isInstanceOf(com.xd.smartworksite.common.exception.BusinessException.class)
+                .hasMessageContaining("仍有字段需要人工确认");
+        org.mockito.Mockito.verify(fixture.repository, org.mockito.Mockito.never()).confirmRecord(1L, 7L);
+    }
+
+    @Test
+    void exposesExplicitPassportPermitResidentCardAndContractTypes() {
+        Fixture fixture = fixture(List.of("PLATFORM_ADMIN"), List.of("ocr:view", "ocr:manage"));
+
+        assertThat(fixture.service.types()).extracting(type -> type.getOcrType())
+                .contains("PASSPORT", "TRAVEL_PERMIT", "FIVE_STAR_CARD", "CONTRACT");
     }
 
     private Fixture fixture(List<String> roles, List<String> permissions) {

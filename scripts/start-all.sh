@@ -38,7 +38,7 @@ normalize_host_model_endpoints
 assert_minimum_free_disk "$root"
 deployment_mode="${AI_DEPLOYMENT_MODE:-CLOUD_ALLOWED}"
 if requires_host_model_preflight "$deployment_mode" "${MODEL_PROFILE_FILE:-}"; then
-  QWEN_VL_MODEL="$(effective_qwen_vl_model "${QWEN_VL_MODEL:-}")"
+  QWEN_VL_MODEL="$(effective_qwen_vl_model "${QWEN_VL_MODEL:-}" "${QWEN_MODEL:-}")"
   export QWEN_VL_MODEL
   validate_host_model_configuration "$QWEN_VL_ENDPOINT" "$QWEN_VL_MODEL"
 fi
@@ -60,11 +60,13 @@ fi
 
 mkdir -p "$run_dir"
 cleanup_stale_project_logs "$log_dir"
+assert_legacy_container_migration_safe "$root"
 if [[ -n "${MODEL_PROFILE_FILE:-}" ]]; then
   printf '%s\n' "$MODEL_PROFILE_FILE" > "$run_dir/model-profile"
   "$script_dir/check-gpu-runtime.sh" "$MODEL_PROFILE_FILE"
+  "$script_dir/check-model-cache.sh" "$MODEL_PROFILE_FILE"
   printf 'Starting local model services with profile %s...\n' "${MODEL_PROFILE_NAME:-$model_profile}"
-  docker_compose "$root" up -d local-llm local-embedding local-reranker
+  docker_compose "$root" up -d --pull never local-llm local-embedding local-reranker
   "$script_dir/check-local-models.sh" --model-profile "$MODEL_PROFILE_FILE" --wait "${MODEL_STARTUP_TIMEOUT_SECONDS:-3600}" --smoke
 else
   rm -f "$run_dir/model-profile"
@@ -73,7 +75,7 @@ if requires_host_model_preflight "$deployment_mode" "${MODEL_PROFILE_FILE:-}"; t
   preflight_host_model_endpoint "$QWEN_VL_ENDPOINT" "${QWEN_VL_MODEL:-}"
 fi
 printf 'Starting Docker Compose services...\n'
-docker_compose "$root" up -d --build
+docker_compose "$root" up -d --build --pull never
 mysql_port="$(configured_port MYSQL_PORT 3306)"
 redis_port="$(configured_port REDIS_PORT 6379)"
 minio_port="$(configured_port MINIO_API_PORT 9000)"
@@ -83,6 +85,7 @@ wait_tcp MySQL "$mysql_port"
 wait_tcp Redis "$redis_port"
 wait_tcp MinIO "$minio_port"
 wait_http 'Python AI service' "http://127.0.0.1:$ai_port/v1/health"
+wait_model_ready 'Python AI model readiness' "http://127.0.0.1:$ai_port/v1/ready" "${MODEL_STARTUP_TIMEOUT_SECONDS:-3600}"
 
 backend_health_uri="http://127.0.0.1:$server_port/actuator/health"
 restart_managed_if_running 'Java backend' "$root" 'spring-boot:run' "$run_dir/backend.pid"

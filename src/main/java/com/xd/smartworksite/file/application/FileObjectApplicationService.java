@@ -47,6 +47,23 @@ public class FileObjectApplicationService {
             "application/pdf",
             "text/plain"
     );
+    private static final java.util.Map<String, String> DOCUMENT_CONTENT_TYPES = java.util.Map.ofEntries(
+            java.util.Map.entry("pdf", "application/pdf"),
+            java.util.Map.entry("doc", "application/msword"),
+            java.util.Map.entry("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            java.util.Map.entry("xls", "application/vnd.ms-excel"),
+            java.util.Map.entry("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            java.util.Map.entry("ppt", "application/vnd.ms-powerpoint"),
+            java.util.Map.entry("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+            java.util.Map.entry("csv", "text/csv"),
+            java.util.Map.entry("tsv", "text/tab-separated-values"),
+            java.util.Map.entry("txt", "text/plain"),
+            java.util.Map.entry("md", "text/markdown"),
+            java.util.Map.entry("png", "image/png"),
+            java.util.Map.entry("jpg", "image/jpeg"),
+            java.util.Map.entry("jpeg", "image/jpeg"),
+            java.util.Map.entry("webp", "image/webp")
+    );
 
     private final FileObjectRepository fileObjectRepository;
     private final StorageAdapter storageAdapter;
@@ -365,8 +382,8 @@ public class FileObjectApplicationService {
 
     private String normalizeUploadContentType(String contentType, String fileExt) {
         String normalized = normalizeContentType(contentType);
-        if ("application/octet-stream".equals(normalized) && "tsv".equals(fileExt)) {
-            return "text/tab-separated-values";
+        if ("application/octet-stream".equals(normalized)) {
+            return DOCUMENT_CONTENT_TYPES.getOrDefault(fileExt, normalized);
         }
         return normalized;
     }

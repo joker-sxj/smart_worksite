@@ -52,7 +52,12 @@ Content-Type: multipart/form-data
 | --- | --- | --- | --- |
 | projectId | Long | 是 | 项目 ID |
 | templateId | Long | 是 | 审查模板 ID |
-| file | MultipartFile | 是 | 审查文件 |
+| file | MultipartFile | 是 | 主审查文件 |
+| referenceDocumentIds | Long[] | 否 | 当前项目已解析成功、已入库的知识文档 ID |
+| referenceFileIds | Long[] | 否 | 当前项目已授权的临时参考文件 ID |
+| referenceFiles | MultipartFile[] | 否 | 本次临时参考文件，最多 10 个；所有参考资料合计最多 20 个 |
+| schemaVersion | Integer | 否 | 自定义审查字段配置版本 |
+| fieldValues | JSON string | 否 | 自定义审查输入字段值 |
 
 示例：
 
@@ -64,7 +69,7 @@ curl --noproxy '*' -X POST "http://127.0.0.1:8080/api/review/records" \
   -F "file=@/tmp/contract.docx"
 ```
 
-响应重点字段：`recordId`、`projectId`、`templateId`、`fileId`、`taskId`、`status`、`issues`、`summary`、`errorMessage`。
+响应重点字段：`recordId`、`projectId`、`templateId`、`templateName`、`templateVersion`、`fileId`、`taskId`、`status`、`issues`、`result.ruleResults`、`references`、`errorMessage`。模板名称和版本是提交时快照，不随模板后续编辑变化。
 
 ## 2. 查询审查记录
 
@@ -88,7 +93,11 @@ GET /api/review/records/{recordId}
 ```text
 PENDING
 PROCESSING
-SUCCESS
+PARSING
+RULES_READY
+REVIEWING
+COMPLETED
+PARTIAL_SUCCESS
 FAILED
 ARCHIVED
 DELETED
@@ -140,3 +149,5 @@ curl --noproxy '*' -X PUT "http://127.0.0.1:8080/api/review/records/1/issues/ISS
 - Python Agent 返回失败、空结果或无效 JSON 时，审查记录必须标记为 `FAILED` 并记录错误。
 - 如果失败状态无法落库，必须返回冲突，不能丢失可观测性。
 - 调用 Python Agent 必须记录外部调用日志。
+- 每条规则独立保存 `COMPLETED`、`NEEDS_MANUAL_CONFIRMATION` 或 `FAILED` 状态，并区分主文件证据与参考资料证据；证据不足时不得伪造结论。
+- `COMPLETED` 和 `PARTIAL_SUCCESS` 记录中的已生成问题均可更新处理状态。

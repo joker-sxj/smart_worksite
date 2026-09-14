@@ -23,9 +23,21 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 @Service
 public class AiApplicationService {
+    private static final Pattern EXPLICIT_SQL_WRITE_INTENT = Pattern.compile(
+            "(?is)(?:^|[;\\s])(?:insert\\s+into|update\\s+[a-z0-9_`\\\"]+|delete\\s+from|"
+                    + "drop\\s+(?:table|database|schema|view)|alter\\s+table|truncate\\s+table|"
+                    + "create\\s+(?:table|database|schema|view)|replace\\s+into|merge\\s+into|"
+                    + "grant\\s+|revoke\\s+|call\\s+|exec(?:ute)?\\s+)",
+            Pattern.CASE_INSENSITIVE);
+    private static final Pattern EXPLICIT_CHINESE_WRITE_INTENT = Pattern.compile(
+            "^\\s*(?:(?:请|帮我|立即|直接)\\s*)?(?:执行|运行)?\\s*"
+                    + "(?:删除|修改|更新|写入|插入|清空|禁用|启用)(?:所有|全部|这些|该|当前)?"
+                    + ".{0,80}(?:数据|记录|用户|账户|表|状态|权限|项目)");
+
     private final AiPythonServiceProperties properties;
     private final AiPythonServiceClient pythonClient;
     private final AiRepository aiRepository;
@@ -92,6 +104,7 @@ public class AiApplicationService {
     }
 
     private RagSearchResponse doSearchKnowledge(RagSearchRequest request) {
+        requireKnowledgeBases(request.getProjectId(), request.getKnowledgeBaseIds());
         AiProviderResponse response = pythonClient.post(properties.getPaths().getRagSearch(), "RAG_SEARCH", request.getProjectId(), request);
         RagSearchResponse result = pythonClient.convertData(response, RagSearchResponse.class);
         result.setProviderTraceId(response.getTraceId());
@@ -109,6 +122,7 @@ public class AiApplicationService {
     }
 
     private RagSearchResponse doSearchKnowledgeDynamic(RagSearchRequest request) {
+        requireKnowledgeBases(request.getProjectId(), request.getKnowledgeBaseIds());
         Map<String, Object> payload = pythonClient.toMap(request);
         payload.put("strategy", "HYBRID");
         payload.put("permissionScope", Map.of(
@@ -128,6 +142,7 @@ public class AiApplicationService {
     }
 
     public RagIndexResponse indexKnowledgeForSystem(RagIndexRequest request) {
+        requireKnowledgeBase(request.getProjectId(), request.getKnowledgeBaseId());
         AiProviderResponse response = pythonClient.post(properties.getPaths().getRagIndex(), "RAG_INDEX", request.getProjectId(), request);
         RagIndexResponse result = pythonClient.convertData(response, RagIndexResponse.class);
         result.setProviderTraceId(response.getTraceId());
@@ -168,6 +183,19 @@ public class AiApplicationService {
         ContextPrepareResponse result = pythonClient.convertData(response, ContextPrepareResponse.class);
         result.setProviderTraceId(response.getTraceId());
         return result;
+    }
+
+    private void requireKnowledgeBases(Long projectId, List<Long> knowledgeBaseIds) {
+        for (Long knowledgeBaseId : knowledgeBaseIds == null ? List.<Long>of() : knowledgeBaseIds) {
+            requireKnowledgeBase(projectId, knowledgeBaseId);
+        }
+    }
+
+    private void requireKnowledgeBase(Long projectId, Long knowledgeBaseId) {
+        if (knowledgeBaseId == null || !aiRepository.existsEnabledKnowledgeBase(projectId, knowledgeBaseId)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN,
+                    "knowledge base is not enabled in the requested project");
+        }
     }
 
     public ConversationResolveResponse resolveConversation(ConversationResolveRequest request) {
@@ -212,6 +240,8 @@ public class AiApplicationService {
     }
 
     public DatabaseQueryResponse queryDatabaseForSystem(DatabaseQueryRequest request) {
+        long startedAt = System.currentTimeMillis();
+        rejectDatabaseWriteIntent(request == null ? null : request.getQuestion());
         projectAccessApplicationService.requireProjectWritableForSystem(request.getProjectId());
         DataSourceRecord dataSource = aiRepository.findEnabledDataSource(request.getProjectId(), request.getDataSourceId());
         if (dataSource == null) {
@@ -256,6 +286,15 @@ public class AiApplicationService {
                 }
                 continue;
             }
+            String scopeError = validateProjectScope(request, generatedQuery);
+            if (scopeError != null) {
+                failedSql = generatedQuery.sql();
+                databaseError = scopeError;
+                if (attempt == maxAttempts) {
+                    throw repairedDatabaseQueryFailure(databaseError);
+                }
+                continue;
+            }
             try {
                 queryResult = safeSqlExecutor.execute(
                         dataSource, generatedQuery.sql(), generatedQuery.parameters());
@@ -292,6 +331,8 @@ public class AiApplicationService {
             emptyResult.setRows(queryResult.rows());
             emptyResult.setSummary("查询成功，但未查询到符合条件的数据。");
             emptyResult.setWarnings(List.of("查询结果为空，报告内容不得推断为不存在或已完成。"));
+            enrichDatabaseResponse(emptyResult, request, dataSource, generatedQuery, startedAt);
+            recordDatabaseExecution(request, dataSource, generatedQuery, queryResult, startedAt);
             return emptyResult;
         }
 
@@ -313,7 +354,55 @@ public class AiApplicationService {
             result.setWarnings(list.stream().map(String::valueOf).toList());
         }
         result.setProviderTraceId(summarized.getTraceId());
+        enrichDatabaseResponse(result, request, dataSource, generatedQuery, startedAt);
+        recordDatabaseExecution(request, dataSource, generatedQuery, queryResult, startedAt);
         return result;
+    }
+
+    private void rejectDatabaseWriteIntent(String question) {
+        String normalized = question == null ? "" : question.trim();
+        if (EXPLICIT_SQL_WRITE_INTENT.matcher(normalized).find()
+                || EXPLICIT_CHINESE_WRITE_INTENT.matcher(normalized).find()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "数据库问答仅允许只读查询，拒绝执行写入或结构变更请求");
+        }
+    }
+
+    private void enrichDatabaseResponse(DatabaseQueryResponse response, DatabaseQueryRequest request,
+                                        DataSourceRecord dataSource, GeneratedQuery query, long startedAt) {
+        response.setDataSourceId(dataSource.getId());
+        response.setParameters(redactedParameters(query.parameters()));
+        response.setExecutionTimeMs(Math.max(0, System.currentTimeMillis() - startedAt));
+        response.setMaskingRules(List.of("敏感列按列名识别并替换为[MASKED]", "查询参数仅展示名称，不展示原始值"));
+    }
+
+    private Map<String, Object> redactedParameters(Map<String, Object> parameters) {
+        Map<String, Object> redacted = new LinkedHashMap<>();
+        if (parameters != null) {
+            parameters.keySet().stream().sorted().forEach(key -> redacted.put(key, "[REDACTED]"));
+        }
+        return redacted;
+    }
+
+    private void recordDatabaseExecution(DatabaseQueryRequest request, DataSourceRecord dataSource,
+                                         GeneratedQuery query, SafeSqlExecutor.QueryResult result,
+                                         long startedAt) {
+        ExternalCallLog log = new ExternalCallLog();
+        log.setProjectId(request.getProjectId());
+        log.setServiceName("DATABASE");
+        log.setCallType("DATABASE_QUERY_EXECUTION");
+        log.setRequestSummary(limitAudit("dataSourceId=" + dataSource.getId()
+                + ", sql=" + query.sql() + ", parameters=" + redactedParameters(query.parameters())));
+        log.setResponseSummary(limitAudit("columns=" + result.columns() + ", rowCount=" + result.rows().size()
+                + ", maskingRules=[MASKED]"));
+        log.setStatus("SUCCESS");
+        log.setCostMs(Math.max(0, System.currentTimeMillis() - startedAt));
+        if (aiRepository.saveExternalCallLog(log) <= 0) {
+            throw new BusinessException(ErrorCode.CONFLICT, "database query audit log insert failed");
+        }
+    }
+
+    private String limitAudit(String value) {
+        return value.length() <= 2000 ? value : value.substring(0, 2000) + "...";
     }
 
     private GeneratedQuery generateDatabaseQuery(DatabaseQueryRequest request, DataSourceRecord dataSource,
@@ -338,7 +427,8 @@ public class AiApplicationService {
         String sql = String.valueOf(generatedData.getOrDefault("sql", ""));
         Map<String, Object> parameters = extractSqlParameters(generatedData.get("parameters"));
         List<String> expectedColumns = extractExpectedColumns(generatedData.get("plan"));
-        return new GeneratedQuery(sql, parameters, expectedColumns);
+        String projectScopeField = extractProjectScopeField(generatedData.get("plan"));
+        return new GeneratedQuery(sql, parameters, expectedColumns, projectScopeField);
     }
 
     private BusinessException databaseQueryFailure(SafeSqlExecutor.QueryExecutionException ex) {
@@ -378,6 +468,14 @@ public class AiApplicationService {
         return sql.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
     }
 
+    private String extractProjectScopeField(Object planValue) {
+        if (!(planValue instanceof Map<?, ?> plan) || plan.get("projectScopeField") == null) {
+            return null;
+        }
+        String value = String.valueOf(plan.get("projectScopeField")).trim();
+        return value.isEmpty() || "null".equalsIgnoreCase(value) ? null : value;
+    }
+
     private int countSqlPlaceholders(String sql) {
         if (sql == null || sql.isEmpty()) return 0;
         int count = 0;
@@ -400,7 +498,27 @@ public class AiApplicationService {
         return count;
     }
 
-    private record GeneratedQuery(String sql, Map<String, Object> parameters, List<String> expectedColumns) {
+    private String validateProjectScope(DatabaseQueryRequest request, GeneratedQuery query) {
+        if (query.projectScopeField() == null || query.projectScopeField().isBlank()) {
+            return null;
+        }
+        String field = query.projectScopeField().trim().replace("`", "");
+        String normalizedSql = query.sql().toLowerCase(Locale.ROOT).replace("`", "");
+        if (!normalizedSql.contains(field.toLowerCase(Locale.ROOT))) {
+            return "查询未包含取数计划要求的项目范围字段: " + field;
+        }
+        Pattern parameterizedScope = Pattern.compile(
+                "(?i)(?:[a-z0-9_]+\\.)?" + Pattern.quote(field) + "\\s*=\\s*\\?");
+        if (!parameterizedScope.matcher(normalizedSql).find()) {
+            return "项目范围必须使用参数化条件，禁止硬编码项目ID";
+        }
+        boolean projectParameterPresent = query.parameters().values().stream()
+                .anyMatch(value -> value != null && String.valueOf(request.getProjectId()).equals(String.valueOf(value)));
+        return projectParameterPresent ? null : "项目范围参数缺失或与当前项目不一致";
+    }
+
+    private record GeneratedQuery(String sql, Map<String, Object> parameters, List<String> expectedColumns,
+                                  String projectScopeField) {
     }
 
     public PageResult<ExternalCallLogResponse> queryExternalCallLogs(ExternalCallLogQueryRequest request) {

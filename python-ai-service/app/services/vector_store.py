@@ -487,8 +487,10 @@ class PgVectorStore:
     async def search_text(self, query: str, project_id: int, knowledge_base_ids: list[int], top_k: int, document_scope: list[str] | None = None, library_types: list[str] | None = None, timeout_seconds: float | None = None) -> list[tuple[ChunkRecord, float]]:
         validate_search_scope(project_id, knowledge_base_ids)
         deadline = operation_deadline(self.timeout_seconds, timeout_seconds)
-        where = ["project_id = %s", "knowledge_base_id = any(%s)", "content ilike %s"]
-        params: list[Any] = [project_id, knowledge_base_ids, f"%{query}%"]
+        title_terms = explicitly_named_title_terms(query)
+        text_conditions = ["content ilike %s", *("title ilike %s" for _ in title_terms)]
+        where = ["project_id = %s", "knowledge_base_id = any(%s)", f"({' or '.join(text_conditions)})"]
+        params: list[Any] = [project_id, knowledge_base_ids, f"%{query}%", *(f"%{term}%" for term in title_terms)]
         if document_scope:
             where.append("document_id = any(%s)")
             params.append(document_scope)
@@ -512,7 +514,7 @@ class PgVectorStore:
         results = [
             (ChunkRecord(id=row[0], chunkId=row[1], projectId=row[2], knowledgeBaseId=row[3], documentId=row[4],
                          title=row[5], content=row[6], sourceType=row[7], sourceId=row[8], metadata=row[9] or {}, embedding=[]),
-             text_match_score(query, row[6]))
+             text_match_score(query, row[6]) + title_match_score(query, row[5]))
             for row in rows
         ]
         return sorted((item for item in results if item[1] > 0), key=lambda item: item[1], reverse=True)[:top_k]
@@ -673,7 +675,9 @@ class MilvusVectorStore:
         remaining_timeout(deadline)
         results = []
         for row in rows:
-            score = text_match_score(query, row.get("content", ""))
+            score = text_match_score(query, row.get("content", "")) + title_match_score(
+                query, row.get("title", "")
+            )
             if score <= 0:
                 continue
             results.append((ChunkRecord(
@@ -811,9 +815,29 @@ def title_match_score(query: str, title: str) -> float:
     """Keep a source explicitly named by the user in the lexical candidate set."""
     query_compact = compact_search_text(query)
     title_compact = compact_search_text(title)
-    if not query_compact or not title_compact or title_compact not in query_compact:
+    if not query_compact or not title_compact:
         return 0.0
-    return min(3.0, max(1.0, len(title_compact) / 12.0))
+    title_core = re.sub(r"^(?:\d+[_-]?)+", "", title_compact)
+    title_core = re.sub(r"(?:20\d{2}|19\d{2})?\.?(?:pdf|docx?|xlsx?|pptx?|txt)$", "", title_core)
+    quoted = explicitly_named_title_terms(query)
+    explicitly_named = title_compact in query_compact or (
+        len(title_core) >= 4 and title_core in quoted
+    )
+    if not explicitly_named:
+        return 0.0
+    matched_length = len(title_core) if title_core else len(title_compact)
+    return min(3.0, max(1.0, matched_length / 12.0))
+
+
+def explicitly_named_title_terms(query: str) -> list[str]:
+    """Return normalized, non-generic titles explicitly delimited by the user."""
+    terms = []
+    for value in re.findall(r"[《〈]([^》〉]+)[》〉]", query or ""):
+        normalized = compact_search_text(value)
+        normalized = re.sub(r"(?:20\d{2}|19\d{2})?\.?(?:pdf|docx?|xlsx?|pptx?|txt)$", "", normalized)
+        if len(normalized) >= 4:
+            terms.append(normalized)
+    return list(dict.fromkeys(terms))
 
 
 def same_document_scope(left: ChunkRecord, right: ChunkRecord) -> bool:

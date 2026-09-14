@@ -9,6 +9,7 @@ import { createDataSource, deleteDataSource, disableDataSource, enableDataSource
 import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { DataSourceItem, DataSourceQueryResult, DataSourceSchema, ID } from '../../api/types';
+import { buildDataSourceResultTable } from './dataSourceViewModel';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -32,6 +33,13 @@ const query = reactive({ pageNo: 1, pageSize: 20, keyword: '', status: '' });
 const form = reactive({ dataSourceId: '' as ID | '', name: '', dbType: 'MYSQL', jdbcUrl: '', username: '', password: '' });
 const projectId = computed(() => projectStore.currentProject?.projectId || '');
 const canManageDataSource = computed(() => userStore.hasPermission('datasource:manage'));
+const resultTable = computed(() => buildDataSourceResultTable(result.value?.columns || [], result.value?.rows || []));
+
+function displayCell(value: unknown) {
+  if (value === null || value === undefined || value === '') return '-';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
 
 function resetForm() {
   Object.assign(form, { dataSourceId: '', name: '', dbType: 'MYSQL', jdbcUrl: '', username: '', password: '' });
@@ -203,7 +211,51 @@ onMounted(async () => {
       <div class="field-title required-label">业务数据问题</div>
       <el-input v-model="question" type="textarea" :rows="3" placeholder="请输入业务数据问题" />
       <el-button type="primary" :loading="querying" style="margin-top:12px" @click="ask">生成查询</el-button>
-      <div v-if="result" class="result"><el-alert v-if="result.summary" :title="result.summary" type="success" show-icon /><pre v-if="result.sql">{{ result.sql }}</pre><JsonViewer :value="result.rows" /></div>
+      <div v-if="result" class="result">
+        <el-alert v-if="result.summary" :title="result.summary" type="success" show-icon :closable="false" />
+        <el-descriptions :column="3" border>
+          <el-descriptions-item label="返回行数">{{ resultTable.rows.length }}</el-descriptions-item>
+          <el-descriptions-item label="返回列数">{{ resultTable.columns.length }}</el-descriptions-item>
+          <el-descriptions-item label="模型追踪ID">{{ result.providerTraceId || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="执行耗时">{{ result.executionTimeMs ?? '-' }} ms</el-descriptions-item>
+          <el-descriptions-item label="数据源ID">{{ result.dataSourceId ?? '-' }}</el-descriptions-item>
+        </el-descriptions>
+        <div v-if="result.sql">
+          <div class="result-title">已执行的只读查询</div>
+          <pre>{{ result.sql }}</pre>
+        </div>
+        <div v-if="Object.keys(result.parameters || {}).length">
+          <div class="result-title">查询参数（值已脱敏）</div>
+          <JsonViewer :value="result.parameters" />
+        </div>
+        <el-alert
+          v-for="warning in result.warnings || []"
+          :key="warning"
+          :title="warning"
+          type="warning"
+          show-icon
+          :closable="false"
+        />
+        <el-alert
+          v-for="rule in result.maskingRules || []"
+          :key="`mask-${rule}`"
+          :title="rule"
+          type="info"
+          :closable="false"
+        />
+        <div>
+          <div class="result-title">查询结果明细</div>
+          <el-table v-if="resultTable.columns.length" :data="resultTable.rows" border stripe max-height="480" empty-text="查询成功，暂无符合条件的数据">
+            <el-table-column v-for="column in resultTable.columns" :key="column" :prop="column" :label="column" min-width="160" show-overflow-tooltip>
+              <template #default="scope">{{ displayCell(scope.row[column]) }}</template>
+            </el-table-column>
+          </el-table>
+          <EmptyState v-else description="查询成功，但未返回可展示的列" />
+        </div>
+        <el-collapse>
+          <el-collapse-item title="查看原始脱敏结果" name="raw"><JsonViewer :value="result.rows" /></el-collapse-item>
+        </el-collapse>
+      </div>
     </el-card>
 
     <el-dialog v-model="dialogVisible" title="数据源配置" width="640px">
@@ -217,4 +269,4 @@ onMounted(async () => {
   </div>
 </template>
 
-<style scoped>.table-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.table-head>div{display:flex;gap:8px}.field-title{margin:0 0 8px;font-weight:700}.result{margin-top:14px;display:flex;flex-direction:column;gap:12px}pre{background:#0f172a;color:#d1fae5;padding:12px;border-radius:10px;overflow:auto}</style>
+<style scoped>.table-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.table-head>div{display:flex;gap:8px}.field-title,.result-title{margin:0 0 8px;font-weight:700}.result{margin-top:14px;display:flex;flex-direction:column;gap:12px}pre{margin:0;background:#0f172a;color:#d1fae5;padding:12px;border-radius:10px;overflow:auto;white-space:pre-wrap;word-break:break-word}@media(max-width:720px){.table-head{align-items:flex-start;flex-direction:column}.table-head>div{width:100%;flex-wrap:wrap}}</style>

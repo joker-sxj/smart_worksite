@@ -1,8 +1,10 @@
 package com.xd.smartworksite.template.infra;
 
 import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.poifs.filesystem.POIFSFileSystem;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.junit.jupiter.api.Test;
@@ -67,5 +69,56 @@ class TemplateVariableScannerTest {
         assertThatThrownBy(() -> scanner.scan("template.pdf", new ByteArrayInputStream(new byte[0])))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unsupported template format");
+    }
+
+    @Test
+    void resolvesLegacyWordContentBeforeMisleadingDocxExtension() throws Exception {
+        byte[] oleWord;
+        try (POIFSFileSystem fileSystem = new POIFSFileSystem();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            fileSystem.getRoot().createDocument(
+                    "WordDocument", new ByteArrayInputStream(new byte[]{1}));
+            fileSystem.writeFilesystem(output);
+            oleWord = output.toByteArray();
+        }
+
+        assertThat(scanner.resolveFormat("legacy-word.docx", oleWord)).isEqualTo("doc");
+    }
+
+    @Test
+    void resolvesOoxmlWordContentBeforeMisleadingDocExtension() throws Exception {
+        byte[] docx;
+        try (XWPFDocument document = new XWPFDocument();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            document.createParagraph().createRun().setText("{{ var_project_name }}");
+            document.write(output);
+            docx = output.toByteArray();
+        }
+
+        assertThat(scanner.resolveFormat("modern-word.doc", docx)).isEqualTo("docx");
+        assertThat(scanner.scan("modern-word.doc", new ByteArrayInputStream(docx)))
+                .containsExactly("var_project_name");
+    }
+
+    @Test
+    void scansLegacyExcelContentBeforeMisleadingXlsxExtension() throws Exception {
+        byte[] xls;
+        try (HSSFWorkbook workbook = new HSSFWorkbook();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            workbook.createSheet("Sheet1").createRow(0).createCell(0).setCellValue("{{ var_risk_owner }}");
+            workbook.write(output);
+            xls = output.toByteArray();
+        }
+
+        assertThat(scanner.scan("legacy.xlsx", new ByteArrayInputStream(xls)))
+                .containsExactly("var_risk_owner");
+    }
+
+    @Test
+    void rejectsPdfContentDisguisedAsDocx() {
+        assertThatThrownBy(() -> scanner.scan(
+                "fake.docx", new ByteArrayInputStream("%PDF-1.7".getBytes(StandardCharsets.US_ASCII))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("pdf");
     }
 }

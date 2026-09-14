@@ -7,8 +7,11 @@ import com.xd.smartworksite.template.domain.Template;
 import com.xd.smartworksite.template.dto.TemplatePreviewFile;
 import com.xd.smartworksite.template.repository.TemplateRepository;
 import org.junit.jupiter.api.Test;
+import org.apache.poi.poifs.filesystem.POIFSFileSystem;
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,6 +62,51 @@ class TemplatePreviewApplicationServiceTest {
 
         assertThat(preview.getContentType()).isEqualTo("application/pdf");
         assertThat(preview.getInputStream().readAllBytes()).isEqualTo(bytes);
+    }
+
+    @Test
+    void exposesLegacyWordContentAsDocWhenStoredNameClaimsDocx() throws Exception {
+        Fixture fixture = fixture("legacy-template.docx");
+        byte[] bytes;
+        try (POIFSFileSystem fileSystem = new POIFSFileSystem();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            fileSystem.getRoot().createDocument("WordDocument", new ByteArrayInputStream(new byte[]{1}));
+            fileSystem.writeFilesystem(output);
+            bytes = output.toByteArray();
+        }
+        when(fixture.fileObjectApplicationService.openFileContent(20L, 1L, 10L))
+                .thenReturn(new FileObjectContent(
+                        20L, 1L, 10L, "legacy-template.docx",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        bytes.length, new ByteArrayInputStream(bytes)));
+
+        TemplatePreviewFile preview = fixture.service.openPreview(10L);
+
+        assertThat(preview.getFileName()).isEqualTo("legacy-template.doc");
+        assertThat(preview.getContentType()).isEqualTo("application/msword");
+        assertThat(preview.getInputStream().readAllBytes()).isEqualTo(bytes);
+    }
+
+    @Test
+    void exposesLegacyExcelContentAsXlsWhenStoredNameClaimsXlsx() throws Exception {
+        Fixture fixture = fixture("legacy-template.xlsx");
+        byte[] bytes;
+        try (HSSFWorkbook workbook = new HSSFWorkbook();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            workbook.createSheet("Sheet1").createRow(0).createCell(0).setCellValue("value");
+            workbook.write(output);
+            bytes = output.toByteArray();
+        }
+        when(fixture.fileObjectApplicationService.openFileContent(20L, 1L, 10L))
+                .thenReturn(new FileObjectContent(
+                        20L, 1L, 10L, "legacy-template.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        bytes.length, new ByteArrayInputStream(bytes)));
+
+        TemplatePreviewFile preview = fixture.service.openPreview(10L);
+
+        assertThat(preview.getFileName()).isEqualTo("legacy-template.xls");
+        assertThat(preview.getContentType()).isEqualTo("application/vnd.ms-excel");
     }
 
     private Fixture fixture(String fileName) {

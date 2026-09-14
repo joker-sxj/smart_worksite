@@ -7,11 +7,13 @@ x-model-logging: &model-logging
 services:
   local-llm:
     image: ${VLLM_IMAGE:?VLLM_IMAGE is required}
-    container_name: smart-worksite-local-llm
     ipc: host
     restart: unless-stopped
     logging: *model-logging
     environment:
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-1}
+      HF_DATASETS_OFFLINE: ${HF_DATASETS_OFFLINE:-1}
       CUDA_VISIBLE_DEVICES: ${CHAT_CUDA_VISIBLE_DEVICES:-0}
       HF_HOME: /root/.cache/huggingface
       TRANSFORMERS_CACHE: /root/.cache/huggingface
@@ -41,7 +43,7 @@ services:
     ports:
       - "127.0.0.1:${CHAT_HOST_PORT:-18000}:8000"
     volumes:
-      - model-cache:/root/.cache/huggingface
+      - model-cache:/root/.cache/huggingface:ro
       - vllm-cache:/root/.cache/vllm
     deploy:
       resources:
@@ -59,11 +61,13 @@ services:
 
   local-embedding:
     image: ${VLLM_IMAGE:?VLLM_IMAGE is required}
-    container_name: smart-worksite-local-embedding
     ipc: host
     restart: unless-stopped
     logging: *model-logging
     environment:
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-1}
+      HF_DATASETS_OFFLINE: ${HF_DATASETS_OFFLINE:-1}
       CUDA_VISIBLE_DEVICES: ${EMBEDDING_CUDA_VISIBLE_DEVICES:-0}
       HF_HOME: /root/.cache/huggingface
       TRANSFORMERS_CACHE: /root/.cache/huggingface
@@ -93,7 +97,7 @@ services:
     ports:
       - "127.0.0.1:${EMBEDDING_HOST_PORT:-18001}:8000"
     volumes:
-      - model-cache:/root/.cache/huggingface
+      - model-cache:/root/.cache/huggingface:ro
       - vllm-cache:/root/.cache/vllm
     deploy:
       resources:
@@ -111,11 +115,13 @@ services:
 
   local-reranker:
     image: ${VLLM_IMAGE:?VLLM_IMAGE is required}
-    container_name: smart-worksite-local-reranker
     ipc: host
     restart: unless-stopped
     logging: *model-logging
     environment:
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-1}
+      HF_DATASETS_OFFLINE: ${HF_DATASETS_OFFLINE:-1}
       CUDA_VISIBLE_DEVICES: ${RERANK_CUDA_VISIBLE_DEVICES:-0}
       HF_HOME: /root/.cache/huggingface
       TRANSFORMERS_CACHE: /root/.cache/huggingface
@@ -147,7 +153,7 @@ services:
     ports:
       - "127.0.0.1:${RERANK_HOST_PORT:-18002}:8000"
     volumes:
-      - model-cache:/root/.cache/huggingface
+      - model-cache:/root/.cache/huggingface:ro
       - vllm-cache:/root/.cache/vllm
     deploy:
       resources:
