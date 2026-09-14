@@ -6,6 +6,7 @@ from PIL import Image
 
 from app.models.schemas import OcrFilePayload, OcrRecognizeRequest
 from app.services.ocr_service import OcrService
+import pytest
 
 
 def _image_url() -> str:
@@ -92,6 +93,19 @@ def test_id_card_marks_invalid_checksum_and_conflicting_birth_for_confirmation()
     assert fields["birthDate"].manualConfirmationRequired is True
     assert data.extras["validation"]["idNumberValid"] is False
     assert data.extras["validation"]["birthDateConsistent"] is False
+
+
+@pytest.mark.parametrize("ocr_type,required_key", [
+    ("PASSPORT", "passportNumber"),
+    ("TRAVEL_PERMIT", "documentNumber"),
+    ("FIVE_STAR_CARD", "permanentResidentId"),
+    ("CONTRACT", "contractNumber"),
+])
+def test_specialized_document_types_have_explicit_field_contracts(ocr_type, required_key):
+    data = _recognize(ocr_type, {"ocrType": ocr_type, "fields": [], "extras": {}})
+
+    assert data.ocrType == ocr_type
+    assert required_key in {field.fieldKey for field in data.fields}
 
 
 def _recognize(ocr_type: str, raw: dict, *, options: dict | None = None):

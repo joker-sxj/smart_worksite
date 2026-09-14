@@ -45,6 +45,46 @@ STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
         {"fieldKey": "taxAmount", "fieldName": "税额"},
         {"fieldKey": "totalAmount", "fieldName": "价税合计"},
     ],
+    "PASSPORT": [
+        {"fieldKey": "passportNumber", "fieldName": "护照号码"},
+        {"fieldKey": "name", "fieldName": "姓名"},
+        {"fieldKey": "nationality", "fieldName": "国籍"},
+        {"fieldKey": "gender", "fieldName": "性别"},
+        {"fieldKey": "birthDate", "fieldName": "出生日期"},
+        {"fieldKey": "placeOfBirth", "fieldName": "出生地点"},
+        {"fieldKey": "issueDate", "fieldName": "签发日期"},
+        {"fieldKey": "expiryDate", "fieldName": "有效期至"},
+        {"fieldKey": "issuingAuthority", "fieldName": "签发机关"},
+        {"fieldKey": "mrz", "fieldName": "机读码"},
+    ],
+    "TRAVEL_PERMIT": [
+        {"fieldKey": "documentNumber", "fieldName": "证件号码"},
+        {"fieldKey": "name", "fieldName": "姓名"},
+        {"fieldKey": "gender", "fieldName": "性别"},
+        {"fieldKey": "birthDate", "fieldName": "出生日期"},
+        {"fieldKey": "validPeriod", "fieldName": "有效期限"},
+        {"fieldKey": "issueCount", "fieldName": "签发次数"},
+        {"fieldKey": "issuingAuthority", "fieldName": "签发机关"},
+    ],
+    "FIVE_STAR_CARD": [
+        {"fieldKey": "permanentResidentId", "fieldName": "永久居留证件号码"},
+        {"fieldKey": "name", "fieldName": "姓名"},
+        {"fieldKey": "gender", "fieldName": "性别"},
+        {"fieldKey": "birthDate", "fieldName": "出生日期"},
+        {"fieldKey": "nationality", "fieldName": "国籍"},
+        {"fieldKey": "validPeriod", "fieldName": "有效期限"},
+        {"fieldKey": "issuingAuthority", "fieldName": "签发机关"},
+    ],
+    "CONTRACT": [
+        {"fieldKey": "contractNumber", "fieldName": "合同编号"},
+        {"fieldKey": "partyA", "fieldName": "甲方"},
+        {"fieldKey": "partyB", "fieldName": "乙方"},
+        {"fieldKey": "contractAmount", "fieldName": "合同金额"},
+        {"fieldKey": "paymentTerms", "fieldName": "付款条件"},
+        {"fieldKey": "signDate", "fieldName": "签订日期"},
+        {"fieldKey": "effectiveDate", "fieldName": "生效日期"},
+        {"fieldKey": "projectName", "fieldName": "项目名称"},
+    ],
 }
 
 
@@ -244,9 +284,7 @@ class OcrService:
 
     def _normalize_type(self, ocr_type: str) -> str:
         normalized = (ocr_type or "").upper()
-        if normalized == "CONTRACT":
-            return "CUSTOM"
-        if normalized not in {"ID_CARD", "LICENSE_PLATE", "INVOICE", "CUSTOM"}:
+        if normalized not in {"ID_CARD", "LICENSE_PLATE", "INVOICE", "PASSPORT", "TRAVEL_PERMIT", "FIVE_STAR_CARD", "CONTRACT", "CUSTOM"}:
             raise ValueError("unsupported ocrType")
         return normalized
 
@@ -261,6 +299,10 @@ class OcrService:
             "ID_CARD": "身份证正反面字段都必须保留；仅在extras.watermark中返回detected、type、text、confidence；extras不要包含其他类型结构。",
             "LICENSE_PLATE": "仅在extras.plate中返回number、backgroundColor、fontColor、plateType、bbox；extras不要包含其他类型结构。",
             "INVOICE": "仅在extras.items中返回最多50条可见明细，并在extras.validation中返回金额校验结果。",
+            "PASSPORT": "核对护照资料页和机读码；不可见字段留空，禁止根据国籍或姓名猜测。",
+            "TRAVEL_PERMIT": "识别港澳台通行证可见字段；证件号码和有效期不完整时留空。",
+            "FIVE_STAR_CARD": "识别外国人永久居留身份证可见字段；中英文姓名分别按证面证据抽取。",
+            "CONTRACT": "从合同正文和签章页提取关键字段；金额、日期和当事方必须带证据位置。",
             "CUSTOM": "extras返回空对象，自定义字段尽量返回evidence和pageNo。",
         }[ocr_type]
         return (

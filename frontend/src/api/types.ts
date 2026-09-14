@@ -427,7 +427,7 @@ export interface OcrRecord {
   projectId: ID;
   taskId: ID;
   fileId: ID;
-  ocrType: 'ID_CARD' | 'LICENSE_PLATE' | 'INVOICE' | 'CUSTOM';
+  ocrType: 'ID_CARD' | 'LICENSE_PLATE' | 'INVOICE' | 'PASSPORT' | 'TRAVEL_PERMIT' | 'FIVE_STAR_CARD' | 'CONTRACT' | 'CUSTOM';
   status: Status;
   progress: number;
   fields: OcrField[];

@@ -177,6 +177,10 @@ public class OcrApplicationService {
                 new OcrTypeResponse("ID_CARD", "身份证识别", List.of("name", "gender", "nation", "birthDate", "address", "idNumber", "issuingAuthority", "validPeriod", "hasWatermark")),
                 new OcrTypeResponse("LICENSE_PLATE", "车牌识别", List.of("plateNumber", "backgroundColor", "fontColor", "plateType")),
                 new OcrTypeResponse("INVOICE", "发票识别", List.of("invoiceType", "invoiceCode", "invoiceNumber", "issueDate", "buyerName", "sellerName", "amountWithoutTax", "taxAmount", "totalAmount")),
+                new OcrTypeResponse("PASSPORT", "护照识别", List.of("passportNumber", "name", "nationality", "gender", "birthDate", "expiryDate", "mrz")),
+                new OcrTypeResponse("TRAVEL_PERMIT", "港澳台通行证识别", List.of("documentNumber", "name", "gender", "birthDate", "validPeriod")),
+                new OcrTypeResponse("FIVE_STAR_CARD", "五星卡识别", List.of("permanentResidentId", "name", "gender", "birthDate", "nationality", "validPeriod")),
+                new OcrTypeResponse("CONTRACT", "合同关键字段识别", List.of("contractNumber", "partyA", "partyB", "contractAmount", "paymentTerms", "signDate")),
                 new OcrTypeResponse("CUSTOM", "自定义字段识别", List.of())
         );
     }

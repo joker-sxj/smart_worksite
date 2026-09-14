@@ -101,6 +101,14 @@ class OcrApplicationServiceTest {
         org.mockito.Mockito.verify(fixture.repository, org.mockito.Mockito.never()).confirmRecord(1L, 7L);
     }
 
+    @Test
+    void exposesExplicitPassportPermitResidentCardAndContractTypes() {
+        Fixture fixture = fixture(List.of("PLATFORM_ADMIN"), List.of("ocr:view", "ocr:manage"));
+
+        assertThat(fixture.service.types()).extracting(type -> type.getOcrType())
+                .contains("PASSPORT", "TRAVEL_PERMIT", "FIVE_STAR_CARD", "CONTRACT");
+    }
+
     private Fixture fixture(List<String> roles, List<String> permissions) {
         UserPrincipal principal = new UserPrincipal(7L, "tester", roles, permissions, 10L);
         SecurityContextHolder.getContext().setAuthentication(

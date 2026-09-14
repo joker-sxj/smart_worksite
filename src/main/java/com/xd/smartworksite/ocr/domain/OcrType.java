@@ -6,6 +6,10 @@ public enum OcrType {
     ID_CARD,
     LICENSE_PLATE,
     INVOICE,
+    PASSPORT,
+    TRAVEL_PERMIT,
+    FIVE_STAR_CARD,
+    CONTRACT,
     CUSTOM;
 
     public static OcrType from(String value) {
@@ -13,9 +17,6 @@ public enum OcrType {
             throw new IllegalArgumentException("ocr type is required");
         }
         String normalized = value.trim().toUpperCase(Locale.ROOT);
-        if ("CONTRACT".equals(normalized)) {
-            return CUSTOM;
-        }
         return OcrType.valueOf(normalized);
     }
 }

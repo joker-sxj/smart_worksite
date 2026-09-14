@@ -71,6 +71,10 @@ const fallbackOcrTypes = [
   { label: '身份证识别', value: 'ID_CARD' },
   { label: '车牌识别', value: 'LICENSE_PLATE' },
   { label: '发票识别', value: 'INVOICE' },
+  { label: '护照识别', value: 'PASSPORT' },
+  { label: '港澳台通行证识别', value: 'TRAVEL_PERMIT' },
+  { label: '五星卡识别', value: 'FIVE_STAR_CARD' },
+  { label: '合同关键字段识别', value: 'CONTRACT' },
   { label: '自定义字段识别', value: 'CUSTOM' }
 ];
 const ocrTypeOptions = computed(() => {
