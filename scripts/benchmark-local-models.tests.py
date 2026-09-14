@@ -167,6 +167,48 @@ class BenchmarkLocalModelsTest(unittest.TestCase):
         self.assertGreaterEqual(len(samples), 3)
         self.assertEqual(benchmark.gpu_peak_summary(samples)["0"]["memoryUsedPeakMiB"], (len(samples) - 1) * 100)
 
+    def test_auxiliary_contention_monitor_collects_embedding_and_reranker_samples(self):
+        calls = []
+
+        def run(name):
+            calls.append(name)
+            return {"status": "PASS", "durationSeconds": 0.01}
+
+        monitor = benchmark.AuxiliaryContentionMonitor(
+            interval_seconds=0.005,
+            runners={"embedding": lambda: run("embedding"), "reranker": lambda: run("reranker")},
+        )
+        monitor.start()
+        deadline = time.monotonic() + 0.5
+        while len(calls) < 4 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        result = monitor.stop()
+
+        self.assertGreaterEqual(len(result["embedding"]), 2)
+        self.assertGreaterEqual(len(result["reranker"]), 2)
+
+    def test_customer_acceptance_requires_successful_auxiliary_contention(self):
+        profile = {
+            "MODEL_PROFILE_NAME": "a6000x2-production-32k", "GPU_COUNT": "2",
+            "GPU_MIN_MEMORY_GB": "48", "GPU_EXPECTED_MODEL_REGEX": "RTX A6000",
+            "CHAT_MAX_MODEL_LEN": "32768",
+        }
+        hardware = {"available": True, "gpus": [
+            {"name": "NVIDIA RTX A6000", "memoryTotalMiB": 49140},
+            {"name": "NVIDIA RTX A6000", "memoryTotalMiB": 49140},
+        ]}
+        samples = [{"status": "PASS", "length": 2000, "concurrency": 1, "promptTokens": 2020}]
+        smoke = {"embedding": {"status": "PASS"}, "reranker": {"status": "PASS"}}
+
+        result = benchmark.evaluate_acceptance(
+            profile, hardware, samples, smoke, True, [2000], [1], 1,
+            "a6000x2-production-32k", contention={"embedding": [], "reranker": []},
+        )
+
+        self.assertFalse(result["passed"])
+        self.assertTrue(any("embedding contention" in error for error in result["errors"]))
+        self.assertTrue(any("reranker contention" in error for error in result["errors"]))
+
     def test_acceptance_gate_checks_active_profile_matrix_and_prompt_evidence(self):
         profile = {
             "MODEL_PROFILE_NAME": "a6000x2-production-32k",
@@ -193,6 +235,7 @@ class BenchmarkLocalModelsTest(unittest.TestCase):
             profile, hardware, samples, smoke, True,
             lengths=[2000, 8000], concurrencies=[1], runs=1,
             active_profile="a6000x2-production-32k",
+            contention={"embedding": [{"status": "PASS"}], "reranker": [{"status": "PASS"}]},
         )
         self.assertTrue(result["passed"])
 
@@ -200,6 +243,7 @@ class BenchmarkLocalModelsTest(unittest.TestCase):
             profile, hardware, samples[:1], smoke, True,
             lengths=[2000, 8000], concurrencies=[1], runs=1,
             active_profile="a6000x2-stable-16k",
+            contention={"embedding": [{"status": "PASS"}], "reranker": [{"status": "PASS"}]},
         )
         self.assertFalse(failed["passed"])
         self.assertTrue(any("active profile" in error for error in failed["errors"]))

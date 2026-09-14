@@ -209,6 +209,41 @@ class GpuMonitor:
             self._stop.wait(self.interval_seconds)
 
 
+class AuxiliaryContentionMonitor:
+    """Exercise auxiliary model endpoints while the chat matrix is running."""
+
+    def __init__(self, interval_seconds: float, runners: dict[str, Callable[[], dict[str, Any]]]):
+        self.interval_seconds = interval_seconds
+        self.runners = runners
+        self.samples: dict[str, list[dict[str, Any]]] = {name: [] for name in runners}
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            raise RuntimeError("auxiliary contention monitor already started")
+        self._thread = threading.Thread(target=self._run, name="auxiliary-contention-monitor", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> dict[str, list[dict[str, Any]]]:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(1.0, self.interval_seconds * 2))
+        return {name: list(values) for name, values in self.samples.items()}
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            for name, runner in self.runners.items():
+                started = time.monotonic()
+                try:
+                    result = dict(runner())
+                except BaseException as error:
+                    result = {"status": "ERROR", "errorClass": classify_error(error), "errorMessage": _safe_error(error)}
+                result["monitorDurationSeconds"] = round(time.monotonic() - started, 6)
+                self.samples[name].append(result)
+            self._stop.wait(self.interval_seconds)
+
+
 def gpu_peak_summary(samples: list[dict[str, Any]]) -> dict[str, dict[str, int | None]]:
     peaks: dict[str, dict[str, int | None]] = {}
     for sample in samples:
@@ -258,7 +293,7 @@ def validate_prompt_tokens(requested: int, observed: int | None, max_context: in
 def evaluate_acceptance(
     profile: dict[str, str], hardware: dict[str, Any], samples: list[dict[str, Any]], smoke: dict[str, Any],
     validated_on_host: bool, lengths: list[int], concurrencies: list[int], runs: int,
-    active_profile: str | None,
+    active_profile: str | None, contention: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     errors: list[str] = []
     expected_profile = profile.get("MODEL_PROFILE_NAME", "unknown")
@@ -281,6 +316,14 @@ def evaluate_acceptance(
     for name, result in smoke.items():
         if result.get("status") != "PASS":
             errors.append(f"{name} smoke test failed")
+    if validated_on_host:
+        contention = contention or {}
+        for name in ("embedding", "reranker"):
+            runs = contention.get(name) or []
+            if not runs:
+                errors.append(f"{name} contention evidence is missing")
+            elif any(item.get("status") != "PASS" for item in runs):
+                errors.append(f"{name} contention test failed")
     return {"passed": not errors, "errors": errors, "customerHostRequested": bool(validated_on_host)}
 
 
@@ -390,34 +433,50 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True, help="JSON report output path")
     parser.add_argument("--validated-on-host", action="store_true", help="Mark only when run on the intended customer acceptance host")
     parser.add_argument("--gpu-sample-interval", type=float, default=1.0, help="GPU sampling interval in seconds")
+    parser.add_argument("--contention-interval", type=float, default=5.0, help="Seconds between embedding/reranker probes during chat load")
     args = parser.parse_args(argv)
 
     profile = load_profile(args.profile)
     lengths = _positive_csv(args.lengths, "lengths")
     concurrencies = _positive_csv(args.concurrency, "concurrency")
-    if args.runs <= 0 or args.timeout <= 0 or args.gpu_sample_interval <= 0:
-        parser.error("--runs, --timeout and --gpu-sample-interval must be positive")
+    if args.runs <= 0 or args.timeout <= 0 or args.gpu_sample_interval <= 0 or args.contention_interval <= 0:
+        parser.error("--runs, --timeout, --gpu-sample-interval and --contention-interval must be positive")
 
     chat_url = _chat_url(args.base_url, profile)
     embedding_url = f"http://127.0.0.1:{profile.get('EMBEDDING_HOST_PORT', '18001')}/v1/embeddings"
     rerank_url = f"http://127.0.0.1:{profile.get('RERANK_HOST_PORT', '18002')}/rerank"
     hardware = hardware_snapshot()
     monitor = GpuMonitor(args.gpu_sample_interval)
+    contention_monitor = AuxiliaryContentionMonitor(args.contention_interval, {
+        "embedding": lambda: run_smoke(embedding_url, {"model": profile.get("EMBEDDING_MODEL_NAME"), "input": ["construction safety contention probe"]}, args.timeout),
+        "reranker": lambda: run_smoke(rerank_url, {"model": profile.get("RERANK_MODEL_NAME"), "query": "safety risk", "documents": ["risk closed", "risk unresolved"]}, args.timeout),
+    })
     monitor.start()
+    contention_monitor.start()
     try:
         samples = run_chat_matrix(chat_url, profile.get("CHAT_MODEL_NAME", "smart-worksite-chat"), lengths, concurrencies, args.runs, args.timeout)
     finally:
         hardware["gpuSamples"].extend(monitor.stop())
+        contention = contention_monitor.stop()
     hardware["gpuPeaks"] = gpu_peak_summary(hardware["gpuSamples"])
     smoke = {
         "embedding": run_smoke(embedding_url, {"model": profile.get("EMBEDDING_MODEL_NAME"), "input": ["construction safety benchmark"]}, args.timeout),
         "reranker": run_smoke(rerank_url, {"model": profile.get("RERANK_MODEL_NAME"), "query": "safety risk", "documents": ["risk closed", "risk unresolved"]}, args.timeout),
     }
     report = build_report(profile, hardware, samples, smoke, args.validated_on_host)
+    report["auxiliaryContention"] = {
+        name: {
+            "sampleCount": len(items),
+            "passCount": sum(item.get("status") == "PASS" for item in items),
+            "durationSeconds": _metric_summary(items, "durationSeconds"),
+            "samples": items,
+        }
+        for name, items in contention.items()
+    }
     active_profile = _active_profile_name(Path("logs/run/model-profile"))
     report["acceptance"] = evaluate_acceptance(
         profile, hardware, samples, smoke, args.validated_on_host,
-        lengths, concurrencies, args.runs, active_profile,
+        lengths, concurrencies, args.runs, active_profile, contention,
     )
     report["activeProfile"] = active_profile
     output = Path(args.output)
