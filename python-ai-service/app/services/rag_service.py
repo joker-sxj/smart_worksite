@@ -515,17 +515,28 @@ def extract_query_focus_terms(query: str) -> set[str]:
     compact = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff.]", "", query or "")
     if not compact:
         return set()
-    markers = ("哪些", "多少", "如何", "怎么", "是否", "多久", "多长", "为什么", "为何", "分别", "什么")
+    markers = ("有哪些", "有何", "哪些", "多少", "如何", "怎么", "是否", "多久", "多长", "为什么", "为何", "分别", "什么")
     positions = [(compact.rfind(marker), marker) for marker in markers if marker in compact]
     if not positions:
         return set()
     position, marker = max(positions, key=lambda item: item[0])
     suffix = compact[position + len(marker):]
     focus = suffix if len(suffix) >= 2 else compact[max(0, position - 28):position]
-    focus = re.sub(r"(?:是什么|有什么|怎么做|应当|应该|需要|规定|要求|情况|内容|信息|资料|问题|结果|是)+$", "", focus)
+    removable_suffix = r"(?:是什么|有什么|有何|怎么做|应当|应该|应为|需要|规定|要求|措施|方法|情况|内容|信息|资料|问题|结果|时有|时|是)+$"
+    focus = re.sub(removable_suffix, "", focus)
+    if not focus:
+        focus = re.sub(removable_suffix, "", compact[max(0, position - 28):position])
     parts = re.split(r"(?:以及|或者|并且|其中|和|与|及|、|或|中|的)", focus)
     generic = {"什么", "哪些", "多少", "如何", "怎么", "是否", "多久", "多长", "为什么", "为何", "分别"}
-    return {part for part in parts if len(part) >= 2 and part not in generic}
+    terms = {part for part in parts if len(part) >= 2 and part not in generic}
+    # Chinese requirement questions often bind several objects to a trailing action
+    # (for example, "A and B handling requirements"). Preserve only that action
+    # anchor; expanding every bigram would over-rank incidental partial matches.
+    if re.search(r"要求|规定|如何|怎么|怎样", compact):
+        for part in parts:
+            if 3 <= len(part) <= 16:
+                terms.add(part[-2:])
+    return terms
 
 
 def focus_term_matches(term: str, content_compact: str) -> bool:
