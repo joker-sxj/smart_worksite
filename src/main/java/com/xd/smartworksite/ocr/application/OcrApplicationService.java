@@ -222,6 +222,10 @@ public class OcrApplicationService {
                 && !OcrStatus.PARTIAL_SUCCESS.name().equals(record.getStatus())) {
             throw new BusinessException(ErrorCode.CONFLICT, "OCR识别尚未完成，暂不能确认");
         }
+        if (parseFields(parseFieldsJson(record.getFieldsJson()).get("fields")).stream()
+                .anyMatch(field -> Boolean.TRUE.equals(field.getManualConfirmationRequired()))) {
+            throw new BusinessException(ErrorCode.CONFLICT, "仍有字段需要人工确认");
+        }
         Long userId = SecurityUtils.getCurrentUserId();
         if (ocrRepository.confirmRecord(recordId, userId) != 1) {
             throw new BusinessException(ErrorCode.CONFLICT, "OCR记录状态已变化，请刷新后重试");

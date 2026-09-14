@@ -24,6 +24,7 @@ describe('OCR detail metadata', () => {
   it('allows confirmation only for an unconfirmed terminal result', () => {
     expect(canConfirmOcrRecord({ status: 'SUCCESS', manuallyConfirmed: false } as any)).toBe(true);
     expect(canConfirmOcrRecord({ status: 'PARTIAL_SUCCESS', manuallyConfirmed: false } as any)).toBe(true);
+    expect(canConfirmOcrRecord({ status: 'PARTIAL_SUCCESS', manuallyConfirmed: false, fields: [{ manualConfirmationRequired: true }] } as any)).toBe(false);
     expect(canConfirmOcrRecord({ status: 'PROCESSING', manuallyConfirmed: false } as any)).toBe(false);
     expect(canConfirmOcrRecord({ status: 'SUCCESS', manuallyConfirmed: true } as any)).toBe(false);
   });

@@ -29,5 +29,6 @@ export function fieldReviewLabel(field: OcrField) {
 
 export function canConfirmOcrRecord(record: OcrRecord) {
   return ['SUCCESS', 'PARTIAL_SUCCESS'].includes(String(record.status || '').toUpperCase())
-    && !record.manuallyConfirmed;
+    && !record.manuallyConfirmed
+    && !(record.fields || []).some((field) => field.manualConfirmationRequired);
 }

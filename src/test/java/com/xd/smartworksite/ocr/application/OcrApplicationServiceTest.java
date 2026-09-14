@@ -88,6 +88,19 @@ class OcrApplicationServiceTest {
         org.mockito.Mockito.verify(fixture.repository, org.mockito.Mockito.never()).confirmRecord(1L, 7L);
     }
 
+    @Test
+    void refusesConfirmationWhenAFieldStillRequiresManualReview() {
+        Fixture fixture = fixture(List.of("PLATFORM_ADMIN"), List.of("ocr:view", "ocr:manage"));
+        OcrRecord record = recordWithIdNumber();
+        record.setFieldsJson("{\"fields\":[{\"fieldKey\":\"name\",\"fieldName\":\"姓名\",\"fieldValue\":\"\",\"manualConfirmationRequired\":true}]}");
+        when(fixture.repository.findRecordById(1L)).thenReturn(Optional.of(record));
+
+        assertThatThrownBy(() -> fixture.service.confirm(1L))
+                .isInstanceOf(com.xd.smartworksite.common.exception.BusinessException.class)
+                .hasMessageContaining("仍有字段需要人工确认");
+        org.mockito.Mockito.verify(fixture.repository, org.mockito.Mockito.never()).confirmRecord(1L, 7L);
+    }
+
     private Fixture fixture(List<String> roles, List<String> permissions) {
         UserPrincipal principal = new UserPrincipal(7L, "tester", roles, permissions, 10L);
         SecurityContextHolder.getContext().setAuthentication(
