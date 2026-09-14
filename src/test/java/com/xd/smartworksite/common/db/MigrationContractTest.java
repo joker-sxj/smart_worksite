@@ -142,7 +142,7 @@ class MigrationContractTest {
         String mapper = Files.readString(
                 MAPPER_DIR.resolve("qa/QaMapper.xml"),
                 StandardCharsets.UTF_8
-        );
+        ).replace("\r\n", "\n");
 
         assertThat(migration).contains("ADD COLUMN retrieval_diagnostics_json JSON NULL");
         assertThat(mapper).contains("property=\"retrievalDiagnosticsJson\" column=\"retrieval_diagnostics_json\"");
