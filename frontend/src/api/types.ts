@@ -577,6 +577,12 @@ export interface PolicySourceForm {
   description?: string;
 }
 
+export interface PolicyPreflightResult {
+  status: 'ALLOWED' | 'RESTRICTED' | 'UNKNOWN';
+  reason: string;
+  message: string;
+}
+
 export interface PolicyCrawlTask {
   taskId: ID;
   projectId: ID;

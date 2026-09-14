@@ -16,4 +16,11 @@ describe('production policy crawler UI', () => {
     expect(policyViewSource).toContain('来源地址');
     expect(policyViewSource).toContain('项目 ID');
   });
+
+  it('preflights sources and requires restricted acknowledgement before save', () => {
+    expect(policyApiSource).toContain("'/policy/sources/preflight'");
+    expect(policyViewSource).toContain('preflightPolicySource');
+    expect(policyViewSource).toContain('我已了解该地址受 robots.txt 限制');
+    expect(policyViewSource).toContain('preflightStatusBySource');
+  });
 });

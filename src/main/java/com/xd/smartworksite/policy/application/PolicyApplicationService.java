@@ -87,6 +87,22 @@ public class PolicyApplicationService {
         return new PageResult<>(request.getPageNo(), request.getPageSize(), page.getTotal(), page.getResult().stream().map(this::toSourceResponse).toList());
     }
 
+    public PolicyPreflightResponse preflightSource(PolicyPreflightRequest request) {
+        projectAccessApplicationService.requireProjectWritableManage(request.getProjectId());
+        if (request.getSourceId() != null) {
+            PolicySource source = requireSourceManage(request.getSourceId());
+            if (!request.getProjectId().equals(source.getProjectId())) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR, "source does not belong to project");
+            }
+        }
+        request.setUrl(normalizeUrl(request.getUrl()));
+        PolicyPreflightResponse response = policyCrawlerClient.preflight(request);
+        if (response == null || response.getStatus() == null || !List.of("ALLOWED", "RESTRICTED", "UNKNOWN").contains(response.getStatus())) {
+            throw new BusinessException(ErrorCode.EXTERNAL_SERVICE_ERROR, "policy preflight returned an invalid response");
+        }
+        return response;
+    }
+
     @Transactional
     public PolicySourceResponse createSource(PolicySourceRequest request) {
         projectAccessApplicationService.requireProjectWritableManage(request.getProjectId());
@@ -141,6 +157,7 @@ public class PolicyApplicationService {
         Project project = projectAccessApplicationService.requireProjectWritableManage(request.getProjectId());
         policyKnowledgeBaseApplicationService.resolve(project);
         PolicySource source = null;
+        List<PolicySource> sources;
         if (request.getSourceId() != null) {
             source = requireSourceManage(request.getSourceId());
             if (!source.getProjectId().equals(request.getProjectId())) {
@@ -152,11 +169,17 @@ public class PolicyApplicationService {
             if (policyRepository.countActiveCrawlTask(source.getId()) > 0) {
                 throw new BusinessException(ErrorCode.CONFLICT, "policy source already has active crawl task");
             }
-        } else if (policyRepository.findEnabledSourcesByProject(request.getProjectId()).isEmpty()) {
-            throw new BusinessException(ErrorCode.CONFLICT, "no enabled policy source in project");
-        } else if (policyRepository.countActiveProjectCrawlTask(request.getProjectId()) > 0) {
-            throw new BusinessException(ErrorCode.CONFLICT, "project already has active full policy crawl task");
+            sources = List.of(source);
+        } else {
+            sources = policyRepository.findEnabledSourcesByProject(request.getProjectId());
+            if (sources.isEmpty()) {
+                throw new BusinessException(ErrorCode.CONFLICT, "no enabled policy source in project");
+            }
+            if (policyRepository.countActiveProjectCrawlTask(request.getProjectId()) > 0) {
+                throw new BusinessException(ErrorCode.CONFLICT, "project already has active full policy crawl task");
+            }
         }
+        validateSourcesForCrawl(sources);
         GenerateTask task = new GenerateTask();
         task.setProjectId(request.getProjectId());
         task.setTaskType(TASK_TYPE_POLICY_CRAWL);
@@ -187,6 +210,24 @@ public class PolicyApplicationService {
         requireUpdated(policyRepository.insertCrawlTask(crawlTask), "policy crawl task insert failed");
         taskOutboxApplicationService.enqueueTask(task, "policy crawl requested");
         return toCrawlTaskResponse(requireCrawlTask(task.getId()));
+    }
+
+    private void validateSourcesForCrawl(List<PolicySource> sources) {
+        for (PolicySource candidate : sources) {
+            PolicyPreflightRequest preflightRequest = new PolicyPreflightRequest();
+            preflightRequest.setProjectId(candidate.getProjectId());
+            preflightRequest.setSourceId(candidate.getId());
+            preflightRequest.setUrl(candidate.getUrl());
+            String status = preflightSource(preflightRequest).getStatus();
+            if ("RESTRICTED".equals(status)) {
+                throw new BusinessException(ErrorCode.CONFLICT,
+                        "policy source is restricted by robots.txt: " + candidate.getName() + "; use authorized file upload or manual entry");
+            }
+            if ("UNKNOWN".equals(status)) {
+                throw new BusinessException(ErrorCode.CONFLICT,
+                        "policy source robots status is unknown: " + candidate.getName() + "; retry preflight before crawling");
+            }
+        }
     }
 
     public PageResult<PolicyCrawlTaskResponse> queryCrawlTasks(PolicyCrawlTaskQueryRequest request) {

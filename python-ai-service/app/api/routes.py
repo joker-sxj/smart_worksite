@@ -33,6 +33,8 @@ from app.models.schemas import (
     OcrRecognizeData,
     PolicyCrawlRequest,
     PolicyCrawlData,
+    PolicyPreflightRequest,
+    PolicyPreflightData,
     DocumentUnderstandingRequest,
     DocumentUnderstandingData,
 )
@@ -210,6 +212,12 @@ async def ocr_recognize(request: OcrRecognizeRequest):
 async def policy_crawl(request: PolicyCrawlRequest):
     data, usage = await services()["policy"].crawl(request)
     return ok(data, usage)
+
+
+@router.post("/policy/preflight", response_model=StandardResponse[PolicyPreflightData])
+async def policy_preflight(request: PolicyPreflightRequest):
+    data = await services()["policy"].preflight(request)
+    return ok(data, {"provider": "HTTPX", "bodyFetched": False})
 
 
 @router.post("/document/understand", response_model=StandardResponse[DocumentUnderstandingData])

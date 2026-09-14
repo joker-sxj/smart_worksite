@@ -11,7 +11,7 @@ from urllib.robotparser import RobotFileParser
 import httpx
 
 from app.core.settings import Settings
-from app.models.schemas import PolicyCrawlArticle, PolicyCrawlData, PolicyCrawlRequest
+from app.models.schemas import PolicyCrawlArticle, PolicyCrawlData, PolicyCrawlRequest, PolicyPreflightData, PolicyPreflightRequest
 
 USER_AGENT = "SmartWorksitePolicyCrawler/1.0 (+policy-ingestion; respects robots.txt)"
 CRAWLER_HEADERS = {"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml;q=0.9", "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8", "Accept-Encoding": "identity"}
@@ -87,6 +87,7 @@ class PolicyCrawlerService:
         timeout = httpx.Timeout(connect=self.settings.policy_crawler_connect_timeout_seconds, read=self.settings.policy_crawler_read_timeout_seconds, write=self.settings.policy_crawler_read_timeout_seconds, pool=self.settings.policy_crawler_connect_timeout_seconds)
         async with asyncio.timeout(self.settings.policy_crawler_total_timeout_seconds):
             async with httpx.AsyncClient(follow_redirects=False, timeout=timeout, trust_env=False) as client:
+                self._invalidate_robots(source_url)
                 if not await self._robots_allowed(client, source_url): raise PolicyCrawlerUrlError("policy crawler is disallowed by robots.txt")
                 response, final_url = await self._fetch(client, source_url)
                 root_html = self._decode(response)
@@ -94,6 +95,14 @@ class PolicyCrawlerService:
                 articles, failed = await self._crawl_articles(client, links)
                 if not articles: articles = [self._build_article(root_html, final_url, request.url)]
                 return PolicyCrawlData(fetchedCount=len(articles) + failed, failedCount=failed, message="policy content crawled", articles=articles), {"provider": "HTTPX", "sourceUrl": request.url, "finalUrl": final_url, "fetched": len(articles), "failed": failed}
+
+    async def preflight(self, request: PolicyPreflightRequest) -> PolicyPreflightData:
+        if not self.settings.policy_crawler_network_enabled:
+            return PolicyPreflightData(status="UNKNOWN", reason="NETWORK_DISABLED", message="当前环境未启用政策源网络访问，保存后仍会在爬取时重新检查。")
+        source_url = self._validate_url(request.url)
+        timeout = httpx.Timeout(connect=self.settings.policy_crawler_connect_timeout_seconds, read=self.settings.policy_crawler_read_timeout_seconds, write=self.settings.policy_crawler_read_timeout_seconds, pool=self.settings.policy_crawler_connect_timeout_seconds)
+        async with httpx.AsyncClient(follow_redirects=False, timeout=timeout, trust_env=False) as client:
+            return await self._robots_decision(client, source_url)
 
     async def _crawl_articles(self, client, links):
         semaphore = asyncio.Semaphore(self.settings.policy_crawler_max_concurrency)
@@ -194,7 +203,14 @@ class PolicyCrawlerService:
         if delay > 0: await asyncio.sleep(delay)
         self._last_request_at = time.monotonic()
 
+    def _invalidate_robots(self, url):
+        parsed = urlparse(url)
+        self._robots.pop(f"{parsed.scheme}://{parsed.netloc}", None)
+
     async def _robots_allowed(self, client, url):
+        return (await self._robots_decision(client, url)).status == "ALLOWED"
+
+    async def _robots_decision(self, client, url):
         parsed = urlparse(url); origin = f"{parsed.scheme}://{parsed.netloc}"; parser = self._robots.get(origin)
         if parser is None:
             parser = RobotFileParser(); parser.set_url(f"{origin}/robots.txt")
@@ -204,12 +220,17 @@ class PolicyCrawlerService:
                     parser.parse(response.text.splitlines())
                 elif response.status_code in {404, 410}:
                     parser.allow_all = True
+                    self._robots[origin] = parser
+                    return PolicyPreflightData(status="ALLOWED", reason="ROBOTS_NOT_PUBLISHED", message="站点未发布 robots.txt；爬取时仍会重新检查。")
                 else:
-                    parser.disallow_all = True
+                    return PolicyPreflightData(status="UNKNOWN", reason="ROBOTS_UNUSABLE", message="暂时无法确认 robots.txt 规则，请谨慎保存并稍后重试。")
             except (httpx.HTTPError, PolicyCrawlerUrlError, PolicyCrawlerResponseError):
-                parser.disallow_all = True
+                return PolicyPreflightData(status="UNKNOWN", reason="ROBOTS_UNAVAILABLE", message="暂时无法读取 robots.txt，请谨慎保存并稍后重试。")
             self._robots[origin] = parser
-        return parser.can_fetch(USER_AGENT, url)
+        allowed = parser.can_fetch(USER_AGENT, url)
+        if allowed:
+            return PolicyPreflightData(status="ALLOWED", reason="ROBOTS_ALLOW", message="robots.txt 允许访问该地址；实际爬取时会再次检查。")
+        return PolicyPreflightData(status="RESTRICTED", reason="ROBOTS_DISALLOW", message="robots.txt 不允许自动抓取该地址，可改用授权文件上传或人工录入。")
 
     def _ensure_usable_response(self, response):
         declared_length = response.headers.get("content-length")

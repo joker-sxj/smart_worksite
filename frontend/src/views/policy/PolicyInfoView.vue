@@ -5,15 +5,20 @@ import { Refresh, Search } from '@element-plus/icons-vue';
 import AppTable from '../../components/common/AppTable.vue';
 import EmptyState from '../../components/common/EmptyState.vue';
 import StatusTag from '../../components/common/StatusTag.vue';
-import { createPolicyCrawlTask, createPolicySource, deletePolicySource, fetchPolicyArticles, fetchPolicyCrawlTasks, fetchPolicySources, updatePolicySource } from '../../api/policy';
+import { createPolicyCrawlTask, createPolicySource, deletePolicySource, fetchPolicyArticles, fetchPolicyCrawlTasks, fetchPolicySources, preflightPolicySource, updatePolicySource } from '../../api/policy';
 import { useProjectStore } from '../../stores/project';
-import type { ID, PolicyArticle, PolicyCrawlTask, PolicySource } from '../../api/types';
+import type { ID, PolicyArticle, PolicyCrawlTask, PolicyPreflightResult, PolicySource } from '../../api/types';
 
 const projectStore = useProjectStore();
 const sourceLoading = ref(false);
 const taskLoading = ref(false);
 const articleLoading = ref(false);
 const saving = ref(false);
+const preflightLoading = ref(false);
+const preflightResult = ref<PolicyPreflightResult | null>(null);
+const preflightUrl = ref('');
+const restrictedAcknowledged = ref(false);
+const preflightStatusBySource = reactive<Record<string, PolicyPreflightResult>>({});
 const crawlingId = ref<ID | 'ALL' | ''>('');
 const sourceError = ref('');
 const taskError = ref('');
@@ -32,6 +37,9 @@ let crawlPollTimer: ReturnType<typeof window.setInterval> | null = null;
 
 function resetForm() {
   Object.assign(form, { sourceId: '', name: '', url: '', crawlFrequency: 'DAILY', description: '' });
+  preflightResult.value = null;
+  preflightUrl.value = '';
+  restrictedAcknowledged.value = false;
 }
 
 function openCreate() {
@@ -42,6 +50,28 @@ function openCreate() {
 function openEdit(row: PolicySource) {
   Object.assign(form, { sourceId: row.sourceId, name: row.name, url: row.url, crawlFrequency: row.crawlFrequency, description: row.description || '' });
   sourceDialogVisible.value = true;
+  preflightResult.value = preflightStatusBySource[String(row.sourceId)] || null;
+  restrictedAcknowledged.value = false;
+}
+
+async function runPreflight() {
+  const message = validateForm();
+  if (message) {
+    ElMessage.warning(message);
+    return null;
+  }
+  preflightLoading.value = true;
+  try {
+    preflightResult.value = await preflightPolicySource({ projectId: projectId.value, sourceId: form.sourceId || undefined, url: form.url.trim() });
+    preflightUrl.value = form.url.trim();
+    restrictedAcknowledged.value = false;
+    return preflightResult.value;
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : 'robots.txt 预检失败');
+    return null;
+  } finally {
+    preflightLoading.value = false;
+  }
 }
 
 function validateForm() {
@@ -158,8 +188,18 @@ async function saveSource() {
   if (message) return ElMessage.warning(message);
   saving.value = true;
   try {
+    const result = preflightResult.value && preflightUrl.value === form.url.trim() ? preflightResult.value : await runPreflight();
+    if (!result) return;
+    if (result.status === 'RESTRICTED' && !restrictedAcknowledged.value) {
+      ElMessage.warning('请确认已了解 robots.txt 限制后再保存');
+      return;
+    }
     if (form.sourceId) await updatePolicySource(form.sourceId, { name: form.name.trim(), url: form.url.trim(), crawlFrequency: form.crawlFrequency, description: form.description.trim() || undefined });
-    else await createPolicySource({ projectId: projectId.value, name: form.name.trim(), url: form.url.trim(), crawlFrequency: form.crawlFrequency, description: form.description.trim() || undefined });
+    else {
+      const source = await createPolicySource({ projectId: projectId.value, name: form.name.trim(), url: form.url.trim(), crawlFrequency: form.crawlFrequency, description: form.description.trim() || undefined });
+      preflightStatusBySource[String(source.sourceId)] = result;
+    }
+    if (form.sourceId) preflightStatusBySource[String(form.sourceId)] = result;
     ElMessage.success(form.sourceId ? '政策源已更新' : '政策源已创建');
     sourceDialogVisible.value = false;
     await loadSources();
@@ -187,6 +227,14 @@ async function crawl(sourceId?: ID) {
   if (activeCrawlSourceIds.value.has(sourceId || 'ALL')) return ElMessage.warning('该政策源已有进行中的爬取任务');
   crawlingId.value = sourceId || 'ALL';
   try {
+    if (sourceId) {
+      const source = sources.value.find((item) => String(item.sourceId) === String(sourceId));
+      if (!source) return;
+      const result = await preflightPolicySource({ projectId: projectId.value, sourceId, url: source.url });
+      preflightStatusBySource[String(sourceId)] = result;
+      if (result.status === 'RESTRICTED') return ElMessage.warning('该地址受 robots.txt 限制，请改用授权文件上传或人工录入');
+      if (result.status === 'UNKNOWN') return ElMessage.warning('暂时无法确认 robots.txt 状态，请稍后重试');
+    }
     await createPolicyCrawlTask({ projectId: projectId.value, sourceId });
     ElMessage.success('政策资讯爬取任务已提交，页面将自动刷新进度');
     await refreshAll();
@@ -198,7 +246,7 @@ async function crawl(sourceId?: ID) {
 }
 
 function isCrawlingSource(sourceId: ID) {
-  return crawlingId.value === sourceId || activeCrawlSourceIds.value.has(sourceId);
+  return crawlingId.value === sourceId || activeCrawlSourceIds.value.has(sourceId) || preflightStatusBySource[String(sourceId)]?.status === 'RESTRICTED';
 }
 
 function searchArticles() {
@@ -313,6 +361,13 @@ watch(projectId, () => {
       <el-form label-width="96px">
         <el-form-item label="来源名称" required><el-input v-model="form.name" placeholder="例如：住建部政策公开栏目" /></el-form-item>
         <el-form-item label="栏目地址" required><el-input v-model="form.url" placeholder="https://example.gov.cn/policy" /></el-form-item>
+        <el-form-item label="合规预检">
+          <div class="preflight-box">
+            <el-button :loading="preflightLoading" @click="runPreflight">检查 robots.txt</el-button>
+            <el-alert v-if="preflightResult" :title="preflightResult.message" :type="preflightResult.status === 'ALLOWED' ? 'success' : preflightResult.status === 'RESTRICTED' ? 'error' : 'warning'" show-icon :closable="false" />
+            <el-checkbox v-if="preflightResult?.status === 'RESTRICTED'" v-model="restrictedAcknowledged">我已了解该地址受 robots.txt 限制，将改用授权文件上传或人工录入</el-checkbox>
+          </div>
+        </el-form-item>
         <el-form-item label="爬取频率" required>
           <el-select v-model="form.crawlFrequency" style="width:100%">
             <el-option label="手动" value="MANUAL" />
@@ -338,5 +393,6 @@ watch(projectId, () => {
 .muted { color: var(--sw-muted); font-size: 13px; line-height: 1.6; }
 .url-text { word-break: break-all; margin: 4px 0 0; }
 .article-content { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; line-height: 1.8; max-height: 52vh; overflow: auto; }
+.preflight-box { display: grid; gap: 10px; width: 100%; }
 @media (max-width: 960px) { .table-head, .filters, .header-actions { align-items: stretch; flex-direction: column; } }
 </style>

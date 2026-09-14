@@ -1,11 +1,123 @@
+import asyncio
+import httpx
+import pytest
+
 from app.core.settings import Settings
-from app.services.policy_crawler_service import PolicyCrawlerBlockedError, PolicyCrawlerService
+from app.models.schemas import PolicyCrawlRequest, PolicyPreflightRequest
+from app.services.policy_crawler_service import (
+    PolicyCrawlerBlockedError,
+    PolicyCrawlerResponseError,
+    PolicyCrawlerService,
+    PolicyCrawlerUrlError,
+)
 
 
 def crawler_settings(**overrides):
     values = {"policy_crawler_network_enabled": True}
     values.update(overrides)
     return Settings(_env_file=None, **values)
+
+
+def test_policy_preflight_reports_allowed_without_fetching_article_body(monkeypatch):
+    service = PolicyCrawlerService(crawler_settings())
+    calls = []
+
+    async def fake_fetch(client, url, robots=False):
+        calls.append((url, robots))
+        return httpx.Response(404, request=httpx.Request("GET", url), content=b""), url
+
+    monkeypatch.setattr(service, "_validate_url", lambda url: url)
+    monkeypatch.setattr(service, "_fetch", fake_fetch)
+    result = asyncio.run(service.preflight(PolicyPreflightRequest(projectId=1, sourceId=2, url="https://example.gov.cn/policy")))
+    assert result.status == "ALLOWED"
+    assert result.reason == "ROBOTS_NOT_PUBLISHED"
+    assert calls == [("https://example.gov.cn/robots.txt", True)]
+
+
+def test_policy_preflight_reports_restricted_from_robots(monkeypatch):
+    service = PolicyCrawlerService(crawler_settings())
+
+    async def fake_fetch(client, url, robots=False):
+        return httpx.Response(200, request=httpx.Request("GET", url), text="User-agent: *\nDisallow: /policy"), url
+
+    monkeypatch.setattr(service, "_validate_url", lambda url: url)
+    monkeypatch.setattr(service, "_fetch", fake_fetch)
+    result = asyncio.run(service.preflight(PolicyPreflightRequest(projectId=1, sourceId=2, url="https://example.gov.cn/policy")))
+    assert result.status == "RESTRICTED"
+    assert result.reason == "ROBOTS_DISALLOW"
+
+
+def test_policy_preflight_reports_unknown_when_robots_cannot_be_read(monkeypatch):
+    service = PolicyCrawlerService(crawler_settings())
+
+    async def fake_fetch(client, url, robots=False):
+        raise httpx.ConnectTimeout("timed out")
+
+    monkeypatch.setattr(service, "_validate_url", lambda url: url)
+    monkeypatch.setattr(service, "_fetch", fake_fetch)
+    result = asyncio.run(service.preflight(PolicyPreflightRequest(projectId=1, sourceId=2, url="https://example.gov.cn/policy")))
+    assert result.status == "UNKNOWN"
+    assert result.reason == "ROBOTS_UNAVAILABLE"
+
+
+def test_policy_crawl_refreshes_robots_after_preflight(monkeypatch):
+    service = PolicyCrawlerService(crawler_settings())
+    robots_calls = 0
+    body_calls = 0
+
+    async def fake_fetch(client, url, robots=False):
+        nonlocal robots_calls, body_calls
+        if robots:
+            robots_calls += 1
+            rule = "Allow: /policy" if robots_calls == 1 else "Disallow: /policy"
+            return httpx.Response(200, request=httpx.Request("GET", url), text=f"User-agent: *\n{rule}"), url
+        body_calls += 1
+        raise AssertionError("crawl must not fetch the page after fresh robots denial")
+
+    monkeypatch.setattr(service, "_validate_url", lambda url: url)
+    monkeypatch.setattr(service, "_fetch", fake_fetch)
+    request = PolicyPreflightRequest(projectId=1, sourceId=2, url="https://example.gov.cn/policy")
+    assert asyncio.run(service.preflight(request)).status == "ALLOWED"
+    with pytest.raises(PolicyCrawlerUrlError, match="robots.txt"):
+        asyncio.run(service.crawl(PolicyCrawlRequest(projectId=1, sourceId=2, url=request.url)))
+    assert robots_calls == 2
+    assert body_calls == 0
+
+
+@pytest.mark.parametrize("failure", [
+    PolicyCrawlerUrlError("policy URL resolves to a private address"),
+    PolicyCrawlerResponseError("robots.txt response size limit exceeded"),
+])
+def test_policy_preflight_reports_unknown_for_unsafe_redirect_or_oversized_robots(monkeypatch, failure):
+    service = PolicyCrawlerService(crawler_settings())
+
+    async def fake_fetch(client, url, robots=False):
+        raise failure
+
+    monkeypatch.setattr(service, "_validate_url", lambda url: url)
+    monkeypatch.setattr(service, "_fetch", fake_fetch)
+    result = asyncio.run(service.preflight(PolicyPreflightRequest(projectId=1, url="https://example.gov.cn/policy")))
+    assert result.status == "UNKNOWN"
+    assert result.reason == "ROBOTS_UNAVAILABLE"
+
+
+def test_policy_preflight_reports_unknown_for_unexpected_robots_status(monkeypatch):
+    service = PolicyCrawlerService(crawler_settings())
+
+    async def fake_fetch(client, url, robots=False):
+        return httpx.Response(503, request=httpx.Request("GET", url)), url
+
+    monkeypatch.setattr(service, "_validate_url", lambda url: url)
+    monkeypatch.setattr(service, "_fetch", fake_fetch)
+    result = asyncio.run(service.preflight(PolicyPreflightRequest(projectId=1, url="https://example.gov.cn/policy")))
+    assert (result.status, result.reason) == ("UNKNOWN", "ROBOTS_UNUSABLE")
+
+
+def test_policy_preflight_network_disabled_is_unknown_without_http(monkeypatch):
+    service = PolicyCrawlerService(crawler_settings(policy_crawler_network_enabled=False))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: (_ for _ in ()).throw(AssertionError("HTTP client created")))
+    result = asyncio.run(service.preflight(PolicyPreflightRequest(projectId=1, url="https://example.gov.cn/policy")))
+    assert (result.status, result.reason) == ("UNKNOWN", "NETWORK_DISABLED")
 
 
 def test_policy_crawler_extracts_list_links_and_article_metadata():

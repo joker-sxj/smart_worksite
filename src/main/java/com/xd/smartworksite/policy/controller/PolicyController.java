@@ -31,6 +31,12 @@ public class PolicyController {
         return ApiResponse.success(policyApplicationService.createSource(request));
     }
 
+    @PostMapping("/sources/preflight")
+    @PreAuthorize("hasAuthority('policy:manage')")
+    public ApiResponse<PolicyPreflightResponse> preflightSource(@Valid @RequestBody PolicyPreflightRequest request) {
+        return ApiResponse.success(policyApplicationService.preflightSource(request));
+    }
+
     @PutMapping("/sources/{sourceId}")
     @PreAuthorize("hasAuthority('policy:manage')")
     public ApiResponse<PolicySourceResponse> updateSource(@PathVariable Long sourceId,
