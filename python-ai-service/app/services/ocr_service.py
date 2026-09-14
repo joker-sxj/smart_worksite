@@ -204,20 +204,10 @@ class OcrService:
             r"^[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领]"
             r"[A-Z](?:[A-HJ-NP-Z0-9]{5}|[DF][A-HJ-NP-Z0-9][0-9]{4}|[0-9]{5}[DF])$"
         )
-        valid = bool(pattern.fullmatch(normalized))
-        fields[plate_index] = plate.model_copy(update={
-            "fieldValue": normalized,
-            "recognized": bool(normalized),
-            "manualConfirmationRequired": plate.manualConfirmationRequired or not valid,
-        })
         extras = dict(data.extras)
-        validation = as_dict(extras.get("validation"))
-        validation["plateNumberValid"] = valid
-        validation["plateNumberNormalized"] = normalized
-        extras["validation"] = validation
         plates = extras.get("plates")
+        normalized_plates = []
         if isinstance(plates, list):
-            normalized_plates = []
             for item in plates:
                 if not isinstance(item, dict):
                     continue
@@ -232,6 +222,20 @@ class OcrService:
                 normalized_item["bbox"] = bbox if isinstance(bbox, list) and len(bbox) == 4 else None
                 normalized_plates.append(normalized_item)
             extras["plates"] = normalized_plates
+        if len(normalized_plates) > 1:
+            normalized = ",".join(item["number"] for item in normalized_plates)
+            valid = all(item["valid"] for item in normalized_plates)
+        else:
+            valid = bool(pattern.fullmatch(normalized))
+        fields[plate_index] = plate.model_copy(update={
+            "fieldValue": normalized,
+            "recognized": bool(normalized),
+            "manualConfirmationRequired": plate.manualConfirmationRequired or not valid,
+        })
+        validation = as_dict(extras.get("validation"))
+        validation["plateNumberValid"] = valid
+        validation["plateNumberNormalized"] = normalized
+        extras["validation"] = validation
         return data.model_copy(update={"fields": fields, "extras": extras})
 
     def _validate_invoice(self, data: OcrRecognizeData, options: dict[str, Any]) -> OcrRecognizeData:

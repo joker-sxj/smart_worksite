@@ -180,6 +180,8 @@ def test_license_plate_preserves_multiple_targets_instead_of_merging_numbers():
     assert [item["number"] for item in data.extras["plates"]] == ["京A12345", "粤BD12345"]
     assert data.extras["plates"][0]["bbox"] == [10, 20, 110, 60]
     assert data.extras["plates"][1]["valid"] is True
+    assert data.extras["validation"]["plateNumberValid"] is True
+    assert data.extras["validation"]["plateNumberNormalized"] == "京A12345,粤BD12345"
 
 
 def test_license_plate_multi_target_normalization_ignores_malformed_entries_safely():
