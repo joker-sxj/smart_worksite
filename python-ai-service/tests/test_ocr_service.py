@@ -54,6 +54,46 @@ def test_id_card_dual_pass_marks_conflicting_field_for_manual_confirmation():
     assert usage["ocrPasses"] == 2
 
 
+def test_id_card_validates_checksum_and_birth_date_consistency():
+    raw = {
+        "ocrType": "ID_CARD",
+        "confidence": 0.96,
+        "fields": [
+            {"fieldKey": "birthDate", "fieldName": "出生日期", "fieldValue": "1949年12月31日", "confidence": 0.96},
+            {"fieldKey": "idNumber", "fieldName": "身份证号", "fieldValue": "110105 19491231 002x", "confidence": 0.96},
+        ],
+        "extras": {},
+    }
+
+    data = _recognize("ID_CARD", raw)
+    fields = {field.fieldKey: field for field in data.fields}
+
+    assert fields["idNumber"].fieldValue == "11010519491231002X"
+    assert fields["idNumber"].manualConfirmationRequired is False
+    assert data.extras["validation"]["idNumberValid"] is True
+    assert data.extras["validation"]["birthDateConsistent"] is True
+
+
+def test_id_card_marks_invalid_checksum_and_conflicting_birth_for_confirmation():
+    raw = {
+        "ocrType": "ID_CARD",
+        "confidence": 0.96,
+        "fields": [
+            {"fieldKey": "birthDate", "fieldName": "出生日期", "fieldValue": "1950-01-01", "confidence": 0.96},
+            {"fieldKey": "idNumber", "fieldName": "身份证号", "fieldValue": "110105194912310021", "confidence": 0.96},
+        ],
+        "extras": {},
+    }
+
+    data = _recognize("ID_CARD", raw)
+    fields = {field.fieldKey: field for field in data.fields}
+
+    assert fields["idNumber"].manualConfirmationRequired is True
+    assert fields["birthDate"].manualConfirmationRequired is True
+    assert data.extras["validation"]["idNumberValid"] is False
+    assert data.extras["validation"]["birthDateConsistent"] is False
+
+
 def _recognize(ocr_type: str, raw: dict, *, options: dict | None = None):
     class FakeQwen:
         async def vision_json_chat(self, prompt, file_sources, content_type):

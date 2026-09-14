@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+from datetime import datetime
 import re
 from typing import Any
 
@@ -92,22 +93,65 @@ class OcrService:
             request.file.contentType,
         )
         data = self._normalize_response(raw, ocr_type, field_definitions)
-        data = self._apply_type_validation(data, request.options)
         if prepared is not None:
             enhanced_sources = prepared.enhanced_sources
             enhanced_raw, _ = await self.qwen.vision_json_chat(prompt, enhanced_sources, request.file.contentType)
             data = self._merge_dual_pass(data, self._normalize_response(enhanced_raw, ocr_type, field_definitions))
             usage = dict(usage)
             usage["ocrPasses"] = 2
+        data = self._apply_type_validation(data, request.options)
         usage = {**usage, **local_usage}
         return data, usage
 
     def _apply_type_validation(self, data: OcrRecognizeData, options: dict[str, Any]) -> OcrRecognizeData:
+        if data.ocrType == "ID_CARD":
+            return self._validate_id_card(data)
         if data.ocrType == "LICENSE_PLATE":
             return self._validate_license_plate(data)
         if data.ocrType == "INVOICE":
             return self._validate_invoice(data, options)
         return data
+
+    def _validate_id_card(self, data: OcrRecognizeData) -> OcrRecognizeData:
+        fields = list(data.fields)
+        by_key = {field.fieldKey: index for index, field in enumerate(fields)}
+        id_index = by_key.get("idNumber")
+        birth_index = by_key.get("birthDate")
+        if id_index is None:
+            return data
+        id_value = re.sub(r"[\s-]", "", fields[id_index].fieldValue).upper() if id_index is not None else ""
+        if not id_value:
+            return data
+        structurally_valid = bool(re.fullmatch(r"\d{17}[0-9X]", id_value))
+        date_valid = False
+        if structurally_valid:
+            try:
+                datetime.strptime(id_value[6:14], "%Y%m%d")
+                date_valid = True
+            except ValueError:
+                date_valid = False
+            weights = (7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2)
+            checks = "10X98765432"
+            checksum_valid = checks[sum(int(value) * weight for value, weight in zip(id_value[:17], weights)) % 11] == id_value[-1]
+        else:
+            checksum_valid = False
+        id_valid = structurally_valid and date_valid and checksum_valid
+        if id_index is not None:
+            fields[id_index] = fields[id_index].model_copy(update={
+                "fieldValue": id_value or fields[id_index].fieldValue,
+                "manualConfirmationRequired": fields[id_index].manualConfirmationRequired or not id_valid,
+            })
+        birth_consistent = None
+        if structurally_valid and birth_index is not None:
+            birth_value = re.sub(r"\D", "", fields[birth_index].fieldValue)
+            birth_consistent = len(birth_value) >= 8 and birth_value[:8] == id_value[6:14]
+            if not birth_consistent:
+                fields[birth_index] = fields[birth_index].model_copy(update={"manualConfirmationRequired": True})
+        extras = dict(data.extras)
+        validation = as_dict(extras.get("validation"))
+        validation.update({"idNumberValid": id_valid, "birthDateConsistent": birth_consistent})
+        extras["validation"] = validation
+        return data.model_copy(update={"fields": fields, "extras": extras})
 
     def _validate_license_plate(self, data: OcrRecognizeData) -> OcrRecognizeData:
         fields = list(data.fields)
