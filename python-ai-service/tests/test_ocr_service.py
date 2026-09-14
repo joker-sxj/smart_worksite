@@ -95,6 +95,24 @@ def test_id_card_marks_invalid_checksum_and_conflicting_birth_for_confirmation()
     assert data.extras["validation"]["birthDateConsistent"] is False
 
 
+def test_id_card_accepts_non_zero_padded_chinese_birth_date():
+    raw = {
+        "ocrType": "ID_CARD",
+        "confidence": 0.96,
+        "fields": [
+            {"fieldKey": "birthDate", "fieldName": "出生日期", "fieldValue": "1992年1月18日", "confidence": 0.96},
+            {"fieldKey": "idNumber", "fieldName": "身份证号", "fieldValue": "510302199201182323", "confidence": 0.96},
+        ],
+        "extras": {},
+    }
+
+    data = _recognize("ID_CARD", raw)
+    fields = {field.fieldKey: field for field in data.fields}
+
+    assert data.extras["validation"]["birthDateConsistent"] is True
+    assert fields["birthDate"].manualConfirmationRequired is False
+
+
 @pytest.mark.parametrize("ocr_type,required_key", [
     ("PASSPORT", "passportNumber"),
     ("TRAVEL_PERMIT", "documentNumber"),

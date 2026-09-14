@@ -183,8 +183,8 @@ class OcrService:
             })
         birth_consistent = None
         if structurally_valid and birth_index is not None:
-            birth_value = re.sub(r"\D", "", fields[birth_index].fieldValue)
-            birth_consistent = len(birth_value) >= 8 and birth_value[:8] == id_value[6:14]
+            birth_value = self._normalized_date_digits(fields[birth_index].fieldValue)
+            birth_consistent = birth_value == id_value[6:14]
             if not birth_consistent:
                 fields[birth_index] = fields[birth_index].model_copy(update={"manualConfirmationRequired": True})
         extras = dict(data.extras)
@@ -192,6 +192,25 @@ class OcrService:
         validation.update({"idNumberValid": id_valid, "birthDateConsistent": birth_consistent})
         extras["validation"] = validation
         return data.model_copy(update={"fields": fields, "extras": extras})
+
+    def _normalized_date_digits(self, value: str) -> str | None:
+        text = str(value or "").strip()
+        compact = re.sub(r"\D", "", text)
+        if len(compact) == 8:
+            try:
+                datetime.strptime(compact, "%Y%m%d")
+                return compact
+            except ValueError:
+                return None
+        match = re.search(r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})", text)
+        if not match:
+            return None
+        normalized = f"{match.group(1)}{int(match.group(2)):02d}{int(match.group(3)):02d}"
+        try:
+            datetime.strptime(normalized, "%Y%m%d")
+            return normalized
+        except ValueError:
+            return None
 
     def _validate_license_plate(self, data: OcrRecognizeData) -> OcrRecognizeData:
         fields = list(data.fields)
