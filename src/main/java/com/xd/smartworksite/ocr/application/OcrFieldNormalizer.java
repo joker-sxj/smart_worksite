@@ -20,14 +20,17 @@ public class OcrFieldNormalizer {
         }
         result.put("confidence", confidence);
         result.put("recognized", recognized);
-        result.put("manualConfirmationRequired", !recognized
-                || confidence < MANUAL_CONFIRMATION_THRESHOLD);
+        result.put("manualConfirmationRequired", Boolean.TRUE.equals(source.get("manualConfirmationRequired"))
+                || !recognized || confidence < MANUAL_CONFIRMATION_THRESHOLD);
         return result;
     }
 
     private boolean isSensitive(String fieldKey) {
         String key = fieldKey.replaceAll("\\s+", "").toLowerCase();
-        return key.equals("idnumber") || key.equals("address") || key.equals("phone");
+        return key.equals("idnumber") || key.equals("address") || key.equals("phone")
+                || key.equals("passportnumber") || key.equals("documentnumber")
+                || key.equals("permanentresidentid") || key.equals("buyertaxnumber")
+                || key.equals("sellertaxnumber");
     }
 
     private String maskValue(String fieldKey, String value) {

@@ -60,6 +60,30 @@ class OcrApplicationServiceTest {
     }
 
     @Test
+    void mapsExplainabilityFieldsAndMasksSensitiveCandidatesForViewOnlyUser() {
+        Fixture fixture = fixture(List.of("PROJECT_USER"), List.of("ocr:view"));
+        OcrRecord record = recordWithIdNumber();
+        record.setFieldsJson("{\"fields\":[{\"fieldKey\":\"idNumber\",\"fieldName\":\"身份证号\",\"fieldValue\":\"\",\"confidence\":0.4,\"manualConfirmationRequired\":true,\"confirmationReason\":\"DUAL_PASS_CONFLICT\",\"candidates\":[{\"value\":\"370202199001011234\",\"confidence\":0.91,\"evidence\":\"身份证号 370202199001011234\",\"source\":\"ORIGINAL\"}]}]}");
+        when(fixture.repository.findRecordById(1L)).thenReturn(Optional.of(record));
+        ProjectMember member = new ProjectMember(); member.setStatus("ENABLED");
+        when(fixture.memberMapper.selectByProjectIdAndUserId(10L, 7L)).thenReturn(member);
+
+        OcrRecordResponse response = fixture.service.get(1L);
+
+        assertThat(response.getFields().get(0).getConfirmationReason()).isEqualTo("DUAL_PASS_CONFLICT");
+        assertThat(response.getFields().get(0).getCandidates()).isEmpty();
+    }
+
+    @Test
+    void keepsOldOcrRecordsReadableWithoutExplainabilityFields() {
+        Fixture fixture = fixture(List.of("PLATFORM_ADMIN"), List.of("ocr:view", "ocr:manage"));
+        OcrRecord record = recordWithIdNumber();
+        when(fixture.repository.findRecordById(1L)).thenReturn(Optional.of(record));
+        assertThat(fixture.service.get(1L).getFields().get(0).getConfirmationReason()).isNull();
+        assertThat(fixture.service.get(1L).getFields().get(0).getCandidates()).isEmpty();
+    }
+
+    @Test
     void confirmsCompletedOcrRecordAndPersistsAuditIdentity() {
         Fixture fixture = fixture(List.of("PLATFORM_ADMIN"), List.of("ocr:view", "ocr:manage"));
         OcrRecord record = recordWithIdNumber();

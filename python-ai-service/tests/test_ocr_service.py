@@ -4,7 +4,7 @@ from io import BytesIO
 
 from PIL import Image
 
-from app.models.schemas import OcrFilePayload, OcrRecognizeRequest
+from app.models.schemas import OcrFieldData, OcrFilePayload, OcrRecognizeData, OcrRecognizeRequest
 from app.services.ocr_service import OcrService
 import pytest
 
@@ -51,8 +51,231 @@ def test_id_card_dual_pass_marks_conflicting_field_for_manual_confirmation():
     assert qwen.calls == 2
     assert data.fields[0].fieldValue == ""
     assert data.fields[0].manualConfirmationRequired is True
+    assert data.fields[0].confirmationReason == "DUAL_PASS_CONFLICT"
+    assert [candidate.model_dump() for candidate in data.fields[0].candidates] == [
+        {"value": "张三", "confidence": 0.9, "evidence": None, "source": "ORIGINAL"},
+        {"value": "张玉", "confidence": 0.9, "evidence": None, "source": "ENHANCED"},
+    ]
     assert data.extras["dualPass"]["conflicts"] == ["name"]
     assert usage["ocrPasses"] == 2
+
+
+def test_document_type_detection_requires_strong_indicator_and_flags_mismatch():
+    service = OcrService(None)
+    data = OcrRecognizeData(
+        ocrType="PASSPORT", fields=[OcrFieldData(fieldKey="passportNumber", fieldName="护照号码")],
+        extras={"visualIndicators": ["中华人民共和国外国人永久居留身份证"]},
+    )
+
+    result = service._apply_document_diagnostics(data, "PASSPORT")
+
+    assert result.extras["documentType"] == {
+        "selectedType": "PASSPORT", "detectedType": "FIVE_STAR_CARD", "confidence": 0.98, "mismatch": True,
+    }
+    assert result.fields[0].confirmationReason == "TYPE_MISMATCH"
+    assert result.fields[0].manualConfirmationRequired is True
+
+
+def test_document_type_detection_degrades_unverified_model_guess_to_unknown():
+    service = OcrService(None)
+    data = OcrRecognizeData(
+        ocrType="PASSPORT", fields=[OcrFieldData(fieldKey="passportNumber", fieldName="护照号码")],
+        extras={"documentType": {"detectedType": "FIVE_STAR_CARD", "confidence": 0.99}},
+    )
+
+    result = service._apply_document_diagnostics(data, "PASSPORT")
+
+    assert result.extras["documentType"]["detectedType"] == "UNKNOWN"
+    assert result.extras["documentType"]["mismatch"] is False
+
+
+def test_id_front_only_and_masked_source_receive_distinct_reasons():
+    service = OcrService(None)
+    data = OcrRecognizeData(
+        ocrType="ID_CARD",
+        fields=[
+            OcrFieldData(fieldKey="name", fieldName="姓名", fieldValue="**", confidence=0.1, manualConfirmationRequired=True),
+            OcrFieldData(fieldKey="issuingAuthority", fieldName="签发机关", manualConfirmationRequired=True),
+            OcrFieldData(fieldKey="validPeriod", fieldName="有效期限", manualConfirmationRequired=True),
+        ],
+        extras={"sideDetected": ["FRONT"], "maskedFields": ["name"]},
+    )
+
+    result = service._apply_document_diagnostics(data, "ID_CARD")
+
+    fields = {field.fieldKey: field for field in result.fields}
+    assert fields["name"].confirmationReason == "SOURCE_MASKED"
+    assert fields["issuingAuthority"].confirmationReason == "MISSING_SIDE_OR_PAGE"
+    assert fields["validPeriod"].confirmationReason == "MISSING_SIDE_OR_PAGE"
+
+
+def test_contract_fragment_does_not_claim_missing_document_fields_failed_ocr():
+    service = OcrService(None)
+    data = OcrRecognizeData(
+        ocrType="CONTRACT",
+        fields=[OcrFieldData(fieldKey="contractNumber", fieldName="合同编号", manualConfirmationRequired=True)],
+        extras={"visibleScope": "CONTRACT_FRAGMENT"},
+    )
+
+    result = service._apply_document_diagnostics(data, "CONTRACT")
+
+    assert result.fields[0].confirmationReason == "FIELD_NOT_VISIBLE"
+
+
+def _dual_pass_field(
+    field_key: str,
+    left_value: str,
+    right_value: str,
+    *,
+    ocr_type: str = "ID_CARD",
+    left_confidence: float = 0.8,
+    right_confidence: float = 0.9,
+):
+    service = OcrService(None)
+    field_name = field_key
+    original = OcrRecognizeData(
+        ocrType=ocr_type,
+        fields=[OcrFieldData(
+            fieldKey=field_key,
+            fieldName=field_name,
+            fieldValue=left_value,
+            confidence=left_confidence,
+            recognized=True,
+            evidence="original evidence",
+        )],
+    )
+    enhanced = OcrRecognizeData(
+        ocrType=ocr_type,
+        fields=[OcrFieldData(
+            fieldKey=field_key,
+            fieldName=field_name,
+            fieldValue=right_value,
+            confidence=right_confidence,
+            recognized=True,
+            evidence="enhanced evidence",
+        )],
+    )
+    return service._merge_dual_pass(original, enhanced).fields[0]
+
+
+def test_dual_pass_treats_nfkc_spacing_punctuation_and_case_as_equivalent():
+    field = _dual_pass_field("buyerName", "ＡＣＭＥ， 公司", "acme公司", ocr_type="INVOICE")
+
+    assert field.fieldValue == "acme公司"
+    assert field.manualConfirmationRequired is False
+    assert field.confirmationReason is None
+
+
+def test_dual_pass_treats_variable_width_valid_dates_as_equivalent():
+    field = _dual_pass_field("birthDate", "1992年1月18日", "1992-01-18")
+
+    assert field.fieldValue == "1992-01-18"
+    assert field.manualConfirmationRequired is False
+
+
+def test_dual_pass_treats_formatted_document_numbers_as_equivalent():
+    field = _dual_pass_field("passportNumber", "ｅ 12-34 567", "E1234567", ocr_type="PASSPORT")
+
+    assert field.fieldValue == "E1234567"
+    assert field.manualConfirmationRequired is False
+
+
+def test_dual_pass_does_not_erase_decimal_semantics_from_amounts():
+    field = _dual_pass_field("totalAmount", "1.00", "100", ocr_type="INVOICE")
+
+    assert field.fieldValue == ""
+    assert field.manualConfirmationRequired is True
+    assert field.confirmationReason == "DUAL_PASS_CONFLICT"
+
+
+def test_dual_pass_selects_the_only_parseable_amount_candidate():
+    field = _dual_pass_field("totalAmount", "¥1,130.00", "not-an-amount", ocr_type="INVOICE")
+
+    assert field.fieldValue == "¥1,130.00"
+    assert field.manualConfirmationRequired is False
+    assert field.confirmationReason is None
+    assert field.candidates == []
+
+
+def test_dual_pass_aligns_fields_by_key_when_provider_order_differs():
+    service = OcrService(None)
+    original = OcrRecognizeData(ocrType="ID_CARD", fields=[
+        OcrFieldData(fieldKey="name", fieldName="姓名", fieldValue="张三", confidence=0.9),
+        OcrFieldData(fieldKey="gender", fieldName="性别", fieldValue="男", confidence=0.8),
+    ])
+    enhanced = OcrRecognizeData(ocrType="ID_CARD", fields=[
+        OcrFieldData(fieldKey="gender", fieldName="性别", fieldValue="男", confidence=0.9),
+        OcrFieldData(fieldKey="name", fieldName="姓名", fieldValue="张三", confidence=0.8),
+    ])
+
+    fields = service._merge_dual_pass(original, enhanced).fields
+
+    assert [(field.fieldKey, field.fieldValue) for field in fields] == [("name", "张三"), ("gender", "男")]
+    assert all(not field.manualConfirmationRequired for field in fields)
+
+
+def test_dual_pass_preserves_single_visible_text_without_empty_conflict_candidate():
+    field = _dual_pass_field("name", "张三", "")
+
+    assert field.fieldValue == "张三"
+    assert field.recognized is True
+    assert field.manualConfirmationRequired is True
+    assert field.confirmationReason == "DUAL_PASS_CONFLICT"
+    assert field.candidates == []
+
+
+def test_dual_pass_equivalent_low_confidence_values_still_require_confirmation():
+    field = _dual_pass_field(
+        "name",
+        "ＡＣＭＥ 公司",
+        "acme公司",
+        left_confidence=0.3,
+        right_confidence=0.4,
+    )
+
+    assert field.fieldValue == "acme公司"
+    assert field.manualConfirmationRequired is True
+    assert field.confirmationReason == "LOW_CONFIDENCE"
+
+
+def test_dual_pass_selects_the_only_deterministically_valid_candidate():
+    field = _dual_pass_field(
+        "idNumber",
+        "11010519491231002X",
+        "110105194912310021",
+        right_confidence=0.99,
+    )
+
+    assert field.fieldValue == "11010519491231002X"
+    assert field.confidence == 0.8
+    assert field.manualConfirmationRequired is False
+    assert field.candidates == []
+
+
+def test_dual_pass_preserves_two_distinct_valid_candidates_for_confirmation():
+    field = _dual_pass_field(
+        "idNumber",
+        "11010519491231002X",
+        "510302199201182323",
+    )
+
+    assert field.fieldValue == ""
+    assert field.manualConfirmationRequired is True
+    assert field.confirmationReason == "DUAL_PASS_CONFLICT"
+    assert [candidate.model_dump() for candidate in field.candidates] == [
+        {
+            "value": "11010519491231002X",
+            "confidence": 0.8,
+            "evidence": "original evidence",
+            "source": "ORIGINAL",
+        },
+        {
+            "value": "510302199201182323",
+            "confidence": 0.9,
+            "evidence": "enhanced evidence",
+            "source": "ENHANCED",
+        },
+    ]
 
 
 def test_id_card_validates_checksum_and_birth_date_consistency():

@@ -419,6 +419,8 @@ export interface OcrField {
   evidence?: string;
   revised?: boolean;
   manualConfirmationRequired?: boolean;
+  confirmationReason?: 'LOW_CONFIDENCE' | 'MISSING_SIDE_OR_PAGE' | 'SOURCE_MASKED' | 'TYPE_MISMATCH' | 'DUAL_PASS_CONFLICT' | 'FIELD_NOT_VISIBLE' | string;
+  candidates?: Array<{ value: string; confidence?: number; evidence?: string; source?: string }>;
 }
 
 export interface OcrRecord {

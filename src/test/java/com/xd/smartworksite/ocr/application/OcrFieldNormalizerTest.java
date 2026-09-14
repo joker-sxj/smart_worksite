@@ -8,6 +8,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class OcrFieldNormalizerTest {
 
+    @Test
+    void preservesUpstreamManualReasonForHighConfidenceTypeMismatch() {
+        Map<String, Object> result = new OcrFieldNormalizer().normalize(Map.of(
+                "fieldKey", "name", "fieldValue", "张三", "confidence", 0.98,
+                "manualConfirmationRequired", true, "confirmationReason", "TYPE_MISMATCH"), false);
+
+        assertThat(result).containsEntry("manualConfirmationRequired", true)
+                .containsEntry("confirmationReason", "TYPE_MISMATCH");
+    }
+
     private final OcrFieldNormalizer normalizer = new OcrFieldNormalizer();
 
     @Test

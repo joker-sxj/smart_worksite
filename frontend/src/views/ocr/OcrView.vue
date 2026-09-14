@@ -12,7 +12,7 @@ import { useUserStore } from '../../stores/user';
 import type { ID, OcrRecord, OcrTypeTemplate } from '../../api/types';
 import { createOcrPreviewController } from './ocrPreview';
 import { normalizeCustomFields, serializeCustomFields, type OcrCustomField } from './ocrCustomFields';
-import { canConfirmOcrRecord, confidenceLabel, fieldLocationLabel, fieldReviewLabel, invoiceItems, invoiceValidation, ocrRuntimeMeta } from './ocrDetail';
+import { applyOcrCandidate, canConfirmOcrRecord, confidenceLabel, documentTypeNotice, fieldConfirmationReasonLabel, fieldLocationLabel, fieldReviewLabel, invoiceItems, invoiceValidation, ocrRuntimeMeta } from './ocrDetail';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -66,6 +66,7 @@ const canSubmit = computed(() => Boolean(canManageOcr.value && currentProjectId.
 const runtimeMeta = computed(() => record.value ? ocrRuntimeMeta(record.value) : { provider: '', model: '', semanticProvider: '', semanticModel: '' });
 const activeInvoiceItems = computed(() => record.value ? invoiceItems(record.value) : []);
 const activeInvoiceValidation = computed(() => record.value ? invoiceValidation(record.value) : {});
+const activeDocumentTypeNotice = computed(() => record.value ? documentTypeNotice(record.value) : '');
 const isPreviewImage = computed(() => Boolean(recordPreviewUrl.value ? recordPreviewIsImage.value : file.value?.type.startsWith('image/') && previewUrl.value));
 const activePreviewUrl = computed(() => recordPreviewUrl.value || previewUrl.value);
 const activePreviewName = computed(() => recordPreviewName.value || file.value?.name || '');
@@ -512,6 +513,7 @@ onUnmounted(() => {
             <span><b>字符识别：</b>{{ runtimeMeta.provider || '未提供' }} / {{ runtimeMeta.model || '未提供' }}</span>
             <span><b>语义模型：</b>{{ runtimeMeta.semanticProvider || '未提供' }} / {{ runtimeMeta.semanticModel || '未提供' }}</span>
           </div>
+          <el-alert v-if="activeDocumentTypeNotice" :title="activeDocumentTypeNotice" type="warning" show-icon :closable="false" class="ocr-type-notice" />
           <AppTable
             :data="record.fields"
             max-height="360"
@@ -521,7 +523,7 @@ onUnmounted(() => {
               { prop: 'confidence', label: '置信度', width: 100, slot: 'confidence' },
               { prop: 'location', label: '位置', width: 140, slot: 'location' },
               { prop: 'evidence', label: '证据', width: 180, slot: 'evidence' },
-              { prop: 'review', label: '状态', width: 110, slot: 'review' }
+              { prop: 'review', label: '状态', width: 210, slot: 'review' }
             ]"
           >
             <template #empty><EmptyState description="暂无识别字段" /></template>
@@ -531,7 +533,17 @@ onUnmounted(() => {
             <template #confidence="{ row }">{{ confidenceLabel(row.confidence) }}</template>
             <template #location="{ row }">{{ fieldLocationLabel(row) }}</template>
             <template #evidence="{ row }"><span class="evidence-text">{{ row.evidence || '未提供' }}</span></template>
-            <template #review="{ row }"><el-tag :type="row.manualConfirmationRequired ? 'warning' : row.revised ? 'success' : 'info'" size="small">{{ fieldReviewLabel(row) }}</el-tag></template>
+            <template #review="{ row }">
+              <div class="field-review">
+                <el-tag :type="row.manualConfirmationRequired ? 'warning' : row.revised ? 'success' : 'info'" size="small">{{ fieldReviewLabel(row) }}</el-tag>
+                <span v-if="fieldConfirmationReasonLabel(row)" class="field-review-reason">{{ fieldConfirmationReasonLabel(row) }}</span>
+                <div v-if="row.candidates?.length" class="field-candidates">
+                  <button v-for="candidate in row.candidates" :key="`${candidate.source}-${candidate.value}`" type="button" :disabled="!canSaveFields()" @click="applyOcrCandidate(row, candidate)">
+                    {{ candidate.value || '空值' }} · {{ confidenceLabel(candidate.confidence) }}
+                  </button>
+                </div>
+              </div>
+            </template>
           </AppTable>
           <div v-if="record.ocrType === 'INVOICE'" class="invoice-details">
             <div class="invoice-detail-head">
@@ -577,6 +589,12 @@ onUnmounted(() => {
 .preview img { display: block; max-width: 100%; max-height: 420px; width: auto; height: auto; object-fit: contain; }
 .ocr-record-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; color: var(--sw-muted); font-size: 13px; }
 .ocr-runtime-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; padding: 9px 12px; border: 1px solid var(--sw-border); border-radius: 8px; background: #f8fafc; color: var(--sw-muted); font-size: 12px; }
+.ocr-type-notice { margin-bottom: 12px; }
+.field-review { display: grid; justify-items: start; gap: 5px; }
+.field-review-reason { color: var(--sw-muted); font-size: 12px; line-height: 1.35; }
+.field-candidates { display: flex; flex-wrap: wrap; gap: 4px; }
+.field-candidates button { border: 1px solid #b8c7d9; border-radius: 6px; padding: 2px 6px; color: #24527a; background: #f3f8fc; cursor: pointer; }
+.field-candidates button:disabled { cursor: not-allowed; opacity: .55; }
 .evidence-text { display: block; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .field-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .invoice-details { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--sw-border); }

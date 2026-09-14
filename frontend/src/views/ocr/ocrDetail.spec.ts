@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canConfirmOcrRecord, confidenceLabel, fieldLocationLabel, fieldReviewLabel, invoiceItems, invoiceValidation, ocrRuntimeMeta } from './ocrDetail';
+import { applyOcrCandidate, canConfirmOcrRecord, confidenceLabel, documentTypeNotice, fieldConfirmationReasonLabel, fieldLocationLabel, fieldReviewLabel, invoiceItems, invoiceValidation, ocrRuntimeMeta } from './ocrDetail';
 
 describe('OCR detail metadata', () => {
   it('reads provider and semantic model metadata from the persisted summary', () => {
@@ -19,6 +19,34 @@ describe('OCR detail metadata', () => {
   it('prioritizes manual confirmation over the revised marker', () => {
     expect(fieldReviewLabel({ manualConfirmationRequired: true, revised: true } as any)).toBe('需人工确认');
     expect(fieldReviewLabel({ revised: true } as any)).toBe('已修订');
+  });
+
+  it('explains stable confirmation reason codes in Chinese and keeps old records readable', () => {
+    expect(fieldConfirmationReasonLabel({ confirmationReason: 'MISSING_SIDE_OR_PAGE' } as any)).toBe('缺少证件背面或必要页面');
+    expect(fieldConfirmationReasonLabel({ confirmationReason: 'SOURCE_MASKED' } as any)).toBe('原图内容被遮挡或打码');
+    expect(fieldConfirmationReasonLabel({ confirmationReason: 'TYPE_MISMATCH' } as any)).toBe('所选识别类型与图片内容不一致');
+    expect(fieldConfirmationReasonLabel({ confirmationReason: 'DUAL_PASS_CONFLICT' } as any)).toBe('两路识别结果冲突，请从候选值中确认');
+    expect(fieldConfirmationReasonLabel({ confirmationReason: 'LOW_CONFIDENCE' } as any)).toBe('识别置信度较低');
+    expect(fieldConfirmationReasonLabel({ confirmationReason: 'FIELD_NOT_VISIBLE' } as any)).toBe('图片中未见该字段');
+    expect(fieldConfirmationReasonLabel({ manualConfirmationRequired: true } as any)).toBe('需要人工确认');
+  });
+
+  it('shows type mismatch only for a confident constrained classification', () => {
+    expect(documentTypeNotice({ rawResult: { extras: { documentType: {
+      selectedType: 'PASSPORT', detectedType: 'FIVE_STAR_CARD', confidence: 0.96, mismatch: true
+    } } } } as any)).toBe('所选类型“护照”与检测类型“五星卡”不一致（96.0%）');
+    expect(documentTypeNotice({ rawResult: { extras: { documentType: {
+      selectedType: 'PASSPORT', detectedType: 'UNKNOWN', confidence: 0.2, mismatch: false
+    } } } } as any)).toBe('文档类型无法可靠判断，请人工确认');
+    expect(documentTypeNotice({ rawResult: {} } as any)).toBe('');
+  });
+
+  it('turns a selected conflict candidate into an explicit human revision', () => {
+    const field = { fieldValue: '', confidence: 0, manualConfirmationRequired: true, confirmationReason: 'DUAL_PASS_CONFLICT', candidates: [{ value: '冼海华', confidence: 0.93, evidence: '姓名 冼海华' }] } as any;
+
+    applyOcrCandidate(field, field.candidates[0]);
+
+    expect(field).toMatchObject({ fieldValue: '冼海华', confidence: 0.93, evidence: '姓名 冼海华', manualConfirmationRequired: false, confirmationReason: undefined, candidates: [], revised: true });
   });
 
   it('allows confirmation only for an unconfirmed terminal result', () => {

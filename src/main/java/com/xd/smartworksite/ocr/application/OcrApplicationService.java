@@ -21,6 +21,7 @@ import com.xd.smartworksite.ocr.domain.OcrStatus;
 import com.xd.smartworksite.ocr.domain.OcrTask;
 import com.xd.smartworksite.ocr.domain.OcrType;
 import com.xd.smartworksite.ocr.dto.OcrFieldResponse;
+import com.xd.smartworksite.ocr.dto.OcrFieldResponse.OcrCandidateResponse;
 import com.xd.smartworksite.ocr.dto.OcrFieldUpdateRequest;
 import com.xd.smartworksite.ocr.dto.OcrRecordQueryRequest;
 import com.xd.smartworksite.ocr.dto.OcrRecordResponse;
@@ -362,7 +363,43 @@ public class OcrApplicationService {
         field.setRevised(revised instanceof Boolean value ? value : Boolean.FALSE);
         Object manualConfirmation = map.get("manualConfirmationRequired");
         field.setManualConfirmationRequired(manualConfirmation instanceof Boolean value ? value : Boolean.FALSE);
+        field.setConfirmationReason(stringValue(map.get("confirmationReason")));
+        field.setCandidates(parseCandidates(map.get("candidates"), field.getFieldKey(), maskSensitive));
         return field;
+    }
+
+    private List<OcrCandidateResponse> parseCandidates(Object value, String fieldKey, boolean maskSensitive) {
+        if (maskSensitive && isSensitiveField(fieldKey)) return new ArrayList<>();
+        if (!(value instanceof List<?> list)) return new ArrayList<>();
+        return list.stream().filter(item -> item instanceof Map<?, ?>).map(item -> {
+            Map<String, Object> candidate = castMap(item);
+            String raw = stringValue(candidate.get("value"));
+            raw = raw == null ? "" : raw;
+            String shown = maskSensitive && isSensitiveField(fieldKey) ? maskSensitiveValue(fieldKey, raw) : raw;
+            OcrCandidateResponse result = new OcrCandidateResponse();
+            result.setValue(shown);
+            result.setConfidence(doubleValue(candidate.get("confidence")));
+            String evidence = stringValue(candidate.get("evidence"));
+            result.setEvidence(maskSensitive && isSensitiveField(fieldKey) ? null : evidence);
+            result.setSource(stringValue(candidate.get("source")));
+            return result;
+        }).toList();
+    }
+
+    private boolean isSensitiveField(String fieldKey) {
+        String key = fieldKey == null ? "" : fieldKey.replaceAll("\\s+", "").toLowerCase();
+        return key.equals("idnumber") || key.equals("address") || key.equals("phone")
+                || key.equals("passportnumber") || key.equals("documentnumber")
+                || key.equals("permanentresidentid") || key.equals("buyertaxnumber")
+                || key.equals("sellertaxnumber");
+    }
+
+    private String maskSensitiveValue(String fieldKey, String value) {
+        String key = fieldKey == null ? "" : fieldKey.replaceAll("\\s+", "").toLowerCase();
+        if (key.equals("idnumber") && value.length() > 10) return value.substring(0, 6) + "********" + value.substring(value.length() - 4);
+        if (key.equals("phone") && value.length() >= 7) return value.substring(0, 3) + "****" + value.substring(value.length() - 4);
+        if (value.length() > 4) return value.substring(0, 2) + "****" + value.substring(value.length() - 2);
+        return value.isBlank() ? value : "****";
     }
 
     private Map<String, Object> maskedResult(Map<String, Object> root) {
@@ -375,6 +412,12 @@ public class OcrApplicationService {
                         Map<String, Object> field = fieldNormalizer.normalize(castMap(item), true);
                         if (field.containsKey("displayValue")) {
                             field.put("fieldValue", field.get("displayValue"));
+                        }
+                        Object candidates = field.get("candidates");
+                        if (candidates instanceof List<?> candidateList) {
+                            field.put("candidates", parseCandidates(candidateList, stringValue(field.get("fieldKey")), true).stream()
+                                    .map(candidate -> objectMapper.convertValue(candidate, new TypeReference<Map<String, Object>>() {}))
+                                    .toList());
                         }
                         field.remove("displayValue");
                         return field;

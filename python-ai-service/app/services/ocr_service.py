@@ -1,9 +1,10 @@
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 import re
+import unicodedata
 from typing import Any
 
-from app.models.schemas import OcrRecognizeRequest, OcrRecognizeData, OcrFieldData
+from app.models.schemas import OcrRecognizeRequest, OcrRecognizeData, OcrFieldCandidate, OcrFieldData
 from .qwen_client import QwenClient
 from .normalization import as_dict, optional_int, optional_string
 from .id_card_preprocessor import IdCardPreprocessor
@@ -88,6 +89,56 @@ STANDARD_FIELDS: dict[str, list[dict[str, Any]]] = {
 }
 
 
+class OcrValueNormalizer:
+    DATE_FIELDS = {"birthDate", "issueDate", "expiryDate", "signDate", "effectiveDate"}
+    AMOUNT_FIELDS = {"amountWithoutTax", "taxAmount", "totalAmount", "contractAmount"}
+    DOCUMENT_NUMBER_FIELDS = {
+        "idNumber", "passportNumber", "documentNumber", "permanentResidentId",
+        "plateNumber", "invoiceCode", "invoiceNumber", "buyerTaxNumber", "sellerTaxNumber",
+        "contractNumber",
+    }
+
+    @classmethod
+    def canonical(cls, field_key: str, value: str) -> str | None:
+        normalized = unicodedata.normalize("NFKC", str(value or "")).strip()
+        if not normalized:
+            return ""
+        if field_key in cls.DATE_FIELDS:
+            return cls.date_digits(normalized)
+        if field_key in cls.AMOUNT_FIELDS:
+            amount = re.sub(r"[^0-9.\-]", "", normalized)
+            try:
+                return str(Decimal(amount).normalize()) if amount else None
+            except InvalidOperation:
+                return None
+        if field_key in cls.DOCUMENT_NUMBER_FIELDS:
+            return "".join(character for character in normalized.upper() if character.isalnum())
+        return "".join(
+            character for character in normalized.casefold()
+            if not character.isspace() and not unicodedata.category(character).startswith(("P", "S"))
+        )
+
+    @staticmethod
+    def date_digits(value: str) -> str | None:
+        text = unicodedata.normalize("NFKC", str(value or "")).strip()
+        compact = re.sub(r"\D", "", text)
+        if len(compact) == 8:
+            try:
+                datetime.strptime(compact, "%Y%m%d")
+                return compact
+            except ValueError:
+                return None
+        match = re.search(r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})", text)
+        if not match:
+            return None
+        normalized = f"{match.group(1)}{int(match.group(2)):02d}{int(match.group(3)):02d}"
+        try:
+            datetime.strptime(normalized, "%Y%m%d")
+            return normalized
+        except ValueError:
+            return None
+
+
 class OcrService:
     def __init__(self, qwen: QwenClient, ocr_provider=None):
         self.qwen = qwen
@@ -140,8 +191,68 @@ class OcrService:
             usage = dict(usage)
             usage["ocrPasses"] = 2
         data = self._apply_type_validation(data, request.options)
+        data = self._apply_document_diagnostics(data, ocr_type)
         usage = {**usage, **local_usage}
         return data, usage
+
+    def _apply_document_diagnostics(self, data: OcrRecognizeData, selected_type: str) -> OcrRecognizeData:
+        extras = dict(data.extras)
+        indicators = extras.get("visualIndicators")
+        indicator_text = " ".join(str(item) for item in indicators if isinstance(item, str)) if isinstance(indicators, list) else ""
+        field_text = " ".join(
+            value for field in data.fields for value in (field.fieldValue, field.evidence or "") if value
+        )
+        detected_type, confidence = self._detect_document_type(f"{indicator_text} {field_text}")
+        mismatch = detected_type != "UNKNOWN" and detected_type != selected_type
+        # Keep legacy responses stable when the provider supplies no type evidence at all.
+        if detected_type != "UNKNOWN" or indicator_text or "documentType" in extras:
+            extras["documentType"] = {
+                "selectedType": selected_type,
+                "detectedType": detected_type,
+                "confidence": confidence,
+                "mismatch": mismatch,
+            }
+        sides = {str(side).upper() for side in extras.get("sideDetected", [])} if isinstance(extras.get("sideDetected"), list) else set()
+        masked_fields = {str(key) for key in extras.get("maskedFields", [])} if isinstance(extras.get("maskedFields"), list) else set()
+        missing_back_fields = {"issuingAuthority", "validPeriod"}
+        fields: list[OcrFieldData] = []
+        for field in data.fields:
+            reason = field.confirmationReason
+            value = field.fieldValue.strip()
+            if mismatch:
+                reason = "TYPE_MISMATCH"
+            elif field.fieldKey in masked_fields or (value and re.fullmatch(r"[*＊xX×·•]{2,}", value)):
+                reason = "SOURCE_MASKED"
+            elif selected_type == "ID_CARD" and sides == {"FRONT"} and field.fieldKey in missing_back_fields and not value:
+                reason = "MISSING_SIDE_OR_PAGE"
+            elif field.manualConfirmationRequired and not reason:
+                reason = "LOW_CONFIDENCE" if value else "FIELD_NOT_VISIBLE"
+            fields.append(field.model_copy(update={
+                "manualConfirmationRequired": field.manualConfirmationRequired or mismatch or bool(reason),
+                "confirmationReason": reason,
+            }))
+        return data.model_copy(update={"fields": fields, "extras": extras})
+
+    def _detect_document_type(self, text: str) -> tuple[str, float]:
+        compact = unicodedata.normalize("NFKC", text or "").upper()
+        rules = (
+            ("FIVE_STAR_CARD", ("外国人永久居留身份证", "FOREIGN PERMANENT RESIDENT ID CARD")),
+            ("TRAVEL_PERMIT", ("往来港澳通行证", "港澳居民来往内地通行证", "台湾居民来往大陆通行证")),
+            ("INVOICE", ("增值税电子普通发票", "增值税专用发票", "电子发票（普通发票）")),
+            ("ID_CARD", ("中华人民共和国居民身份证", "RESIDENT IDENTITY CARD")),
+            ("PASSPORT", ("中华人民共和国护照", "PEOPLE'S REPUBLIC OF CHINA PASSPORT")),
+        )
+        for document_type, markers in rules:
+            if any(marker in compact for marker in markers):
+                return document_type, 0.98
+        # A valid two-line ICAO MRZ is a deterministic passport indicator.
+        mrz_lines = [re.sub(r"\s", "", line) for line in compact.splitlines()]
+        if any(re.fullmatch(r"P<[A-Z]{3}[A-Z<]{20,}", line) for line in mrz_lines):
+            return "PASSPORT", 0.99
+        contract_markers = sum(marker in compact for marker in ("合同编号", "甲方", "乙方", "付款条款"))
+        if contract_markers >= 3:
+            return "CONTRACT", 0.95
+        return "UNKNOWN", 0.0
 
     def _apply_type_validation(self, data: OcrRecognizeData, options: dict[str, Any]) -> OcrRecognizeData:
         if data.ocrType == "ID_CARD":
@@ -163,19 +274,7 @@ class OcrService:
         if not id_value:
             return data
         structurally_valid = bool(re.fullmatch(r"\d{17}[0-9X]", id_value))
-        date_valid = False
-        if structurally_valid:
-            try:
-                datetime.strptime(id_value[6:14], "%Y%m%d")
-                date_valid = True
-            except ValueError:
-                date_valid = False
-            weights = (7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2)
-            checks = "10X98765432"
-            checksum_valid = checks[sum(int(value) * weight for value, weight in zip(id_value[:17], weights)) % 11] == id_value[-1]
-        else:
-            checksum_valid = False
-        id_valid = structurally_valid and date_valid and checksum_valid
+        id_valid = self._is_valid_id_number(id_value)
         if id_index is not None:
             fields[id_index] = fields[id_index].model_copy(update={
                 "fieldValue": id_value or fields[id_index].fieldValue,
@@ -219,10 +318,6 @@ class OcrService:
             return data
         plate = fields[plate_index]
         normalized = re.sub(r"[\s·•・.\-]", "", plate.fieldValue).upper()
-        pattern = re.compile(
-            r"^[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领]"
-            r"[A-Z](?:[A-HJ-NP-Z0-9]{5}|[DF][A-HJ-NP-Z0-9][0-9]{4}|[0-9]{5}[DF])$"
-        )
         extras = dict(data.extras)
         plates = extras.get("plates")
         normalized_plates = []
@@ -235,7 +330,7 @@ class OcrService:
                     continue
                 normalized_item = dict(item)
                 normalized_item["number"] = number
-                normalized_item["valid"] = bool(pattern.fullmatch(number))
+                normalized_item["valid"] = self._is_valid_plate_number(number)
                 normalized_item["confidence"] = self._confidence(item.get("confidence"))
                 bbox = item.get("bbox")
                 normalized_item["bbox"] = bbox if isinstance(bbox, list) and len(bbox) == 4 else None
@@ -245,7 +340,7 @@ class OcrService:
             normalized = ",".join(item["number"] for item in normalized_plates)
             valid = all(item["valid"] for item in normalized_plates)
         else:
-            valid = bool(pattern.fullmatch(normalized))
+            valid = self._is_valid_plate_number(normalized)
         fields[plate_index] = plate.model_copy(update={
             "fieldValue": normalized,
             "recognized": bool(normalized),
@@ -392,22 +487,87 @@ class OcrService:
     def _merge_dual_pass(self, original: OcrRecognizeData, enhanced: OcrRecognizeData) -> OcrRecognizeData:
         conflicts: list[str] = []
         merged: list[OcrFieldData] = []
-        for left, right in zip(original.fields, enhanced.fields):
-            left_value = left.fieldValue.strip()
-            right_value = right.fieldValue.strip()
-            if left_value and right_value and left_value == right_value:
-                merged.append(left.model_copy(update={"manualConfirmationRequired": False}))
-            elif not left_value and not right_value:
-                merged.append(left.model_copy(update={"manualConfirmationRequired": True}))
-            else:
-                conflicts.append(left.fieldKey)
-                merged.append(left.model_copy(update={
-                    "fieldValue": "", "confidence": 0, "recognized": False,
-                    "manualConfirmationRequired": True,
+        enhanced_by_key = {field.fieldKey: field for field in enhanced.fields}
+        for left in original.fields:
+            right = enhanced_by_key.get(left.fieldKey, OcrFieldData(fieldKey=left.fieldKey, fieldName=left.fieldName))
+            left_value, right_value = left.fieldValue.strip(), right.fieldValue.strip()
+            left_canonical = OcrValueNormalizer.canonical(left.fieldKey, left_value)
+            right_canonical = OcrValueNormalizer.canonical(right.fieldKey, right_value)
+            if left_canonical and left_canonical == right_canonical:
+                selected = left if (left.confidence, len(left_value)) >= (right.confidence, len(right_value)) else right
+                low_confidence = left.confidence < 0.5 and right.confidence < 0.5
+                merged.append(selected.model_copy(update={
+                    "manualConfirmationRequired": low_confidence,
+                    "confirmationReason": "LOW_CONFIDENCE" if low_confidence else None,
+                    "candidates": [],
                 }))
+                continue
+            if not left_value and not right_value:
+                merged.append(left.model_copy(update={"manualConfirmationRequired": True, "confirmationReason": "FIELD_NOT_VISIBLE"}))
+                continue
+            if not left_value or not right_value:
+                selected = left if left_value else right
+                merged.append(selected.model_copy(update={
+                    "manualConfirmationRequired": True,
+                    "confirmationReason": "DUAL_PASS_CONFLICT",
+                    "candidates": [],
+                }))
+                continue
+            valid_left = self._candidate_valid(left)
+            valid_right = self._candidate_valid(right)
+            if valid_left != valid_right:
+                selected = left if valid_left else right
+                low_confidence = selected.confidence < 0.5
+                merged.append(selected.model_copy(update={
+                    "manualConfirmationRequired": low_confidence,
+                    "confirmationReason": "LOW_CONFIDENCE" if low_confidence else None,
+                    "candidates": [],
+                }))
+                continue
+            conflicts.append(left.fieldKey)
+            candidates = [
+                OcrFieldCandidate(value=left_value, confidence=left.confidence, evidence=left.evidence, source="ORIGINAL"),
+                OcrFieldCandidate(value=right_value, confidence=right.confidence, evidence=right.evidence, source="ENHANCED"),
+            ]
+            merged.append(left.model_copy(update={
+                "fieldValue": "", "confidence": 0, "recognized": False,
+                "manualConfirmationRequired": True, "confirmationReason": "DUAL_PASS_CONFLICT",
+                "candidates": candidates,
+            }))
         extras = dict(original.extras)
         extras["dualPass"] = {"conflicts": conflicts, "preprocessing": "orientation_contrast_sharpness"}
         return original.model_copy(update={"fields": merged, "extras": extras})
+
+    def _candidate_valid(self, field: OcrFieldData) -> bool:
+        value = field.fieldValue
+        if field.fieldKey == "idNumber":
+            return self._is_valid_id_number(value)
+        if field.fieldKey == "plateNumber":
+            return self._is_valid_plate_number(value)
+        if field.fieldKey in OcrValueNormalizer.DATE_FIELDS:
+            return OcrValueNormalizer.date_digits(value) is not None
+        if field.fieldKey in OcrValueNormalizer.AMOUNT_FIELDS:
+            return self._money(value) is not None
+        return False
+
+    def _is_valid_id_number(self, value: str) -> bool:
+        canonical = re.sub(r"[\s-]", "", value).upper()
+        if not re.fullmatch(r"\d{17}[0-9X]", canonical):
+            return False
+        try:
+            datetime.strptime(canonical[6:14], "%Y%m%d")
+        except ValueError:
+            return False
+        weights = (7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2)
+        return "10X98765432"[sum(int(v) * w for v, w in zip(canonical[:17], weights)) % 11] == canonical[-1]
+
+    def _is_valid_plate_number(self, value: str) -> bool:
+        canonical = re.sub(r"[\s·•・.\-]", "", value).upper()
+        pattern = (
+            r"^[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领]"
+            r"[A-Z](?:[A-HJ-NP-Z0-9]{5}|[DF][A-HJ-NP-Z0-9][0-9]{4}|[0-9]{5}[DF])$"
+        )
+        return bool(re.fullmatch(pattern, canonical))
 
     def _normalize_type(self, ocr_type: str) -> str:
         normalized = (ocr_type or "").upper()
@@ -446,7 +606,7 @@ class OcrService:
             "\"ocrType\":\"...\","
             "\"confidence\":0到1之间数字,"
             "\"fields\":[{\"fieldKey\":\"...\",\"fieldName\":\"...\",\"fieldValue\":\"...\",\"confidence\":0到1之间数字,\"recognized\":true或false,\"location\":\"页码或区域\",\"pageNo\":1,\"evidence\":\"原文证据\"}],"
-            "\"extras\":{},"
+            "\"extras\":{\"visualIndicators\":[\"仅返回画面中逐字可见的证件标题、标签或机读码标识\"],\"sideDetected\":[\"身份证仅返回FRONT或BACK\"],\"maskedFields\":[\"仅返回确有遮挡或打码的fieldKey\"],\"visibleScope\":\"完整文档或CONTRACT_FRAGMENT\"},"
             "\"raw\":{}"
             "}。\n"
             "如果字段不可见或无法确认，仍必须返回该字段，fieldValue返回空字符串，confidence返回0，recognized返回false，不要编造。"

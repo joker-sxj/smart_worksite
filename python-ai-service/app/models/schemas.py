@@ -386,6 +386,13 @@ class OcrRecognizeRequest(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+class OcrFieldCandidate(BaseModel):
+    value: str
+    confidence: float = 0
+    evidence: str | None = None
+    source: str
+
+
 class OcrFieldData(BaseModel):
     fieldKey: str
     fieldName: str
@@ -396,6 +403,8 @@ class OcrFieldData(BaseModel):
     pageNo: int | None = None
     evidence: str | None = None
     manualConfirmationRequired: bool = False
+    confirmationReason: str | None = None
+    candidates: list[OcrFieldCandidate] = Field(default_factory=list)
 
 
 class OcrRecognizeData(BaseModel):
@@ -411,6 +420,18 @@ class PolicyCrawlRequest(BaseModel):
     sourceId: int
     url: str
     lastCrawledAt: str | None = None
+
+
+class PolicyPreflightRequest(BaseModel):
+    projectId: int
+    sourceId: int | None = None
+    url: str
+
+
+class PolicyPreflightData(BaseModel):
+    status: str
+    reason: str
+    message: str
 
 
 class PolicyCrawlArticle(BaseModel):
