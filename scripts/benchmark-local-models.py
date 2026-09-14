@@ -9,6 +9,7 @@ import json
 import math
 import os
 import platform
+import re
 import socket
 import subprocess
 import threading
@@ -22,6 +23,7 @@ from typing import Any, Callable, Iterable
 
 SCHEMA_VERSION = 1
 DEFAULT_PROFILE = "deploy/model-profiles/a6000x2-production-32k.env.example"
+PROMPT_TOKEN_MIN_RATIO = 0.90
 
 
 def load_profile(path: str | Path) -> dict[str, str]:
@@ -122,6 +124,7 @@ def summarize_by_concurrency(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "ttftSeconds": _metric_summary(passed, "ttftSeconds"),
             "outputTokensPerSecond": _metric_summary(passed, "outputTokensPerSecond"),
             "durationSeconds": _metric_summary(passed, "durationSeconds"),
+            "clientDispatchWaitSeconds": _metric_summary(passed, "clientDispatchWaitSeconds"),
             "errors": dict(Counter(item.get("errorClass", "UNKNOWN") for item in items if item.get("status") != "PASS")),
         }
     return summary
@@ -178,7 +181,113 @@ def hardware_snapshot() -> dict[str, Any]:
     }
 
 
-def run_chat_sample(chat_url: str, model: str, length: int, concurrency: int, run: int, timeout: float) -> dict[str, Any]:
+class GpuMonitor:
+    def __init__(self, interval_seconds: float = 1.0, capture: Callable[[], dict[str, Any] | None] = capture_gpu_sample):
+        self.interval_seconds = interval_seconds
+        self.capture = capture
+        self.samples: list[dict[str, Any]] = []
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            raise RuntimeError("GPU monitor already started")
+        self._thread = threading.Thread(target=self._run, name="gpu-benchmark-monitor", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> list[dict[str, Any]]:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(1.0, self.interval_seconds * 2))
+        return list(self.samples)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            sample = self.capture()
+            if sample:
+                self.samples.append(sample)
+            self._stop.wait(self.interval_seconds)
+
+
+def gpu_peak_summary(samples: list[dict[str, Any]]) -> dict[str, dict[str, int | None]]:
+    peaks: dict[str, dict[str, int | None]] = {}
+    for sample in samples:
+        for gpu in sample.get("gpus", []):
+            index = str(gpu.get("index", 0))
+            values = peaks.setdefault(index, {"memoryUsedPeakMiB": None, "utilizationPeakPercent": None})
+            for source, target in (("memoryUsedMiB", "memoryUsedPeakMiB"), ("utilizationPercent", "utilizationPeakPercent")):
+                value = _integer_or_none(gpu.get(source))
+                current = values[target]
+                if value is not None and (current is None or value > current):
+                    values[target] = value
+    return peaks
+
+
+def validate_hardware(profile: dict[str, str], hardware: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    gpus = hardware.get("gpus") or []
+    expected_count = _integer_or_none(profile.get("GPU_COUNT"))
+    if not hardware.get("available"):
+        errors.append("GPU inventory is unavailable")
+    if expected_count is not None and len(gpus) != expected_count:
+        errors.append(f"expected {expected_count} GPUs, found {len(gpus)}")
+    expected_pattern = profile.get("GPU_EXPECTED_MODEL_REGEX", "").strip()
+    minimum_mib = (_integer_or_none(profile.get("GPU_MIN_MEMORY_GB")) or 0) * 1000
+    for gpu in gpus:
+        name = str(gpu.get("name", ""))
+        if expected_pattern and re.search(expected_pattern, name, re.IGNORECASE) is None:
+            errors.append(f"GPU {gpu.get('index', '?')} model {name!r} does not match {expected_pattern!r}")
+        total = _integer_or_none(gpu.get("memoryTotalMiB")) or 0
+        if minimum_mib and total < minimum_mib:
+            errors.append(f"GPU {gpu.get('index', '?')} memory {total} MiB is below required {minimum_mib} MiB")
+    return errors
+
+
+def validate_prompt_tokens(requested: int, observed: int | None, max_context: int | None) -> list[str]:
+    if observed is None:
+        return [f"prompt token usage is missing for requested length {requested}"]
+    errors: list[str] = []
+    minimum = math.floor(requested * PROMPT_TOKEN_MIN_RATIO)
+    if observed < minimum:
+        errors.append(f"observed prompt tokens {observed} are below {minimum} for requested length {requested}")
+    if max_context is not None and observed > max_context:
+        errors.append(f"observed prompt tokens {observed} exceeds profile context limit {max_context}")
+    return errors
+
+
+def evaluate_acceptance(
+    profile: dict[str, str], hardware: dict[str, Any], samples: list[dict[str, Any]], smoke: dict[str, Any],
+    validated_on_host: bool, lengths: list[int], concurrencies: list[int], runs: int,
+    active_profile: str | None,
+) -> dict[str, Any]:
+    errors: list[str] = []
+    expected_profile = profile.get("MODEL_PROFILE_NAME", "unknown")
+    if validated_on_host:
+        errors.extend(validate_hardware(profile, hardware))
+        if active_profile != expected_profile:
+            errors.append(f"active profile {active_profile!r} does not match benchmark profile {expected_profile!r}")
+    max_context = _integer_or_none(profile.get("CHAT_MAX_MODEL_LEN"))
+    for length in lengths:
+        for concurrency in concurrencies:
+            cell = [sample for sample in samples if sample.get("length") == length and sample.get("concurrency") == concurrency]
+            expected_samples = concurrency * runs
+            if len(cell) != expected_samples:
+                errors.append(f"matrix cell length={length}, concurrency={concurrency} expected {expected_samples} samples, found {len(cell)}")
+            for sample in cell:
+                if sample.get("status") != "PASS":
+                    errors.append(f"matrix cell length={length}, concurrency={concurrency} contains failed sample")
+                else:
+                    errors.extend(validate_prompt_tokens(length, _integer_or_none(sample.get("promptTokens")), max_context))
+    for name, result in smoke.items():
+        if result.get("status") != "PASS":
+            errors.append(f"{name} smoke test failed")
+    return {"passed": not errors, "errors": errors, "customerHostRequested": bool(validated_on_host)}
+
+
+def run_chat_sample(
+    chat_url: str, model: str, length: int, concurrency: int, run: int, timeout: float,
+    batch_started_at: float | None = None,
+) -> dict[str, Any]:
     payload, metadata = build_chat_request(model, length)
     started = time.monotonic()
     sample: dict[str, Any] = {
@@ -186,6 +295,7 @@ def run_chat_sample(chat_url: str, model: str, length: int, concurrency: int, ru
         "length": length,
         "concurrency": concurrency,
         "run": run,
+        "clientDispatchWaitSeconds": round(started - batch_started_at, 6) if batch_started_at is not None else None,
         **metadata,
     }
     try:
@@ -214,9 +324,14 @@ def run_chat_matrix(chat_url: str, model: str, lengths: list[int], concurrencies
     for length in lengths:
         for concurrency in concurrencies:
             for run in range(1, runs + 1):
+                batch_started_at = time.monotonic()
                 with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-                    futures = [executor.submit(run_chat_sample, chat_url, model, length, concurrency, run, timeout) for _ in range(concurrency)]
-                    samples.extend(future.result() for future in futures)
+                    futures = [executor.submit(run_chat_sample, chat_url, model, length, concurrency, run, timeout, batch_started_at) for _ in range(concurrency)]
+                    batch_samples = [future.result() for future in futures]
+                batch_wall_seconds = round(time.monotonic() - batch_started_at, 6)
+                for sample in batch_samples:
+                    sample["batchWallSeconds"] = batch_wall_seconds
+                samples.extend(batch_samples)
     return samples
 
 
@@ -258,6 +373,8 @@ def build_report(profile: dict[str, str], hardware: dict[str, Any], samples: lis
             "timeout": errors.get("TIMEOUT", 0) > 0,
             "restartOrConnection": errors.get("RESTART_OR_CONNECTION", 0) > 0,
             "errorCounts": dict(errors),
+            "serverQueueMetricsAvailable": False,
+            "queueMetricNotice": "Client dispatch wait and TTFT are recorded; the OpenAI-compatible endpoint does not expose server queue residence time.",
         },
     }
 
@@ -272,34 +389,48 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=300, help="Per-request timeout seconds")
     parser.add_argument("--output", required=True, help="JSON report output path")
     parser.add_argument("--validated-on-host", action="store_true", help="Mark only when run on the intended customer acceptance host")
+    parser.add_argument("--gpu-sample-interval", type=float, default=1.0, help="GPU sampling interval in seconds")
     args = parser.parse_args(argv)
 
     profile = load_profile(args.profile)
     lengths = _positive_csv(args.lengths, "lengths")
     concurrencies = _positive_csv(args.concurrency, "concurrency")
-    if args.runs <= 0 or args.timeout <= 0:
-        parser.error("--runs and --timeout must be positive")
+    if args.runs <= 0 or args.timeout <= 0 or args.gpu_sample_interval <= 0:
+        parser.error("--runs, --timeout and --gpu-sample-interval must be positive")
 
     chat_url = _chat_url(args.base_url, profile)
     embedding_url = f"http://127.0.0.1:{profile.get('EMBEDDING_HOST_PORT', '18001')}/v1/embeddings"
     rerank_url = f"http://127.0.0.1:{profile.get('RERANK_HOST_PORT', '18002')}/rerank"
     hardware = hardware_snapshot()
-    samples = run_chat_matrix(chat_url, profile.get("CHAT_MODEL_NAME", "smart-worksite-chat"), lengths, concurrencies, args.runs, args.timeout)
-    final_gpu = capture_gpu_sample()
-    if final_gpu:
-        hardware["gpuSamples"].append(final_gpu)
+    monitor = GpuMonitor(args.gpu_sample_interval)
+    monitor.start()
+    try:
+        samples = run_chat_matrix(chat_url, profile.get("CHAT_MODEL_NAME", "smart-worksite-chat"), lengths, concurrencies, args.runs, args.timeout)
+    finally:
+        hardware["gpuSamples"].extend(monitor.stop())
+    hardware["gpuPeaks"] = gpu_peak_summary(hardware["gpuSamples"])
     smoke = {
         "embedding": run_smoke(embedding_url, {"model": profile.get("EMBEDDING_MODEL_NAME"), "input": ["construction safety benchmark"]}, args.timeout),
         "reranker": run_smoke(rerank_url, {"model": profile.get("RERANK_MODEL_NAME"), "query": "safety risk", "documents": ["risk closed", "risk unresolved"]}, args.timeout),
     }
     report = build_report(profile, hardware, samples, smoke, args.validated_on_host)
+    active_profile = _active_profile_name(Path("logs/run/model-profile"))
+    report["acceptance"] = evaluate_acceptance(
+        profile, hardware, samples, smoke, args.validated_on_host,
+        lengths, concurrencies, args.runs, active_profile,
+    )
+    report["activeProfile"] = active_profile
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Benchmark report written to {output}")
     print(f"Validated on host: {report['validatedOnHost']}")
     print(f"Errors: {report['indicators']['errorCounts']}")
-    return 0 if all(sample.get("status") == "PASS" for sample in samples) and all(item.get("status") == "PASS" for item in smoke.values()) else 1
+    if report["acceptance"]["errors"]:
+        print("Acceptance errors:")
+        for error in report["acceptance"]["errors"]:
+            print(f"- {error}")
+    return 0 if report["acceptance"]["passed"] else 1
 
 
 def _chat_url(base_url: str | None, profile: dict[str, str]) -> str:
@@ -310,6 +441,16 @@ def _chat_url(base_url: str | None, profile: dict[str, str]) -> str:
     if value.endswith("/v1"):
         return value + "/chat/completions"
     return value + "/v1/chat/completions"
+
+
+def _active_profile_name(active_file: Path) -> str | None:
+    try:
+        path = active_file.read_text(encoding="utf-8").strip()
+        if not path:
+            return None
+        return load_profile(path).get("MODEL_PROFILE_NAME")
+    except (OSError, ValueError):
+        return None
 
 
 def _json_request(url: str, payload: dict[str, Any]) -> urllib.request.Request:
@@ -341,6 +482,8 @@ def summarize_by_length_and_concurrency(samples: list[dict[str, Any]]) -> dict[s
                 "ttftSeconds": _metric_summary(passed, "ttftSeconds"),
                 "outputTokensPerSecond": _metric_summary(passed, "outputTokensPerSecond"),
                 "durationSeconds": _metric_summary(passed, "durationSeconds"),
+                "clientDispatchWaitSeconds": _metric_summary(passed, "clientDispatchWaitSeconds"),
+                "batchWallSeconds": _metric_summary(passed, "batchWallSeconds"),
             }
     return summary
 
