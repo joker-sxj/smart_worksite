@@ -295,7 +295,8 @@ curl --noproxy '*' -X POST http://127.0.0.1:8080/api/files/1/parse \
 ```text
 PENDING
 RUNNING
-SUCCESS
+PARSED
+SUCCESS（兼容历史记录）
 FAILED
 CANCELED
 ```
@@ -329,7 +330,7 @@ curl --noproxy '*' http://127.0.0.1:8080/api/file-parse-records/1
 
 ```json
 {
-  "status": "SUCCESS",
+  "status": "PARSED",
   "progress": 100,
   "currentStage": "FINISHED",
   "contentPreview": "解析结果预览..."
@@ -352,7 +353,7 @@ curl --noproxy '*' http://127.0.0.1:8080/api/file-parse-records/1
 GET /api/file-parse-records/{recordId}/content
 ```
 
-解析记录必须是 `SUCCESS`。
+解析记录必须是 `PARSED`；为兼容历史数据，接口也接受 `SUCCESS`。
 
 示例：
 
