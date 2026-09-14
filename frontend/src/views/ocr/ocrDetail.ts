@@ -32,3 +32,19 @@ export function canConfirmOcrRecord(record: OcrRecord) {
     && !record.manuallyConfirmed
     && !(record.fields || []).some((field) => field.manualConfirmationRequired);
 }
+
+function invoiceExtras(record: OcrRecord) {
+  const raw = record.rawResult && typeof record.rawResult === 'object' ? record.rawResult as Record<string, unknown> : {};
+  const extras = raw.extras && typeof raw.extras === 'object' ? raw.extras as Record<string, unknown> : {};
+  return extras;
+}
+
+export function invoiceItems(record: OcrRecord) {
+  const items = invoiceExtras(record).items;
+  return Array.isArray(items) ? items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object')) : [];
+}
+
+export function invoiceValidation(record: OcrRecord) {
+  const validation = invoiceExtras(record).validation;
+  return validation && typeof validation === 'object' ? validation as Record<string, unknown> : {};
+}

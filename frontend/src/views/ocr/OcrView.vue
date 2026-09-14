@@ -12,7 +12,7 @@ import { useUserStore } from '../../stores/user';
 import type { ID, OcrRecord, OcrTypeTemplate } from '../../api/types';
 import { createOcrPreviewController } from './ocrPreview';
 import { normalizeCustomFields, serializeCustomFields, type OcrCustomField } from './ocrCustomFields';
-import { canConfirmOcrRecord, confidenceLabel, fieldLocationLabel, fieldReviewLabel, ocrRuntimeMeta } from './ocrDetail';
+import { canConfirmOcrRecord, confidenceLabel, fieldLocationLabel, fieldReviewLabel, invoiceItems, invoiceValidation, ocrRuntimeMeta } from './ocrDetail';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -64,6 +64,8 @@ const currentProjectId = computed(() => projectStore.currentProject?.projectId);
 const canManageOcr = computed(() => userStore.hasPermission('ocr:manage'));
 const canSubmit = computed(() => Boolean(canManageOcr.value && currentProjectId.value && file.value && !submitting.value));
 const runtimeMeta = computed(() => record.value ? ocrRuntimeMeta(record.value) : { provider: '', model: '', semanticProvider: '', semanticModel: '' });
+const activeInvoiceItems = computed(() => record.value ? invoiceItems(record.value) : []);
+const activeInvoiceValidation = computed(() => record.value ? invoiceValidation(record.value) : {});
 const isPreviewImage = computed(() => Boolean(recordPreviewUrl.value ? recordPreviewIsImage.value : file.value?.type.startsWith('image/') && previewUrl.value));
 const activePreviewUrl = computed(() => recordPreviewUrl.value || previewUrl.value);
 const activePreviewName = computed(() => recordPreviewName.value || file.value?.name || '');
@@ -531,6 +533,36 @@ onUnmounted(() => {
             <template #evidence="{ row }"><span class="evidence-text">{{ row.evidence || '未提供' }}</span></template>
             <template #review="{ row }"><el-tag :type="row.manualConfirmationRequired ? 'warning' : row.revised ? 'success' : 'info'" size="small">{{ fieldReviewLabel(row) }}</el-tag></template>
           </AppTable>
+          <div v-if="record.ocrType === 'INVOICE'" class="invoice-details">
+            <div class="invoice-detail-head">
+              <h4>发票明细</h4>
+              <div class="invoice-checks">
+                <el-tag :type="activeInvoiceValidation.itemAmountsConsistent === false ? 'danger' : 'success'" size="small">
+                  明细金额{{ activeInvoiceValidation.itemAmountsConsistent === false ? '不一致' : activeInvoiceValidation.itemAmountsConsistent === true ? '一致' : '未校验' }}
+                </el-tag>
+                <el-tag :type="activeInvoiceValidation.itemTaxConsistent === false ? 'danger' : 'success'" size="small">
+                  明细税额{{ activeInvoiceValidation.itemTaxConsistent === false ? '不一致' : activeInvoiceValidation.itemTaxConsistent === true ? '一致' : '未校验' }}
+                </el-tag>
+                <el-tag v-if="activeInvoiceValidation.itemsTruncated" type="warning" size="small">仅展示前 50 条</el-tag>
+              </div>
+            </div>
+            <AppTable
+              :data="activeInvoiceItems"
+              max-height="300"
+              :columns="[
+                { prop: 'name', label: '项目名称', width: 180 },
+                { prop: 'specification', label: '规格型号', width: 120 },
+                { prop: 'unit', label: '单位', width: 70 },
+                { prop: 'quantity', label: '数量', width: 90 },
+                { prop: 'unitPrice', label: '单价', width: 100 },
+                { prop: 'amount', label: '金额', width: 100 },
+                { prop: 'taxRate', label: '税率', width: 80 },
+                { prop: 'taxAmount', label: '税额', width: 100 }
+              ]"
+            >
+              <template #empty><EmptyState description="未识别到发票明细" /></template>
+            </AppTable>
+          </div>
         </template>
       </el-card>
     </div>
@@ -547,6 +579,10 @@ onUnmounted(() => {
 .ocr-runtime-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; padding: 9px 12px; border: 1px solid var(--sw-border); border-radius: 8px; background: #f8fafc; color: var(--sw-muted); font-size: 12px; }
 .evidence-text { display: block; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .field-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.invoice-details { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--sw-border); }
+.invoice-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.invoice-detail-head h4 { margin: 0; }
+.invoice-checks { display: flex; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 768px) {
   .table-head { align-items: flex-start; flex-direction: column; }
 }

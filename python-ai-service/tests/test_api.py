@@ -1546,6 +1546,13 @@ def test_ocr_prompt_only_requests_type_specific_extras():
     assert "extras.watermark" not in plate_prompt
     assert "extras.items" not in plate_prompt
 
+    invoice_prompt = service._build_prompt(
+        OcrRecognizeRequest(projectId=1, recordId=3, ocrType="INVOICE", file=file, options={"invoiceType": "VAT_NORMAL"}),
+        "INVOICE",
+    )
+    assert "quantity、unitPrice、amount" in invoice_prompt
+    assert "最多50条" in invoice_prompt
+
 
 def test_ready_separates_liveness_configuration_and_model_readiness(monkeypatch):
     from app.api import routes

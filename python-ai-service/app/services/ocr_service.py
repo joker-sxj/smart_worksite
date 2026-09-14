@@ -265,14 +265,101 @@ class OcrService:
                 fields[index] = fields[index].model_copy(update={"manualConfirmationRequired": True})
 
         extras = dict(data.extras)
+        items, item_validation = self._normalize_invoice_items(extras.get("items"), amounts)
+        extras["items"] = items
+        if item_validation["itemAmountsConsistent"] is False and "amountWithoutTax" in by_key:
+            index = by_key["amountWithoutTax"]
+            fields[index] = fields[index].model_copy(update={"manualConfirmationRequired": True})
+        if item_validation["itemTaxConsistent"] is False and "taxAmount" in by_key:
+            index = by_key["taxAmount"]
+            fields[index] = fields[index].model_copy(update={"manualConfirmationRequired": True})
         validation = as_dict(extras.get("validation"))
         validation.update({
             "invoiceTypeConsistent": type_consistent,
             "amountsAvailable": amounts_available,
             "amountsConsistent": amounts_consistent if amounts_available else None,
+            **item_validation,
         })
         extras["validation"] = validation
         return data.model_copy(update={"fields": fields, "extras": extras})
+
+    def _normalize_invoice_items(
+        self,
+        raw_items: Any,
+        header_amounts: dict[str, Decimal | None],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        source_items = [item for item in raw_items if isinstance(item, dict)] if isinstance(raw_items, list) else []
+        normalized_items: list[dict[str, Any]] = []
+        line_amount_checks: list[bool] = []
+        line_tax_checks: list[bool] = []
+        item_amounts: list[Decimal] = []
+        item_taxes: list[Decimal] = []
+        all_amounts_available = True
+        all_taxes_available = True
+
+        for source in source_items[:50]:
+            item = dict(source)
+            item["confidence"] = self._confidence(source.get("confidence"))
+            quantity = self._money(str(source.get("quantity") or ""))
+            unit_price = self._money(str(source.get("unitPrice") or ""))
+            amount = self._money(str(source.get("amount") or ""))
+            tax_amount = self._money(str(source.get("taxAmount") or ""))
+            tax_rate = self._rate(source.get("taxRate"))
+
+            amount_check = None
+            if quantity is not None and unit_price is not None and amount is not None:
+                amount_check = abs(quantity * unit_price - amount) <= Decimal("0.01")
+                line_amount_checks.append(amount_check)
+            tax_check = None
+            if amount is not None and tax_rate is not None and tax_amount is not None:
+                tax_check = abs(amount * tax_rate - tax_amount) <= Decimal("0.01")
+                line_tax_checks.append(tax_check)
+            item["amountConsistent"] = amount_check
+            item["taxConsistent"] = tax_check
+            normalized_items.append(item)
+
+            if amount is None:
+                all_amounts_available = False
+            else:
+                item_amounts.append(amount)
+            if tax_amount is None:
+                all_taxes_available = False
+            else:
+                item_taxes.append(tax_amount)
+
+        header_amount = header_amounts.get("amountWithoutTax")
+        aggregate_amount_check = (
+            abs(sum(item_amounts, Decimal("0")) - header_amount) <= Decimal("0.01")
+            if normalized_items and all_amounts_available and header_amount is not None else None
+        )
+        header_tax = header_amounts.get("taxAmount")
+        aggregate_tax_check = (
+            abs(sum(item_taxes, Decimal("0")) - header_tax) <= Decimal("0.01")
+            if normalized_items and all_taxes_available and header_tax is not None else None
+        )
+        return normalized_items, {
+            "itemCount": len(normalized_items),
+            "itemsTruncated": len(source_items) > 50,
+            "itemAmountsConsistent": self._combine_checks(line_amount_checks, aggregate_amount_check),
+            "itemTaxConsistent": self._combine_checks(line_tax_checks, aggregate_tax_check),
+        }
+
+    def _combine_checks(self, line_checks: list[bool], aggregate_check: bool | None) -> bool | None:
+        checks = [*line_checks, *([aggregate_check] if aggregate_check is not None else [])]
+        return all(checks) if checks else None
+
+    def _rate(self, value: Any) -> Decimal | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        normalized = text[:-1] if text.endswith("%") else text
+        try:
+            rate = Decimal(normalized)
+        except InvalidOperation:
+            return None
+        if text.endswith("%") or rate > 1:
+            rate /= Decimal("100")
+        return rate if Decimal("0") <= rate <= Decimal("1") else None
 
     def _money(self, value: str) -> Decimal | None:
         normalized = re.sub(r"[^0-9.\-]", "", value or "")
@@ -319,7 +406,7 @@ class OcrService:
         type_instruction = {
             "ID_CARD": "身份证正反面字段都必须保留；仅在extras.watermark中返回detected、type、text、confidence；extras不要包含其他类型结构。",
             "LICENSE_PLATE": "单车牌在extras.plate中返回number、backgroundColor、fontColor、plateType、bbox；检测到多个车牌时还必须在extras.plates数组中逐目标返回，禁止把多个号码拼接为一个字符串。",
-            "INVOICE": "仅在extras.items中返回最多50条可见明细，并在extras.validation中返回金额校验结果。",
+            "INVOICE": "仅在extras.items中返回最多50条可见明细；每条明细尽量返回name、specification、unit、quantity、unitPrice、amount、taxRate、taxAmount、confidence，并在extras.validation中返回明细金额和税额校验结果。",
             "PASSPORT": "核对护照资料页和机读码；不可见字段留空，禁止根据国籍或姓名猜测。",
             "TRAVEL_PERMIT": "识别港澳台通行证可见字段；证件号码和有效期不完整时留空。",
             "FIVE_STAR_CARD": "识别外国人永久居留身份证可见字段；中英文姓名分别按证面证据抽取。",

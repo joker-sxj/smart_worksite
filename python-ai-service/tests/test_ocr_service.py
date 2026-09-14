@@ -252,6 +252,68 @@ def test_invoice_marks_amounts_and_type_for_confirmation_when_checks_conflict():
     assert fields["totalAmount"].manualConfirmationRequired is True
 
 
+def test_invoice_preserves_items_and_validates_line_and_invoice_totals():
+    raw = {
+        "ocrType": "INVOICE",
+        "confidence": 0.96,
+        "fields": [
+            {"fieldKey": "invoiceType", "fieldName": "发票类型", "fieldValue": "增值税普通发票", "confidence": 0.96},
+            {"fieldKey": "amountWithoutTax", "fieldName": "不含税金额", "fieldValue": "207.70", "confidence": 0.96},
+            {"fieldKey": "taxAmount", "fieldName": "税额", "fieldValue": "27.00", "confidence": 0.96},
+            {"fieldKey": "totalAmount", "fieldName": "价税合计", "fieldValue": "234.70", "confidence": 0.96},
+        ],
+        "extras": {"items": [{
+            "name": "汽油92号",
+            "specification": "车用汽油",
+            "unit": "升",
+            "quantity": "33.15",
+            "unitPrice": "6.26546003017",
+            "amount": "207.70",
+            "taxRate": "13%",
+            "taxAmount": "27.00",
+            "confidence": 0.93,
+        }]},
+    }
+
+    data = _recognize("INVOICE", raw, options={"invoiceType": "VAT_NORMAL"})
+
+    assert data.extras["items"][0]["name"] == "汽油92号"
+    assert data.extras["items"][0]["amountConsistent"] is True
+    assert data.extras["validation"]["itemCount"] == 1
+    assert data.extras["validation"]["itemAmountsConsistent"] is True
+    assert data.extras["validation"]["itemTaxConsistent"] is True
+
+
+def test_invoice_flags_inconsistent_items_and_safely_bounds_malformed_detail_rows():
+    raw = {
+        "ocrType": "INVOICE",
+        "confidence": 0.95,
+        "fields": [
+            {"fieldKey": "invoiceType", "fieldName": "发票类型", "fieldValue": "增值税专用发票", "confidence": 0.95},
+            {"fieldKey": "amountWithoutTax", "fieldName": "不含税金额", "fieldValue": "100.00", "confidence": 0.95},
+            {"fieldKey": "taxAmount", "fieldName": "税额", "fieldValue": "13.00", "confidence": 0.95},
+            {"fieldKey": "totalAmount", "fieldName": "价税合计", "fieldValue": "113.00", "confidence": 0.95},
+        ],
+        "extras": {"items": [
+            "invalid-row",
+            {"name": "安全帽", "quantity": "2", "unitPrice": "40", "amount": "90", "taxAmount": "12", "confidence": 4},
+            *({"name": f"附加项{i}", "amount": "0", "taxAmount": "0"} for i in range(60)),
+        ]},
+    }
+
+    data = _recognize("INVOICE", raw, options={"invoiceType": "VAT_SPECIAL"})
+    fields = {field.fieldKey: field for field in data.fields}
+
+    assert len(data.extras["items"]) == 50
+    assert data.extras["items"][0]["confidence"] == 1
+    assert data.extras["items"][0]["amountConsistent"] is False
+    assert data.extras["validation"]["itemsTruncated"] is True
+    assert data.extras["validation"]["itemAmountsConsistent"] is False
+    assert data.extras["validation"]["itemTaxConsistent"] is False
+    assert fields["amountWithoutTax"].manualConfirmationRequired is True
+    assert fields["taxAmount"].manualConfirmationRequired is True
+
+
 def test_custom_fields_reject_duplicate_keys_and_invalid_schema_before_model_call():
     class NeverCalled:
         async def vision_json_chat(self, *args):

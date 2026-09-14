@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canConfirmOcrRecord, confidenceLabel, fieldLocationLabel, fieldReviewLabel, ocrRuntimeMeta } from './ocrDetail';
+import { canConfirmOcrRecord, confidenceLabel, fieldLocationLabel, fieldReviewLabel, invoiceItems, invoiceValidation, ocrRuntimeMeta } from './ocrDetail';
 
 describe('OCR detail metadata', () => {
   it('reads provider and semantic model metadata from the persisted summary', () => {
@@ -27,5 +27,16 @@ describe('OCR detail metadata', () => {
     expect(canConfirmOcrRecord({ status: 'PARTIAL_SUCCESS', manuallyConfirmed: false, fields: [{ manualConfirmationRequired: true }] } as any)).toBe(false);
     expect(canConfirmOcrRecord({ status: 'PROCESSING', manuallyConfirmed: false } as any)).toBe(false);
     expect(canConfirmOcrRecord({ status: 'SUCCESS', manuallyConfirmed: true } as any)).toBe(false);
+  });
+
+  it('reads invoice detail rows and validation without trusting malformed extras', () => {
+    const record = { ocrType: 'INVOICE', rawResult: { extras: {
+      items: [{ name: '汽油92号', quantity: '33.15', amount: '207.70', amountConsistent: true }, 'bad-row'],
+      validation: { itemAmountsConsistent: true, itemTaxConsistent: false, itemsTruncated: false }
+    } } } as any;
+
+    expect(invoiceItems(record)).toEqual([{ name: '汽油92号', quantity: '33.15', amount: '207.70', amountConsistent: true }]);
+    expect(invoiceValidation(record)).toEqual({ itemAmountsConsistent: true, itemTaxConsistent: false, itemsTruncated: false });
+    expect(invoiceItems({ rawResult: { extras: { items: 'invalid' } } } as any)).toEqual([]);
   });
 });
