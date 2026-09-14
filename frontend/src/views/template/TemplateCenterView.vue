@@ -14,6 +14,7 @@ import { fetchDataSources } from '../../api/datasource';
 import type { DataSourceItem } from '../../api/types';
 import { useUserStore } from '../../stores/user';
 import { hasSuspiciousText } from '../../utils/textQuality';
+import { templateAccept, templateFileError, templateTip, templateTypeError } from './templateUploadPolicy';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -54,10 +55,9 @@ const reviewTypeOptions = ['SAFETY_REVIEW', 'QUALITY_REVIEW', 'CONTRACT_REVIEW']
 const templateTypeOptions = computed(() => form.templateCategory === 'REPORT' ? reportTypeOptions : reviewTypeOptions);
 const currentPreviewSheet = computed(() => previewSheets.value[activePreviewSheet.value]);
 
-const templateAccept = computed(() => form.templateCategory === 'REVIEW' ? '.doc,.docx,.pdf,.xls,.xlsx,.csv,.txt,.md' : '.docx,.txt,.md');
-const templateTip = computed(() => form.templateCategory === 'REVIEW'
-  ? '审查模板按功能清单允许 Word、PDF、Excel/CSV；若后端无法解析会返回明确错误'
-  : '报告变量解析当前支持 DOCX、TXT、MD；其他格式需后端模板变量解析扩展');
+const templateAcceptValue = computed(() => templateAccept(form.templateCategory));
+const templateTipValue = computed(() => templateTip(form.templateCategory));
+const templateTypeErrorValue = computed(() => templateTypeError(form.templateCategory));
 
 async function loadRows() {
   if (!projectId.value) {
@@ -185,6 +185,8 @@ function validateForm() {
   if (!form.templateType.trim()) return '请输入模板类型';
   if (!form.versionNo.trim()) return '请输入版本号';
   if (!form.templateId && !file.value) return '请选择模板文件';
+  const fileError = templateFileError(form.templateCategory, file.value);
+  if (fileError) return fileError;
   return '';
 }
 
@@ -476,7 +478,7 @@ onMounted(async () => {
         <el-form-item label="适用场景"><el-input v-model="form.scenario" /></el-form-item>
         <el-form-item label="版本号" required><el-input v-model="form.versionNo" /></el-form-item>
         <el-form-item label="说明"><el-input v-model="form.description" type="textarea" /></el-form-item>
-        <el-form-item v-if="!form.templateId" label="模板文件" required><AppUpload :model-value="file ? [file] : []" :accept="templateAccept" :multiple="false" :max-size-mb="50" :tip="templateTip" @update:model-value="file = $event[0] || null" /></el-form-item>
+        <el-form-item v-if="!form.templateId" label="模板文件" required><AppUpload :model-value="file ? [file] : []" :accept="templateAcceptValue" :multiple="false" :max-size-mb="50" :tip="templateTipValue" :type-error="templateTypeErrorValue" @update:model-value="file = $event[0] || null" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="dialogVisible=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
     </el-dialog>

@@ -75,6 +75,17 @@ public class TemplateApplicationService {
 
         String normalizedVersion = normalizeVersion(versionNo);
         String originalFilename = normalizeFileName(file.getOriginalFilename());
+        if (category == TemplateCategory.REPORT
+                && !originalFilename.toLowerCase(Locale.ROOT).endsWith(".docx")
+                && originalFilename.toLowerCase(Locale.ROOT).endsWith(".pdf")) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR,
+                    "PDF不能作为报告模板输入，因为无法稳定替换变量；请上传DOCX文件。PDF仍可用于审查模板和最终报告导出");
+        }
+        if (category == TemplateCategory.REPORT
+                && !originalFilename.toLowerCase(Locale.ROOT).endsWith(".docx")) {
+            throw new BusinessException(ErrorCode.PARAM_ERROR,
+                    "报告模板仅支持DOCX文件；Word/PDF仍可作为最终报告输出格式");
+        }
         List<String> reportVariables = category == TemplateCategory.REPORT
                 ? scanReportTemplateVariables(originalFilename, file)
                 : List.of();
@@ -135,6 +146,11 @@ public class TemplateApplicationService {
         try (var inputStream = file.getInputStream()) {
             return variableScanner.scan(fileName, inputStream);
         } catch (IllegalArgumentException ex) {
+            if (fileName.toLowerCase(Locale.ROOT).endsWith(".pdf")
+                    || "unsupported template format: pdf".equalsIgnoreCase(ex.getMessage())) {
+                throw new BusinessException(ErrorCode.PARAM_ERROR,
+                        "PDF不能作为报告模板输入，因为无法稳定替换变量；请上传DOCX文件。PDF仍可用于审查模板和最终报告导出");
+            }
             throw new BusinessException(ErrorCode.PARAM_ERROR, ex.getMessage());
         } catch (IOException | RuntimeException ex) {
             throw new BusinessException(ErrorCode.PARAM_ERROR, "报告模板文件损坏或无法解析");

@@ -16,12 +16,12 @@ function isAllowedType(file: File, accept: string) {
   });
 }
 
-export function validateUploadFile(file: File, maxSizeMb: number, accept = '') {
+export function validateUploadFile(file: File, maxSizeMb: number, accept = '', typeError = '') {
   const maxSizeBytes = maxSizeMb * 1024 * 1024;
   if (file.size > maxSizeBytes) {
     const measuredSizeMb = (file.size / 1024 / 1024).toFixed(2);
     return `文件 ${file.name} 大小为 ${measuredSizeMb}MB，超过 ${maxSizeMb}MB 限制`;
   }
-  if (!isAllowedType(file, accept)) return `文件 ${file.name} 类型不符合要求`;
+  if (!isAllowedType(file, accept)) return typeError || `文件 ${file.name} 类型不符合要求`;
   return '';
 }

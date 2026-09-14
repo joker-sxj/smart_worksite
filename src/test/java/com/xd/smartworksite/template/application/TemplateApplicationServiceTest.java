@@ -24,6 +24,7 @@ import com.xd.smartworksite.template.domain.TemplateVariableDescription;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.apache.poi.xwpf.usermodel.XWPFDocument;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.mock.web.MockMultipartFile;
@@ -73,9 +74,9 @@ class TemplateApplicationServiceTest {
         );
         MockMultipartFile file = new MockMultipartFile(
                 "file",
-                "report-template.md",
-                "text/markdown",
-                "项目：{{ var_project_name }}\n日期：{{ var_report_date }}\n重复：{{var_project_name}}".getBytes(StandardCharsets.UTF_8)
+                "report-template.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                docx("项目：{{ var_project_name }}", "日期：{{ var_report_date }}", "重复：{{var_project_name}}")
         );
 
         TemplateResponse response = service.uploadTemplate(
@@ -139,9 +140,9 @@ class TemplateApplicationServiceTest {
         TemplateApplicationService service = newService(new InMemoryTemplateRepository(), new FailingStorageAdapter());
         MockMultipartFile file = new MockMultipartFile(
                 "file",
-                "report-template.md",
-                "text/markdown",
-                "template".getBytes()
+                "report-template.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                docx("template")
         );
 
         assertThatThrownBy(() -> service.uploadTemplate(
@@ -182,6 +183,46 @@ class TemplateApplicationServiceTest {
     }
 
     @Test
+    void reportPdfTemplateExplainsThatDocxIsRequiredForVariableReplacement() {
+        TemplateApplicationService service = newService(new InMemoryTemplateRepository(), new CapturingStorageAdapter());
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "report-template.pdf", "application/pdf", "%PDF-1.7".getBytes(StandardCharsets.US_ASCII)
+        );
+
+        assertThatThrownBy(() -> service.uploadTemplate(
+                1L, "REPORT", "PDF报告模板", "GENERAL", null, "v1", null, file
+        )).isInstanceOfSatisfying(BusinessException.class, ex ->
+                assertThat(ex.getMessage()).contains("PDF不能作为报告模板").contains("DOCX"));
+    }
+
+    @Test
+    void reportTemplateRejectsTextFormatsThatCannotBeGenerated() {
+        TemplateApplicationService service = newService(new InMemoryTemplateRepository(), new CapturingStorageAdapter());
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "report-template.md", "text/markdown", "{{ var_project_name }}".getBytes(StandardCharsets.UTF_8)
+        );
+
+        assertThatThrownBy(() -> service.uploadTemplate(
+                1L, "REPORT", "Markdown报告模板", "GENERAL", null, "v1", null, file
+        )).isInstanceOfSatisfying(BusinessException.class, ex ->
+                assertThat(ex.getMessage()).contains("报告模板仅支持DOCX"));
+    }
+
+    @Test
+    void reportPdfContentRenamedAsDocxStillReturnsActionableMessage() {
+        TemplateApplicationService service = newService(new InMemoryTemplateRepository(), new CapturingStorageAdapter());
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "renamed-report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "%PDF-1.7".getBytes(StandardCharsets.US_ASCII)
+        );
+
+        assertThatThrownBy(() -> service.uploadTemplate(
+                1L, "REPORT", "伪装扩展名的PDF模板", "GENERAL", null, "v1", null, file
+        )).isInstanceOfSatisfying(BusinessException.class, ex ->
+                assertThat(ex.getMessage()).contains("PDF不能作为报告模板").contains("DOCX"));
+    }
+
+    @Test
     void reviewTemplateUploadDoesNotParseOrPersistVariables() {
         InMemoryTemplateRepository templateRepository = new InMemoryTemplateRepository();
         CapturingStorageAdapter storageAdapter = new CapturingStorageAdapter();
@@ -214,9 +255,9 @@ class TemplateApplicationServiceTest {
         );
         MockMultipartFile file = new MockMultipartFile(
                 "file",
-                "report-template.md",
-                "text/markdown",
-                "{{ var_project_name }}".getBytes(StandardCharsets.UTF_8)
+                "report-template.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                docx("{{ var_project_name }}")
         );
 
         assertThatThrownBy(() -> service.uploadTemplate(
@@ -267,9 +308,9 @@ class TemplateApplicationServiceTest {
         TemplateApplicationService service = newService(templateRepository, storageAdapter);
         MockMultipartFile file = new MockMultipartFile(
                 "file",
-                "report-template.md",
-                "text/markdown",
-                "项目：{{ var_project_name }}\n编号：{{var_project_code}}\n摘要：{{ var_summary }}\n重复：{{var_project_name}}".getBytes(StandardCharsets.UTF_8)
+                "report-template.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                docx("项目：{{ var_project_name }}", "编号：{{var_project_code}}", "摘要：{{ var_summary }}", "重复：{{var_project_name}}")
         );
         TemplateResponse uploaded = service.uploadTemplate(
                 1L,
@@ -294,9 +335,9 @@ class TemplateApplicationServiceTest {
         TemplateApplicationService service = newService(templateRepository, storageAdapter);
         MockMultipartFile file = new MockMultipartFile(
                 "file",
-                "report-template.txt",
-                "text/plain",
-                "   ".getBytes(StandardCharsets.UTF_8)
+                "report-template.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                docx("   ")
         );
         TemplateResponse uploaded = service.uploadTemplate(
                 1L,
@@ -370,6 +411,18 @@ class TemplateApplicationServiceTest {
         assertThatThrownBy(() -> service.deleteTemplate(template.getId()))
                 .isInstanceOfSatisfying(BusinessException.class, ex ->
                         assertThat(ex.getCode()).isEqualTo(ErrorCode.CONFLICT.getCode()));
+    }
+
+    private byte[] docx(String... paragraphs) {
+        try (XWPFDocument document = new XWPFDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            for (String paragraph : paragraphs) {
+                document.createParagraph().createRun().setText(paragraph);
+            }
+            document.write(output);
+            return output.toByteArray();
+        } catch (IOException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     private TemplateApplicationService newService(TemplateRepository templateRepository, StorageAdapter storageAdapter) {

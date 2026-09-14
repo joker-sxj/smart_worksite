@@ -14,4 +14,10 @@ describe('upload validation', () => {
 
     expect(validateUploadFile(file, 100, '.pdf')).toBe('文件 oversized.pdf 大小为 100.50MB，超过 100MB 限制');
   });
+
+  it('uses a business-specific message for a disallowed file type', () => {
+    const file = { name: 'report.pdf', size: 1024, type: 'application/pdf' } as File;
+
+    expect(validateUploadFile(file, 50, '.docx', '报告模板仅支持DOCX')).toBe('报告模板仅支持DOCX');
+  });
 });

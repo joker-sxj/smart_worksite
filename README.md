@@ -548,7 +548,7 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 | POST | `/api/review/templates/{templateId}/enable` | 启用审查模板 |
 | POST | `/api/review/templates/{templateId}/disable` | 停用审查模板 |
 
-模板变量解析规则：变量接口必须读取模板文件真实内容，只识别 `{{ var_xx_xx }}` 占位符，当前支持 DOC、DOCX、XLS、XLSX、CSV、TXT、MD，不支持 PDF；合法模板没有变量时返回空列表，模板文件缺失、跨项目不一致、格式损坏、格式不支持或对象存储读取失败时直接返回错误，不允许用空列表隐藏解析失败。
+模板变量解析规则：可用于报告生成的模板输入仅支持 DOCX，并从真实内容识别 `{{ var_xx_xx }}` 占位符；通用变量扫描器仍可读取 DOC、XLS、XLSX、CSV、TXT、MD 等历史/审查资料，但这些格式不能作为报告生成模板。PDF 可作为审查模板和最终报告输出，不能作为可替换变量的报告模板。合法模板没有变量时返回空列表，模板文件缺失、跨项目不一致、格式损坏、格式不支持或对象存储读取失败时直接返回错误，不允许用空列表隐藏解析失败。
 
 模板写入规则：报告模板上传在写入 MinIO 前自动扫描真实文件变量，并在文件、模板记录生成 ID 后将变量以空描述写入 `template_variable_description`；解析或变量持久化失败时上传失败，数据库写入回滚并清理本次 MinIO 对象。审查模板不执行自动变量解析。模板上传创建后必须读回持久化记录再返回成功；模板修改、启用、停用和删除必须检查数据库影响行数，记录不存在或状态已变化时直接返回冲突错误，不允许静默成功。
 
@@ -561,10 +561,10 @@ JWT 鉴权会回查当前用户状态；用户被停用或删除后，旧 token 
 | GET | `/api/reports/{reportId}` | 查询报告详情 |
 | GET | `/api/reports/{reportId}/variables` | 按模板顺序查询变量描述、生成值、状态和错误 |
 | POST | `/api/reports/{reportId}/regenerate` | 重新生成报告 |
-| GET | `/api/reports/{reportId}/download-file?format=WORD` | 经 Java 后端流式下载 Word 报告，适合 Windows 浏览器访问 Linux 服务器部署 |
-| GET | `/api/reports/{reportId}/download?format=WORD` | 兼容接口：获取 MinIO 预签名 Word 报告下载 URL |
+| GET | `/api/reports/{reportId}/download-file?format=WORD|PDF` | 经 Java 后端流式下载 Word 或 PDF 报告，适合 Windows 浏览器访问 Linux 服务器部署 |
+| GET | `/api/reports/{reportId}/download?format=WORD|PDF` | 兼容接口：获取 MinIO 预签名 Word 或 PDF 报告下载 URL |
 
-报告生成规则：创建时可多选当前项目已启用的 `PROJECT` 知识库和已启用数据库数据源，两类来源至少选择一项；旧字段 `knowledgeBaseId` 仍兼容。`POLICY` 系统政策库会被拒绝。模板必须包含 `{{ var_xx_xx }}` 变量且每个变量都已配置非空描述；变量可配置 `dataSourceIds` 白名单，留空表示允许 AI 在报告所选数据源中自动选择。Worker 按变量调用 AI 路由决定知识检索、只读数据库查询或混合生成，并仅执行路由要求且属于变量快照的数据源；路由不可用时安全回退为混合。数据库 SQL 会按数据源方言生成，并返回包含实体、指标、维度、过滤条件、项目范围字段和预期结果列的结构化取数计划；Java 会自动读取表/列注释、主外键元数据，执行只读安全校验，并校验实际结果列是否满足计划。可修复 SQL 错误默认最多进行 4 次 SQL 生成/修复尝试，可通过 `AI_DATABASE_QUERY_MAX_ATTEMPTS` 调整；相同失败 SQL 不会重复执行，MySQL 3065（包括 `HY000` SQLState）、多语句、语法和字段错误会进入定向修复，连接、认证和超时错误不会触发 SQL 修正重试。数据库真实列和受限结果行会作为报告模型的直接证据，空结果不会被推断为“不存在风险”或“已经完成”。各变量不共享上下文且不写入普通问答会话历史。变量值和状态实时保存到 `report_variable_value`；单变量失败不会阻断其他变量，Word 中会写入失败占位内容，报告标记为 `PARTIAL_SUCCESS` 并允许下载人工补充；任务重试时保留成功值并只补失败或未处理变量。资料为空时允许模型生成通用内容，但不得伪造具体项目数据。报告列表 `status` 查询允许 `DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`PARTIAL_SUCCESS`、`FAILED`、`ARCHIVED`、`DELETED`。
+报告生成规则：创建时可多选当前项目已启用的 `PROJECT` 知识库和已启用数据库数据源，两类来源至少选择一项；旧字段 `knowledgeBaseId` 仍兼容。`POLICY` 系统政策库会被拒绝。DOCX 模板必须包含 `{{ var_xx_xx }}` 变量且每个变量都已配置非空描述；变量可配置 `dataSourceIds` 白名单，留空表示允许 AI 在报告所选数据源中自动选择。Worker 按变量调用 AI 路由决定知识检索、只读数据库查询或混合生成，并仅执行路由要求且属于变量快照的数据源；路由不可用时安全回退为混合。数据库 SQL 会按数据源方言生成，并返回包含实体、指标、维度、过滤条件、项目范围字段和预期结果列的结构化取数计划；Java 会自动读取表/列注释、主外键元数据，执行只读安全校验，并校验实际结果列是否满足计划。可修复 SQL 错误默认最多进行 4 次 SQL 生成/修复尝试，可通过 `AI_DATABASE_QUERY_MAX_ATTEMPTS` 调整；相同失败 SQL 不会重复执行，MySQL 3065（包括 `HY000` SQLState）、多语句、语法和字段错误会进入定向修复，连接、认证和超时错误不会触发 SQL 修正重试。数据库真实列和受限结果行会作为报告模型的直接证据，空结果不会被推断为“不存在风险”或“已经完成”。各变量不共享上下文且不写入普通问答会话历史。变量值和状态实时保存到 `report_variable_value`；单变量失败不会阻断其他变量，Word/PDF 中会写入失败占位内容，报告标记为 `PARTIAL_SUCCESS` 并允许下载人工补充；任务重试时保留成功值并只补失败或未处理变量。资料为空时允许模型生成通用内容，但不得伪造具体项目数据。报告列表 `status` 查询允许 `DRAFT`、`PENDING`、`PROCESSING`、`COMPLETED`、`PARTIAL_SUCCESS`、`FAILED`、`ARCHIVED`、`DELETED`。
 
 Report write rule: report generation must check affected rows for report-task linking, task status, processing, success, failed, and version file binding. A zero-row update is a conflict and must not be reported as completed generation.
 
@@ -736,7 +736,7 @@ Review read APIs require `review:view`; submit/retry/delete/archive/update-issue
 
 ### 报告生成
 
-报告创建接口不直接阻塞生成文件。开启任务 outbox 调度和 Worker 后，Worker 会领取 `REPORT_GENERATION` 任务，确认项目、所选 `PROJECT` 知识库和数据源仍可用，按 `sort_no` 逐个根据变量描述执行 AI 路由、RAG 检索和/或只读数据库查询，全部成功后在 Java 中渲染 Word 文件。
+报告创建接口不直接阻塞生成文件。开启任务 outbox 调度和 Worker 后，Worker 会领取 `REPORT_GENERATION` 任务，确认项目、所选 `PROJECT` 知识库和数据源仍可用，按 `sort_no` 逐个根据变量描述执行 AI 路由、RAG 检索和/或只读数据库查询，全部成功后在 Java 中渲染 Word，并可转换为真实 PDF 输出。
 
 模板占位符只支持 `{{ var_xx_xx }}`。同名变量只生成一次，正文、表格、页眉和页脚中的同名占位符使用同一个值。
 

@@ -19,8 +19,8 @@ This file records the current implementation contract of the `report` module.
 | GET | `/api/reports/{reportId}` | Gets report detail after project access validation. |
 | GET | `/api/reports/{reportId}/variables` | Gets ordered per-variable status, description, value, trace, and error details. |
 | POST | `/api/reports/{reportId}/regenerate` | Creates a new report and task from the original report config. |
-| GET | `/api/reports/{reportId}/download?format=WORD` | Returns a MinIO access URL for the saved Word file. |
-| GET | `/api/reports/{reportId}/download-file?format=WORD` | Streams the saved Word file through the Java backend. |
+| GET | `/api/reports/{reportId}/download?format=WORD|PDF` | Returns a MinIO access URL for the saved Word or PDF file. |
+| GET | `/api/reports/{reportId}/download-file?format=WORD|PDF` | Streams the saved Word or PDF file through the Java backend. |
 
 ## State Flow
 
@@ -42,9 +42,9 @@ This file records the current implementation contract of the `report` module.
 
 ## Download Behavior
 
-- Only `WORD` is supported.
-- PDF requests fail explicitly. Word output must not be returned as fake PDF.
-- `/download-file` is the browser-facing path and streams the current report version `word_file_id` through Java so remote clients do not need direct MinIO network access.
+- `WORD` and `PDF` final report downloads are supported. PDF conversion must produce a real PDF and must never relabel Word bytes.
+- PDF output does not make arbitrary PDF files editable report-template inputs. Report placeholder replacement continues to use DOCX templates; PDF review templates remain a separate supported capability.
+- `/download-file` is the browser-facing path and streams the selected current-version `word_file_id` or `pdf_file_id` through Java so remote clients do not need direct MinIO network access.
 - `/download` is kept for compatibility and returns a MinIO signed URL for callers that can reach the object-storage endpoint directly.
 
 ## Verification

@@ -108,10 +108,10 @@ POST /api/reports/{reportId}/regenerate
 ## 4. 下载报告
 
 ```text
-GET /api/reports/{reportId}/download?format=WORD
+GET /api/reports/{reportId}/download?format=WORD|PDF
 ```
 
-当前支持 Word 下载，`format=PDF` 明确不支持。报告状态必须为 `COMPLETED` 或 `PARTIAL_SUCCESS`。`/download-file` 会携带 JWT 访问 Java 后端，由后端读取对象存储并流式返回文件，适用于浏览器不应或不能直连 MinIO 的服务器部署场景；`/download` 保留为兼容接口，仍返回 MinIO 预签名下载地址字符串。
+当前支持 `format=WORD` 和 `format=PDF` 下载。报告状态必须为 `COMPLETED` 或 `PARTIAL_SUCCESS`。PDF 是最终输出格式，不代表 PDF 可作为报告模板输入；可替换变量的报告模板仍应使用 DOCX。`/download-file` 会携带 JWT 访问 Java 后端，由后端读取对象存储并流式返回文件，适用于浏览器不应或不能直连 MinIO 的服务器部署场景；`/download` 保留为兼容接口，仍返回 MinIO 预签名下载地址字符串。
 
 ## 写入规则
 

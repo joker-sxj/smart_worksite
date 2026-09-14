@@ -12,6 +12,7 @@ const props = withDefaults(defineProps<{
   disabled?: boolean;
   uploading?: boolean;
   error?: string;
+  typeError?: string;
   multiple?: boolean;
 }>(), { maxSizeMb: DEFAULT_UPLOAD_MAX_SIZE_MB, tip: '', multiple: true });
 
@@ -45,7 +46,7 @@ const displayTip = computed(() => {
 });
 
 function validateFile(file: File) {
-  return validateUploadFile(file, props.maxSizeMb, props.accept || '');
+  return validateUploadFile(file, props.maxSizeMb, props.accept || '', props.typeError || '');
 }
 
 const beforeUpload: UploadProps['beforeUpload'] = (rawFile) => {
