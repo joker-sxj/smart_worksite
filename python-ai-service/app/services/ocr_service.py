@@ -344,6 +344,7 @@ class OcrService:
         fields[plate_index] = plate.model_copy(update={
             "fieldValue": normalized,
             "recognized": bool(normalized),
+            "confidence": plate.confidence if valid else min(plate.confidence, 0.49),
             "manualConfirmationRequired": plate.manualConfirmationRequired or not valid,
         })
         validation = as_dict(extras.get("validation"))

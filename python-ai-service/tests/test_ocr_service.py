@@ -400,6 +400,8 @@ def test_license_plate_marks_structurally_invalid_number_for_confirmation():
     data = _recognize("LICENSE_PLATE", raw)
 
     assert data.fields[0].manualConfirmationRequired is True
+    assert data.fields[0].confidence < 0.5
+    assert data.fields[0].confirmationReason == "LOW_CONFIDENCE"
     assert data.extras["validation"]["plateNumberValid"] is False
 
 
