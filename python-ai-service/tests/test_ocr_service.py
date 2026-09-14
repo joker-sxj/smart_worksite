@@ -162,6 +162,51 @@ def test_license_plate_marks_structurally_invalid_number_for_confirmation():
     assert data.extras["validation"]["plateNumberValid"] is False
 
 
+def test_license_plate_preserves_multiple_targets_instead_of_merging_numbers():
+    raw = {
+        "ocrType": "LICENSE_PLATE",
+        "confidence": 0.92,
+        "fields": [
+            {"fieldKey": "plateNumber", "fieldName": "车牌号", "fieldValue": "京 A·12345", "confidence": 0.95},
+        ],
+        "extras": {"plates": [
+            {"number": "京 A·12345", "confidence": 0.95, "bbox": [10, 20, 110, 60]},
+            {"number": "粤 B·D12345", "confidence": 0.91, "bbox": [150, 25, 260, 65]},
+        ]},
+    }
+
+    data = _recognize("LICENSE_PLATE", raw)
+
+    assert [item["number"] for item in data.extras["plates"]] == ["京A12345", "粤BD12345"]
+    assert data.extras["plates"][0]["bbox"] == [10, 20, 110, 60]
+    assert data.extras["plates"][1]["valid"] is True
+
+
+def test_license_plate_multi_target_normalization_ignores_malformed_entries_safely():
+    raw = {
+        "ocrType": "LICENSE_PLATE",
+        "confidence": 0.86,
+        "fields": [
+            {"fieldKey": "plateNumber", "fieldName": "车牌号", "fieldValue": "京A12345", "confidence": 0.9},
+        ],
+        "extras": {"plates": [
+            "not-an-object",
+            {"number": "ABC123", "confidence": 8, "bbox": [1, 2, 3]},
+            {"number": "  ", "confidence": -1, "bbox": None},
+        ]},
+    }
+
+    data = _recognize("LICENSE_PLATE", raw)
+
+    assert data.fields[0].fieldValue == "京A12345"
+    assert data.extras["plates"] == [{
+        "number": "ABC123",
+        "confidence": 1,
+        "bbox": None,
+        "valid": False,
+    }]
+
+
 def test_invoice_validates_amount_equation_with_decimal_currency_values():
     raw = {
         "ocrType": "INVOICE",

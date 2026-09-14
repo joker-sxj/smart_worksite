@@ -215,6 +215,23 @@ class OcrService:
         validation["plateNumberValid"] = valid
         validation["plateNumberNormalized"] = normalized
         extras["validation"] = validation
+        plates = extras.get("plates")
+        if isinstance(plates, list):
+            normalized_plates = []
+            for item in plates:
+                if not isinstance(item, dict):
+                    continue
+                number = re.sub(r"[\s·•・.\-]", "", str(item.get("number") or "")).upper()
+                if not number:
+                    continue
+                normalized_item = dict(item)
+                normalized_item["number"] = number
+                normalized_item["valid"] = bool(pattern.fullmatch(number))
+                normalized_item["confidence"] = self._confidence(item.get("confidence"))
+                bbox = item.get("bbox")
+                normalized_item["bbox"] = bbox if isinstance(bbox, list) and len(bbox) == 4 else None
+                normalized_plates.append(normalized_item)
+            extras["plates"] = normalized_plates
         return data.model_copy(update={"fields": fields, "extras": extras})
 
     def _validate_invoice(self, data: OcrRecognizeData, options: dict[str, Any]) -> OcrRecognizeData:
@@ -297,7 +314,7 @@ class OcrService:
         fields = fields or self._field_definitions(request, ocr_type)
         type_instruction = {
             "ID_CARD": "身份证正反面字段都必须保留；仅在extras.watermark中返回detected、type、text、confidence；extras不要包含其他类型结构。",
-            "LICENSE_PLATE": "仅在extras.plate中返回number、backgroundColor、fontColor、plateType、bbox；extras不要包含其他类型结构。",
+            "LICENSE_PLATE": "单车牌在extras.plate中返回number、backgroundColor、fontColor、plateType、bbox；检测到多个车牌时还必须在extras.plates数组中逐目标返回，禁止把多个号码拼接为一个字符串。",
             "INVOICE": "仅在extras.items中返回最多50条可见明细，并在extras.validation中返回金额校验结果。",
             "PASSPORT": "核对护照资料页和机读码；不可见字段留空，禁止根据国籍或姓名猜测。",
             "TRAVEL_PERMIT": "识别港澳台通行证可见字段；证件号码和有效期不完整时留空。",
