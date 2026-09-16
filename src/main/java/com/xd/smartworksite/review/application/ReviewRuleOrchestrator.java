@@ -39,6 +39,9 @@ public class ReviewRuleOrchestrator {
     public ReviewOutcome review(Long projectId, Long recordId, Long templateId, String primaryName, String primaryText,
                                 String templateText, List<SourceText> references, boolean system) {
         List<Rule> rules = parseRules(templateText);
+        if (rules.stream().map(Rule::id).distinct().count() != rules.size()) {
+            throw new IllegalStateException("review rule ids must be unique before model invocation");
+        }
         List<RuleResult> results = new ArrayList<>();
         for (Rule rule : rules) {
             List<String> ruleKeywords = keywords(rule.title() + " " + rule.content());
@@ -51,6 +54,7 @@ public class ReviewRuleOrchestrator {
             if (primaryEvidence.isBlank() && referenceEvidence.isEmpty()) {
                 results.add(new RuleResult(rule.id(), "NEEDS_MANUAL_CONFIRMATION", Map.of(
                         "ruleId", rule.id(), "ruleName", rule.title(),
+                        "displayNumber", rule.displayNumber(),
                         "message", "未找到足够的主文件或参考依据证据", "manualConfirmationRequired", true), true));
                 continue;
             }
@@ -62,6 +66,7 @@ public class ReviewRuleOrchestrator {
             parameters.put("recordId", recordId);
             parameters.put("templateId", templateId);
             parameters.put("ruleId", rule.id());
+            parameters.put("displayNumber", rule.displayNumber());
             parameters.put("ruleName", rule.title());
             parameters.put("ruleContent", rule.content());
             parameters.put("primaryFileName", primaryName);
@@ -72,6 +77,7 @@ public class ReviewRuleOrchestrator {
             try {
                 AgentInvokeResponse response = system ? aiGateway.invokeAgentForSystem(request) : aiGateway.invokeAgent(request);
                 Map<String, Object> parsed = new LinkedHashMap<>(parseResult(response));
+                parsed.put("displayNumber", rule.displayNumber());
                 parsed.put("primaryEvidence", List.of(Map.of(
                         "sourceName", primaryName, "excerpt", primaryEvidence, "sourceRole", "PRIMARY")));
                 parsed.put("referenceEvidence", referenceEvidence.stream().map(SourceText::asEvidence).toList());
@@ -82,7 +88,8 @@ public class ReviewRuleOrchestrator {
                 results.add(new RuleResult(rule.id(), manual ? "NEEDS_MANUAL_CONFIRMATION" : "COMPLETED", parsed, manual));
             } catch (RuntimeException ex) {
                 results.add(new RuleResult(rule.id(), "FAILED", Map.of(
-                        "ruleId", rule.id(), "error", safeError(ex.getMessage())), true));
+                        "ruleId", rule.id(), "displayNumber", rule.displayNumber(),
+                        "error", safeError(ex.getMessage())), true));
             }
         }
         return new ReviewOutcome(results);
@@ -91,11 +98,13 @@ public class ReviewRuleOrchestrator {
     private List<Rule> parseRules(String templateText) {
         List<Rule> rules = new ArrayList<>();
         if (templateText == null) return rules;
+        Map<String, Integer> occurrences = new LinkedHashMap<>();
         Pattern spreadsheetRow = Pattern.compile("^\\s*(\\d+)\\t+([^\\t]+)\\t+(.+)$");
         for (String line : templateText.split("\\R")) {
             Matcher row = spreadsheetRow.matcher(line);
             if (row.matches()) {
-                rules.add(new Rule(ruleId(row.group(1)), row.group(2).trim(), row.group(3).trim()));
+                rules.add(new Rule(uniqueRuleId(row.group(1), occurrences), row.group(1),
+                        row.group(2).trim(), row.group(3).trim()));
             }
         }
         if (!rules.isEmpty()) return rules;
@@ -106,9 +115,12 @@ public class ReviewRuleOrchestrator {
             MatcherRule current = matches.get(index);
             int contentEnd = index + 1 < matches.size() ? matches.get(index + 1).start() : templateText.length();
             String content = templateText.substring(current.end(), contentEnd).trim();
-            rules.add(new Rule(ruleId(current.number()), current.title(), content));
+            rules.add(new Rule(uniqueRuleId(current.number(), occurrences), current.number(),
+                    current.title(), content));
         }
-        if (rules.isEmpty() && !templateText.isBlank()) rules.add(new Rule("RULE-001", templateText.trim(), templateText.trim()));
+        if (rules.isEmpty() && !templateText.isBlank()) {
+            rules.add(new Rule("RULE-001", "1", templateText.trim(), templateText.trim()));
+        }
         return rules;
     }
 
@@ -162,6 +174,12 @@ public class ReviewRuleOrchestrator {
         return "RULE-" + String.format("%03d", Integer.parseInt(number));
     }
 
+    private String uniqueRuleId(String number, Map<String, Integer> occurrences) {
+        String base = ruleId(number);
+        int occurrence = occurrences.merge(base, 1, Integer::sum);
+        return occurrence == 1 ? base : base + "-" + occurrence;
+    }
+
     private boolean inconsistentDecision(Map<String, Object> result) {
         String decision = String.valueOf(result.getOrDefault("decision", ""))
                 .replaceAll("[^A-Za-z]", "").toUpperCase();
@@ -213,7 +231,7 @@ public class ReviewRuleOrchestrator {
         return trimmed.length() <= 500 ? trimmed : trimmed.substring(0, 500);
     }
 
-    private record Rule(String id, String title, String content) {}
+    private record Rule(String id, String displayNumber, String title, String content) {}
     private record MatcherRule(int start, int end, String number, String title) {}
     private record ScoredLine(int index, int score, String text) {}
 

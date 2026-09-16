@@ -111,6 +111,26 @@ class ReviewRuleOrchestratorTest {
     }
 
     @Test
+    void assignsStableUniqueIdsToRepeatedDisplayNumbers() {
+        CapturingGateway gateway = new CapturingGateway();
+        ReviewRuleOrchestrator orchestrator = new ReviewRuleOrchestrator(gateway, new ObjectMapper());
+        String template = "4. 编制依据\n应列出适用标准。\n4. 施工准备\n应完成技术交底。";
+        String primary = "编制依据列出适用标准，施工准备已完成技术交底。";
+
+        ReviewRuleOrchestrator.ReviewOutcome outcome = orchestrator.review(
+                3L, 119L, 34L, "测试合规文档.docx", primary, template, List.of());
+
+        assertThat(gateway.requests).extracting(request -> request.getParameters().get("ruleId"))
+                .containsExactly("RULE-004", "RULE-004-2");
+        assertThat(gateway.requests).extracting(request -> request.getParameters().get("displayNumber"))
+                .containsExactly("4", "4");
+        assertThat(outcome.ruleResults()).extracting(ReviewRuleOrchestrator.RuleResult::ruleId)
+                .containsExactly("RULE-004", "RULE-004-2");
+        assertThat(outcome.ruleResults()).allSatisfy(result ->
+                assertThat(result.result()).containsEntry("displayNumber", "4"));
+    }
+
+    @Test
     void requiresManualConfirmationForNonCompliantDecisionWithoutAnyIssue() {
         CapturingGateway gateway = new CapturingGateway();
         gateway.result = Map.of("ruleId", "RULE-001", "decision", "NON_COMPLIANT", "issues", List.of(),

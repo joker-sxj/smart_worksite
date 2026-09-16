@@ -150,4 +150,6 @@ curl --noproxy '*' -X PUT "http://127.0.0.1:8080/api/review/records/1/issues/ISS
 - 如果失败状态无法落库，必须返回冲突，不能丢失可观测性。
 - 调用 Python Agent 必须记录外部调用日志。
 - 每条规则独立保存 `COMPLETED`、`NEEDS_MANUAL_CONFIRMATION` 或 `FAILED` 状态，并区分主文件证据与参考资料证据；证据不足时不得伪造结论。
+- 模板中的展示序号允许重复；内部 `ruleId` 按解析顺序稳定去重，例如重复的第 4 条依次保存为 `RULE-004`、`RULE-004-2`，原展示序号另存为 `displayNumber`。
+- 调用模型和写库前都必须校验内部规则 ID 唯一。规则结果采用事务整批替换，任意一条写入失败时回滚删除和此前写入；不得通过移除唯一约束或 upsert 隐藏模板冲突。
 - `COMPLETED` 和 `PARTIAL_SUCCESS` 记录中的已生成问题均可更新处理状态。
