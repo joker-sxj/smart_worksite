@@ -97,7 +97,7 @@ import type { DataSourceItem, KnowledgeBase, QaMessageSendRequest, QaSession } f
 import { hasSuspiciousText } from '../../utils/textQuality';
 import { renderQaMarkdown } from '../../utils/qaMarkdown';
 import { hasActiveQaGeneration, normalizeQaMessages, qaMessageText } from './qaMessagePolling';
-import { findScrollableAncestor, isNearMessageBottom, shouldFollowLatest, shouldUsePageScroll, type LatestMessageReason } from './qaMessageScroll';
+import { isNearMessageBottom, shouldFollowLatest, shouldUsePageScroll, type LatestMessageReason } from './qaMessageScroll';
 
 type QaMessageExtra = QaMessage & Record<string, unknown>;
 
@@ -189,8 +189,7 @@ function activeMessageScrollTarget() {
   const viewport = messageScroll.value;
   if (!viewport) return null;
   if (!shouldUsePageScroll(window.getComputedStyle(viewport).overflowY)) return viewport;
-  return pageScrollTarget || findScrollableAncestor(viewport.parentElement,
-    (node) => window.getComputedStyle(node).overflowY);
+  return pageScrollTarget || viewport.closest<HTMLElement>('.content');
 }
 
 function handleMessageScroll() {
@@ -521,9 +520,7 @@ async function feedback(message: QaMessageExtra, useful: boolean) {
 
 onMounted(() => {
   const viewport = messageScroll.value;
-  pageScrollTarget = viewport
-    ? findScrollableAncestor(viewport.parentElement, (node) => window.getComputedStyle(node).overflowY)
-    : null;
+  pageScrollTarget = viewport?.closest<HTMLElement>('.content') || null;
   pageScrollTarget?.addEventListener('scroll', handleMessageScroll, { passive: true });
   loadSessions();
 });

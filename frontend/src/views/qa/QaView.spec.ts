@@ -234,7 +234,7 @@ describe('QaView latest-message positioning', () => {
 
   it('uses the application scroll ancestor on responsive layouts and observes it', () => {
     expect(qaViewSource).toContain('window.getComputedStyle(viewport).overflowY');
-    expect(qaViewSource).toContain('findScrollableAncestor(viewport.parentElement');
+    expect(qaViewSource).toContain("viewport.closest<HTMLElement>('.content')");
     expect(qaViewSource).toContain("pageScrollTarget?.addEventListener('scroll', handleMessageScroll");
     expect(qaViewSource).toContain("pageScrollTarget?.removeEventListener('scroll', handleMessageScroll");
   });
