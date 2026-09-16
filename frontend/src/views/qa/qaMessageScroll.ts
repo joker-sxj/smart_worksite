@@ -20,5 +20,17 @@ export function shouldFollowLatest(reason: LatestMessageReason, wasNearBottom: b
 }
 
 export function shouldUsePageScroll(overflowY: string) {
-  return overflowY === 'visible' || overflowY === 'clip';
+  return !['auto', 'scroll', 'overlay'].includes(overflowY.trim().toLowerCase());
+}
+
+export function findScrollableAncestor<T extends { parentElement: T | null }>(
+  start: T | null,
+  overflowY: (node: T) => string
+) {
+  let current = start;
+  while (current) {
+    if (!shouldUsePageScroll(overflowY(current))) return current;
+    current = current.parentElement;
+  }
+  return null;
 }

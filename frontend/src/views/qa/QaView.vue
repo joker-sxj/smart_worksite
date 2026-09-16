@@ -97,7 +97,7 @@ import type { DataSourceItem, KnowledgeBase, QaMessageSendRequest, QaSession } f
 import { hasSuspiciousText } from '../../utils/textQuality';
 import { renderQaMarkdown } from '../../utils/qaMarkdown';
 import { hasActiveQaGeneration, normalizeQaMessages, qaMessageText } from './qaMessagePolling';
-import { isNearMessageBottom, shouldFollowLatest, shouldUsePageScroll, type LatestMessageReason } from './qaMessageScroll';
+import { findScrollableAncestor, isNearMessageBottom, shouldFollowLatest, shouldUsePageScroll, type LatestMessageReason } from './qaMessageScroll';
 
 type QaMessageExtra = QaMessage & Record<string, unknown>;
 
@@ -135,6 +135,7 @@ const messageScroll = ref<HTMLElement | null>(null);
 const messageEnd = ref<HTMLElement | null>(null);
 const showLatestMessageButton = ref(false);
 let messagePollTimer: ReturnType<typeof setTimeout> | null = null;
+let pageScrollTarget: HTMLElement | null = null;
 const MESSAGE_POLL_INTERVAL_MS = 2000;
 
 const activeSession = computed(() => sessions.value.find((item) => String(item.sessionId) === String(activeSessionId.value)) || null);
@@ -180,12 +181,16 @@ function suggestionKey(msg: QaMessageExtra, index: number) {
 }
 
 function isMessageViewportNearBottom() {
-  const viewport = messageScroll.value;
-  if (!viewport) return true;
-  const scrollTarget = shouldUsePageScroll(window.getComputedStyle(viewport).overflowY)
-    ? document.scrollingElement
-    : viewport;
+  const scrollTarget = activeMessageScrollTarget();
   return !scrollTarget || isNearMessageBottom(scrollTarget);
+}
+
+function activeMessageScrollTarget() {
+  const viewport = messageScroll.value;
+  if (!viewport) return null;
+  if (!shouldUsePageScroll(window.getComputedStyle(viewport).overflowY)) return viewport;
+  return pageScrollTarget || findScrollableAncestor(viewport.parentElement,
+    (node) => window.getComputedStyle(node).overflowY);
 }
 
 function handleMessageScroll() {
@@ -199,9 +204,9 @@ async function scrollToLatest(reason: LatestMessageReason, wasNearBottom = true)
     showLatestMessageButton.value = true;
     return;
   }
-  const viewport = messageScroll.value;
-  if (viewport && !shouldUsePageScroll(window.getComputedStyle(viewport).overflowY)) {
-    viewport.scrollTop = viewport.scrollHeight;
+  const scrollTarget = activeMessageScrollTarget();
+  if (scrollTarget && scrollTarget === messageScroll.value) {
+    scrollTarget.scrollTop = scrollTarget.scrollHeight;
   }
   messageEnd.value?.scrollIntoView({ block: 'end' });
   showLatestMessageButton.value = false;
@@ -515,11 +520,16 @@ async function feedback(message: QaMessageExtra, useful: boolean) {
 }
 
 onMounted(() => {
-  window.addEventListener('scroll', handleMessageScroll, { passive: true });
+  const viewport = messageScroll.value;
+  pageScrollTarget = viewport
+    ? findScrollableAncestor(viewport.parentElement, (node) => window.getComputedStyle(node).overflowY)
+    : null;
+  pageScrollTarget?.addEventListener('scroll', handleMessageScroll, { passive: true });
   loadSessions();
 });
 onUnmounted(() => {
-  window.removeEventListener('scroll', handleMessageScroll);
+  pageScrollTarget?.removeEventListener('scroll', handleMessageScroll);
+  pageScrollTarget = null;
   stopMessagePolling();
 });
 </script>

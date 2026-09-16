@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isNearMessageBottom, shouldFollowLatest, shouldUsePageScroll } from './qaMessageScroll';
+import { findScrollableAncestor, isNearMessageBottom, shouldFollowLatest, shouldUsePageScroll } from './qaMessageScroll';
 
 describe('QA message scrolling policy', () => {
   it('treats a short viewport and a viewport within the threshold as sticky', () => {
@@ -26,5 +26,14 @@ describe('QA message scrolling policy', () => {
     expect(shouldUsePageScroll('visible')).toBe(true);
     expect(shouldUsePageScroll('auto')).toBe(false);
     expect(shouldUsePageScroll('scroll')).toBe(false);
+  });
+
+  it('finds the nearest application scroll container instead of assuming document scroll', () => {
+    type Node = { name: string; overflowY: string; parentElement: Node | null };
+    const content: Node = { name: 'content', overflowY: 'auto', parentElement: null };
+    const page: Node = { name: 'page', overflowY: 'visible', parentElement: content };
+    const card: Node = { name: 'card', overflowY: 'visible', parentElement: page };
+
+    expect(findScrollableAncestor(card, (node) => node.overflowY)).toBe(content);
   });
 });

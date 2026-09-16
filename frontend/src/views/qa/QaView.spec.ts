@@ -232,10 +232,10 @@ describe('QaView latest-message positioning', () => {
     expect(qaViewSource).toContain('有新回答，回到底部');
   });
 
-  it('uses page scroll metrics on responsive layouts and observes page scrolling', () => {
+  it('uses the application scroll ancestor on responsive layouts and observes it', () => {
     expect(qaViewSource).toContain('window.getComputedStyle(viewport).overflowY');
-    expect(qaViewSource).toContain('document.scrollingElement');
-    expect(qaViewSource).toContain("window.addEventListener('scroll', handleMessageScroll");
-    expect(qaViewSource).toContain("window.removeEventListener('scroll', handleMessageScroll");
+    expect(qaViewSource).toContain('findScrollableAncestor(viewport.parentElement');
+    expect(qaViewSource).toContain("pageScrollTarget?.addEventListener('scroll', handleMessageScroll");
+    expect(qaViewSource).toContain("pageScrollTarget?.removeEventListener('scroll', handleMessageScroll");
   });
 });
