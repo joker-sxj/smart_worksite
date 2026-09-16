@@ -5,11 +5,13 @@ import com.xd.smartworksite.file.domain.DocumentBlock;
 import com.xd.smartworksite.file.domain.FileObject;
 import com.xd.smartworksite.file.domain.PreparedDocument;
 import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.FormulaEvaluator;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.apache.poi.hssf.usermodel.HSSFCellStyle;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.junit.jupiter.api.Test;
 
@@ -22,6 +24,39 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ExcelDocumentParserTest {
+
+    @Test
+    void normalizesLegacyRegionalDateFormatsWithoutConvertingGeneralNumbers() throws Exception {
+        byte[] content;
+        try (HSSFWorkbook workbook = new HSSFWorkbook();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            Sheet sheet = workbook.createSheet("计划");
+            Row row = sheet.createRow(3);
+            HSSFCellStyle dateStyle = workbook.createCellStyle();
+            dateStyle.setDataFormat((short) 58);
+            Cell date = row.createCell(3);
+            date.setCellValue(37089d);
+            date.setCellStyle(dateStyle);
+            row.createCell(4).setCellValue(37089d);
+            workbook.write(output);
+            content = output.toByteArray();
+        }
+
+        PreparedDocument document = new ExcelDocumentParser(properties(100, 1000, 20))
+                .parse(fileObject(7L, 17L, "计划.xls", "xls"), content);
+
+        assertThat(document.getBlocks()).singleElement().satisfies(block -> {
+            assertThat(block.getText()).isEqualTo("2001-07-17（原表显示：7月17日）\t37089");
+            assertThat(block.getStructuredData()).containsKey("cells");
+            assertThat((List<Map<String, Object>>) block.getStructuredData().get("cells"))
+                    .anySatisfy(cell -> assertThat(cell)
+                            .containsEntry("address", "D4")
+                            .containsEntry("rawValue", 37089d)
+                            .containsEntry("normalizedDate", "2001-07-17")
+                            .containsEntry("sourceDisplay", "7月17日")
+                            .containsEntry("formatIndex", 58));
+        });
+    }
 
     @Test
     void supportsAndParsesTsvByFileExtension() {

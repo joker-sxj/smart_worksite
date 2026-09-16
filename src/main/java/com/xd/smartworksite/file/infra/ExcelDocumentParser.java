@@ -10,6 +10,8 @@ import com.xd.smartworksite.file.domain.PreparedDocument;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.Date1904Support;
+import org.apache.poi.ss.usermodel.DateUtil;
 import org.apache.poi.ss.usermodel.FormulaError;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -17,6 +19,7 @@ import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.ss.util.CellReference;
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayInputStream;
@@ -25,6 +28,8 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,6 +39,10 @@ import java.util.Set;
 
 @Component
 public class ExcelDocumentParser implements DocumentParser {
+
+    private static final DateTimeFormatter ISO_DATE = DateTimeFormatter.ISO_LOCAL_DATE;
+    // Excel localizes this built-in HSSF format, while POI exposes no format string for it.
+    private static final int LEGACY_CHINESE_MONTH_DAY_FORMAT = 58;
 
     private static final Set<String> EXTENSIONS = Set.of("xls", "xlsx", "csv", "tsv");
     private static final Set<String> CONTENT_TYPES = Set.of(
@@ -71,7 +80,7 @@ public class ExcelDocumentParser implements DocumentParser {
                 if (totalRows > fileProperties.getParse().getMaxSpreadsheetRows()) {
                     throw limitError("spreadsheet row limit exceeded");
                 }
-                SheetContent parsed = readSheet(sheet, formatter,
+                SheetContent parsed = readSheet(sheet, formatter, uses1904DateWindowing(workbook),
                         fileProperties.getParse().getMaxSpreadsheetCells() - totalCells);
                 totalCells += parsed.cellCount();
                 if (totalCells > fileProperties.getParse().getMaxSpreadsheetCells()) {
@@ -91,6 +100,7 @@ public class ExcelDocumentParser implements DocumentParser {
                 structuredData.put("rowMetadata", parsed.rowMetadata());
                 structuredData.put("mergedRegions", mergedRegions(sheet));
                 structuredData.put("formulas", parsed.formulas());
+                structuredData.put("cells", parsed.cells());
                 blocks.add(DocumentBlock.table(
                         "sheet-" + (sheetIndex + 1) + "!" + range,
                         parsed.text(),
@@ -224,10 +234,12 @@ public class ExcelDocumentParser implements DocumentParser {
         return rows;
     }
 
-    private SheetContent readSheet(Sheet sheet, DataFormatter formatter, int remainingCells) {
+    private SheetContent readSheet(Sheet sheet, DataFormatter formatter, boolean use1904Windowing,
+                                   int remainingCells) {
         List<List<String>> rows = new ArrayList<>();
         List<Map<String, Object>> rowMetadata = new ArrayList<>();
         Map<String, Object> formulas = new LinkedHashMap<>();
+        List<Map<String, Object>> cells = new ArrayList<>();
         StringBuilder text = new StringBuilder();
         int firstRow = Integer.MAX_VALUE;
         int lastRow = -1;
@@ -253,8 +265,14 @@ public class ExcelDocumentParser implements DocumentParser {
             boolean hasValue = false;
             for (int column = rowFirstColumn; column < rowLastColumn; column++) {
                 Cell cell = row.getCell(column, Row.MissingCellPolicy.RETURN_BLANK_AS_NULL);
-                String displayed = cell == null ? "" : displayedValue(cell, formatter);
+                DisplayedCell formatted = cell == null
+                        ? new DisplayedCell("", Map.of())
+                        : displayedValue(cell, formatter, use1904Windowing);
+                String displayed = formatted.text();
                 values.add(displayed);
+                if (!formatted.metadata().isEmpty()) {
+                    cells.add(formatted.metadata());
+                }
                 if (!displayed.isBlank()) {
                     hasValue = true;
                     cellCount++;
@@ -286,15 +304,32 @@ public class ExcelDocumentParser implements DocumentParser {
                 text.append(String.join("\t", values));
             }
         }
-        return new SheetContent(rows, rowMetadata, formulas, text.toString(), cellCount,
+        return new SheetContent(rows, rowMetadata, formulas, cells, text.toString(), cellCount,
                 firstRow, lastRow, firstColumn, lastColumn);
     }
 
-    private String displayedValue(Cell cell, DataFormatter formatter) {
-        if (cell.getCellType() != CellType.FORMULA) {
-            return formatter.formatCellValue(cell);
+    private DisplayedCell displayedValue(Cell cell, DataFormatter formatter, boolean use1904Windowing) {
+        Double numericValue = numericValue(cell);
+        if (numericValue != null && isReliableDateCell(cell) && DateUtil.isValidExcelDate(numericValue)) {
+            LocalDateTime dateTime = DateUtil.getLocalDateTime(numericValue, use1904Windowing);
+            String normalized = ISO_DATE.format(dateTime.toLocalDate());
+            int formatIndex = Short.toUnsignedInt(cell.getCellStyle().getDataFormat());
+            String sourceDisplay = sourceDateDisplay(cell, formatter, dateTime, formatIndex);
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("address", new CellReference(cell.getRowIndex(), cell.getColumnIndex()).formatAsString());
+            metadata.put("rawValue", numericValue);
+            metadata.put("normalizedDate", normalized);
+            metadata.put("sourceDisplay", sourceDisplay);
+            metadata.put("formatIndex", formatIndex);
+            String text = normalized.equals(sourceDisplay)
+                    ? normalized
+                    : normalized + "（原表显示：" + sourceDisplay + "）";
+            return new DisplayedCell(text, Map.copyOf(metadata));
         }
-        return switch (cell.getCachedFormulaResultType()) {
+        if (cell.getCellType() != CellType.FORMULA) {
+            return new DisplayedCell(formatter.formatCellValue(cell), Map.of());
+        }
+        String text = switch (cell.getCachedFormulaResultType()) {
             case STRING -> cell.getRichStringCellValue().getString();
             case NUMERIC -> formatter.formatRawCellContents(cell.getNumericCellValue(),
                     cell.getCellStyle().getDataFormat(), cell.getCellStyle().getDataFormatString());
@@ -302,6 +337,42 @@ public class ExcelDocumentParser implements DocumentParser {
             case ERROR -> FormulaError.forInt(cell.getErrorCellValue()).getString();
             case BLANK, _NONE, FORMULA -> "";
         };
+        return new DisplayedCell(text, Map.of());
+    }
+
+    private Double numericValue(Cell cell) {
+        if (cell.getCellType() == CellType.NUMERIC
+                || (cell.getCellType() == CellType.FORMULA
+                && cell.getCachedFormulaResultType() == CellType.NUMERIC)) {
+            return cell.getNumericCellValue();
+        }
+        return null;
+    }
+
+    private boolean isReliableDateCell(Cell cell) {
+        if (DateUtil.isCellDateFormatted(cell)) {
+            return true;
+        }
+        int formatIndex = Short.toUnsignedInt(cell.getCellStyle().getDataFormat());
+        return cell.getSheet().getWorkbook() instanceof HSSFWorkbook
+                && cell.getCellStyle().getDataFormatString() == null
+                && formatIndex == LEGACY_CHINESE_MONTH_DAY_FORMAT;
+    }
+
+    private String sourceDateDisplay(Cell cell, DataFormatter formatter, LocalDateTime dateTime, int formatIndex) {
+        if (cell.getCellStyle().getDataFormatString() == null
+                && formatIndex == LEGACY_CHINESE_MONTH_DAY_FORMAT) {
+            return dateTime.getMonthValue() + "月" + dateTime.getDayOfMonth() + "日";
+        }
+        String displayed = formatter.formatCellValue(cell);
+        return displayed == null || displayed.isBlank() ? ISO_DATE.format(dateTime.toLocalDate()) : displayed;
+    }
+
+    private boolean uses1904DateWindowing(Workbook workbook) {
+        if (workbook instanceof Date1904Support support) {
+            return support.isDate1904();
+        }
+        return workbook instanceof HSSFWorkbook hssf && hssf.getWorkbook().isUsing1904DateWindowing();
     }
 
     private List<String> mergedRegions(Sheet sheet) {
@@ -343,9 +414,11 @@ public class ExcelDocumentParser implements DocumentParser {
     }
 
     private record SheetContent(List<List<String>> rows, List<Map<String, Object>> rowMetadata,
-                                Map<String, Object> formulas, String text,
+                                Map<String, Object> formulas, List<Map<String, Object>> cells, String text,
                                 int cellCount, int firstRow, int lastRow,
                                 int firstColumn, int lastColumn) {
+    }
+    private record DisplayedCell(String text, Map<String, Object> metadata) {
     }
     private record CsvRow(int lineNumber, List<String> values) {
     }

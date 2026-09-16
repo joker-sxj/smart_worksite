@@ -185,6 +185,7 @@ Request IDs are handled by `common.config.RequestIdFilter`. The response header 
 - Template create APIs must read back the persisted template before success; update, enable, disable, and delete operations must check affected rows and fail visibly on stale or missing records.
 - Template preview, `{{ var_xx_xx }}` parsing, and variable-description persistence changes must also follow `src/main/java/com/xd/smartworksite/template/AGENTS.md`.
 - File uploads must require a non-blank original filename; do not silently replace missing filenames with generic names such as `file`.
+- Spreadsheet parsing must preserve reliable date semantics: index full dates for knowledge retrieval, retain the source display and format metadata, and never infer a date or year from an unformatted number, filename, upload time, neighboring cell, or current date.
 - File upload and parse-task creation must read back persisted records before returning success; if records are not readable, fail visibly and clean up uploaded storage objects where applicable.
 - AI, RAG, OCR, Embedding, vector retrieval, and document-parsing integrations must be adapter-based; do not implement algorithm core logic in Java controllers or application services.
 - Policy/news crawling must be orchestrated by Java and executed through `python-ai-service`; Java persists sources, tasks, articles, external-call logs, and RAG index state, while frontend never crawls external websites or calls Python directly.
