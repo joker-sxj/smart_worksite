@@ -85,7 +85,7 @@ export function acceptSessionMessages<T extends QaMessage>(
 </script>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import EmptyState from '../../components/common/EmptyState.vue';
 import { fetchDataSources } from '../../api/datasource';
@@ -97,6 +97,7 @@ import type { DataSourceItem, KnowledgeBase, QaMessageSendRequest, QaSession } f
 import { hasSuspiciousText } from '../../utils/textQuality';
 import { renderQaMarkdown } from '../../utils/qaMarkdown';
 import { hasActiveQaGeneration, normalizeQaMessages, qaMessageText } from './qaMessagePolling';
+import { isNearMessageBottom, shouldFollowLatest, type LatestMessageReason } from './qaMessageScroll';
 
 type QaMessageExtra = QaMessage & Record<string, unknown>;
 
@@ -130,6 +131,9 @@ const resourceLoading = ref(false);
 const resourceError = ref('');
 const activeSend = ref<{ token: string; userMessageId: ID; pendingMessageId: ID; content: string } | null>(null);
 const suggestionSubmission = ref<SuggestedFollowUpSubmissionState>({ pending: false, submittedKeys: new Set<string>() });
+const messageScroll = ref<HTMLElement | null>(null);
+const messageEnd = ref<HTMLElement | null>(null);
+const showLatestMessageButton = ref(false);
 let messagePollTimer: ReturnType<typeof setTimeout> | null = null;
 const MESSAGE_POLL_INTERVAL_MS = 2000;
 
@@ -175,6 +179,28 @@ function suggestionKey(msg: QaMessageExtra, index: number) {
   return `${msg.messageId}:${index}`;
 }
 
+function isMessageViewportNearBottom() {
+  const viewport = messageScroll.value;
+  return !viewport || isNearMessageBottom(viewport);
+}
+
+function handleMessageScroll() {
+  if (isMessageViewportNearBottom()) showLatestMessageButton.value = false;
+}
+
+async function scrollToLatest(reason: LatestMessageReason, wasNearBottom = true) {
+  const follow = shouldFollowLatest(reason, wasNearBottom);
+  await nextTick();
+  if (!follow) {
+    showLatestMessageButton.value = true;
+    return;
+  }
+  const viewport = messageScroll.value;
+  if (viewport) viewport.scrollTop = viewport.scrollHeight;
+  messageEnd.value?.scrollIntoView({ block: 'end' });
+  showLatestMessageButton.value = false;
+}
+
 function stopMessagePolling() {
   if (messagePollTimer) clearTimeout(messagePollTimer);
   messagePollTimer = null;
@@ -185,11 +211,13 @@ function scheduleMessagePolling(sessionId: ID) {
   if (!hasActiveQaGeneration(messages.value)) return;
   messagePollTimer = setTimeout(async () => {
     if (String(activeSessionId.value) !== String(sessionId)) return;
+    const wasNearBottom = isMessageViewportNearBottom();
     try {
       const refreshed = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
       const accepted = acceptSessionMessages(suggestionSubmission.value, sessionId, activeSessionId.value, refreshed);
       if (!accepted) return;
       messages.value = accepted;
+      await scrollToLatest('poll', wasNearBottom);
       messageError.value = '';
     } catch (err) {
       messageError.value = err instanceof Error ? err.message : t('回答状态刷新失败，请稍后重试。');
@@ -277,12 +305,14 @@ async function switchSession(sessionId: ID) {
   messageLoading.value = true;
   messageError.value = '';
   messages.value = [];
+  showLatestMessageButton.value = false;
   try {
     await fetchQaSessionDetail(sessionId);
     const refreshed = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
     const accepted = acceptSessionMessages(suggestionSubmission.value, sessionId, activeSessionId.value, refreshed);
     if (!accepted) return;
     messages.value = accepted;
+    await scrollToLatest('session-switch');
     scheduleMessagePolling(sessionId);
   } catch (err) {
     messageError.value = err instanceof Error ? err.message : t('会话消息加载失败，请检查后端问答接口。');
@@ -336,6 +366,7 @@ async function regenerateAnswer(msg: QaMessageExtra) {
   try {
     const answer = await regenerateMessage(activeSessionId.value, msg.messageId) as QaMessageExtra;
     messages.value.push({ ...answer, role: 'assistant', content: answer.answer || answer.content || '' });
+    await scrollToLatest('submission');
     ElMessage.success('答案已重新生成');
   } catch (err) {
     ElMessage.error(err instanceof Error ? err.message : '重新生成失败');
@@ -402,6 +433,7 @@ async function submitQuestion(content: string, payloadExtra: Partial<QaMessageSe
   const userMessage = createLocalUserMessage(sessionId, projectId, content);
   const pendingMessage = createPendingAssistantMessage(sessionId, projectId);
   messages.value = appendQaSubmission(messages.value, userMessage, pendingMessage);
+  await scrollToLatest('submission');
   const sendToken = `${Date.now()}-${Math.random()}`;
   activeSend.value = { token: sendToken, userMessageId: userMessage.messageId, pendingMessageId: pendingMessage.messageId, content };
   if (clearManualInput) question.value = '';
@@ -409,10 +441,12 @@ async function submitQuestion(content: string, payloadExtra: Partial<QaMessageSe
     const payload = buildQuestionPayload(content, payloadExtra);
     await sendQuestion(sessionId, payload, projectId) as QaMessageExtra;
     if (activeSend.value?.token !== sendToken || String(activeSessionId.value) !== String(sessionId)) return false;
+    const wasNearBottom = isMessageViewportNearBottom();
     const refreshed = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
     const accepted = acceptSessionMessages(suggestionSubmission.value, sessionId, activeSessionId.value, refreshed);
     if (!accepted || activeSend.value?.token !== sendToken) return false;
     messages.value = accepted;
+    await scrollToLatest('send-complete', wasNearBottom);
     scheduleMessagePolling(sessionId);
     return true;
   } catch (err) {
@@ -530,7 +564,7 @@ onUnmounted(stopMessagePolling);
             <el-option v-for="item in enabledDataSources" :key="item.dataSourceId" :label="item.name" :value="item.dataSourceId" />
           </el-select>
         </div>
-        <div class="message-scroll">
+        <div ref="messageScroll" class="message-scroll" @scroll="handleMessageScroll">
           <EmptyState v-if="!messages.length" :description="t('暂无消息，请输入问题开始问答。')" />
           <div v-for="msg in messages" :key="msg.messageId" class="chat" :class="[messageRole(msg), { pending: msg.pending }]">
             <el-tag v-if="hasSuspiciousText(msg.content || msg.answer)" type="warning" size="small" style="margin-left: 6px">疑似历史乱码数据</el-tag>
@@ -574,7 +608,9 @@ onUnmounted(stopMessagePolling);
               </div>
             </template>
           </div>
+          <div ref="messageEnd" class="message-end" aria-hidden="true"></div>
         </div>
+        <el-button v-if="showLatestMessageButton" class="latest-message-button" type="primary" plain @click="scrollToLatest('session-switch')">有新回答，回到底部</el-button>
         <div class="qa-input-area">
           <div class="input-label required-label">{{ t('问题内容') }}</div>
           <el-input v-model="question" type="textarea" :rows="3" :placeholder="canManageQa ? t('\u8bf7\u8f93\u5165\u95ee\u9898') : qaManageTip" :disabled="!canManageQa || sending" @keyup.ctrl.enter="ask" />
@@ -621,6 +657,8 @@ onUnmounted(stopMessagePolling);
 .session-item span, .muted { color: var(--sw-muted); font-size: 12px; }
 .session-actions { display: flex; gap: 8px; }
 .message-scroll { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px 4px 0; }
+.message-end { height: 1px; }
+.latest-message-button { align-self: center; margin: 0 0 8px; box-shadow: 0 8px 20px rgba(30, 94, 255, 0.16); }
 .chat { padding: 12px 14px; border: 1px solid var(--sw-border); border-radius: 12px; margin-bottom: 18px; }
 .chat.user { width: fit-content; max-width: min(620px, 62%); margin-left: auto; background: #eaf3ff; border-color: #bfdbfe; text-align: left; }
 .chat.assistant { width: min(1040px, calc(100% - 96px)); margin-right: auto; background: #fff; text-align: left; }

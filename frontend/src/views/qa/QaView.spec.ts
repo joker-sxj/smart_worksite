@@ -217,3 +217,18 @@ describe('QaView persisted follow-up suggestions', () => {
     expect(qaViewSource).toMatch(/@media \(max-width:\s*960px\)[\s\S]*\.suggestion-button[^}]*width:\s*100%/);
   });
 });
+
+describe('QaView latest-message positioning', () => {
+  it('binds the message viewport and positions session loads and submissions after rendering', () => {
+    expect(qaViewSource).toContain('ref="messageScroll"');
+    expect(qaViewSource).toContain("scrollToLatest('session-switch'");
+    expect(qaViewSource).toContain("scrollToLatest('submission'");
+    expect(qaViewSource).toContain('await nextTick()');
+  });
+
+  it('captures stickiness before polling replaces messages and exposes a return control', () => {
+    expect(qaViewSource).toContain('const wasNearBottom = isMessageViewportNearBottom()');
+    expect(qaViewSource).toContain("scrollToLatest('poll', wasNearBottom)");
+    expect(qaViewSource).toContain('有新回答，回到底部');
+  });
+});
