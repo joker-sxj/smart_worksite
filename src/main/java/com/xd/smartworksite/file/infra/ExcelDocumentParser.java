@@ -41,8 +41,11 @@ import java.util.Set;
 public class ExcelDocumentParser implements DocumentParser {
 
     private static final DateTimeFormatter ISO_DATE = DateTimeFormatter.ISO_LOCAL_DATE;
-    // Excel localizes this built-in HSSF format, while POI exposes no format string for it.
-    private static final int LEGACY_CHINESE_MONTH_DAY_FORMAT = 58;
+    // Excel localizes these built-in HSSF formats, while POI may expose no format string for them.
+    private static final int LEGACY_REGIONAL_DATE_START = 27;
+    private static final int LEGACY_REGIONAL_DATE_END = 36;
+    private static final int LEGACY_REGIONAL_DATE_SECOND_START = 50;
+    private static final int LEGACY_REGIONAL_DATE_SECOND_END = 58;
 
     private static final Set<String> EXTENSIONS = Set.of("xls", "xlsx", "csv", "tsv");
     private static final Set<String> CONTENT_TYPES = Set.of(
@@ -355,17 +358,28 @@ public class ExcelDocumentParser implements DocumentParser {
         }
         int formatIndex = Short.toUnsignedInt(cell.getCellStyle().getDataFormat());
         return cell.getSheet().getWorkbook() instanceof HSSFWorkbook
-                && cell.getCellStyle().getDataFormatString() == null
-                && formatIndex == LEGACY_CHINESE_MONTH_DAY_FORMAT;
+                && isUnavailableFormatString(cell.getCellStyle().getDataFormatString())
+                && isLegacyRegionalDateFormat(formatIndex);
     }
 
     private String sourceDateDisplay(Cell cell, DataFormatter formatter, LocalDateTime dateTime, int formatIndex) {
-        if (cell.getCellStyle().getDataFormatString() == null
-                && formatIndex == LEGACY_CHINESE_MONTH_DAY_FORMAT) {
+        if (isUnavailableFormatString(cell.getCellStyle().getDataFormatString())
+                && isLegacyRegionalDateFormat(formatIndex)) {
             return dateTime.getMonthValue() + "月" + dateTime.getDayOfMonth() + "日";
         }
-        String displayed = formatter.formatCellValue(cell);
+        String displayed = formatter.formatRawCellContents(cell.getNumericCellValue(),
+                cell.getCellStyle().getDataFormat(), cell.getCellStyle().getDataFormatString());
         return displayed == null || displayed.isBlank() ? ISO_DATE.format(dateTime.toLocalDate()) : displayed;
+    }
+
+    private boolean isLegacyRegionalDateFormat(int formatIndex) {
+        return (formatIndex >= LEGACY_REGIONAL_DATE_START && formatIndex <= LEGACY_REGIONAL_DATE_END)
+                || (formatIndex >= LEGACY_REGIONAL_DATE_SECOND_START
+                && formatIndex <= LEGACY_REGIONAL_DATE_SECOND_END);
+    }
+
+    private boolean isUnavailableFormatString(String format) {
+        return format == null || format.startsWith("reserved-");
     }
 
     private boolean uses1904DateWindowing(Workbook workbook) {

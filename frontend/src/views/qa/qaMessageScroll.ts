@@ -18,3 +18,7 @@ export function isNearMessageBottom(
 export function shouldFollowLatest(reason: LatestMessageReason, wasNearBottom: boolean) {
   return reason === 'initial-load' || reason === 'session-switch' || reason === 'submission' || wasNearBottom;
 }
+
+export function shouldUsePageScroll(overflowY: string) {
+  return overflowY === 'visible' || overflowY === 'clip';
+}

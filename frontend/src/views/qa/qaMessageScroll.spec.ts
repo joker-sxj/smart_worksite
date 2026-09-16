@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isNearMessageBottom, shouldFollowLatest } from './qaMessageScroll';
+import { isNearMessageBottom, shouldFollowLatest, shouldUsePageScroll } from './qaMessageScroll';
 
 describe('QA message scrolling policy', () => {
   it('treats a short viewport and a viewport within the threshold as sticky', () => {
@@ -20,5 +20,11 @@ describe('QA message scrolling policy', () => {
 
   it('continues following polling updates when the user was already at the bottom', () => {
     expect(shouldFollowLatest('poll', true)).toBe(true);
+  });
+
+  it('uses page metrics when responsive CSS disables the message viewport scroll', () => {
+    expect(shouldUsePageScroll('visible')).toBe(true);
+    expect(shouldUsePageScroll('auto')).toBe(false);
+    expect(shouldUsePageScroll('scroll')).toBe(false);
   });
 });

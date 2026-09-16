@@ -59,6 +59,62 @@ class ExcelDocumentParserTest {
     }
 
     @Test
+    void recognizesTheSupportedLegacyHssfRegionalDateFormatRanges() throws Exception {
+        byte[] content;
+        try (HSSFWorkbook workbook = new HSSFWorkbook();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            Row row = workbook.createSheet("计划").createRow(0);
+            for (int index = 0; index < 2; index++) {
+                HSSFCellStyle style = workbook.createCellStyle();
+                style.setDataFormat((short) (index == 0 ? 27 : 50));
+                Cell cell = row.createCell(index);
+                cell.setCellValue(37089d);
+                cell.setCellStyle(style);
+            }
+            workbook.write(output);
+            content = output.toByteArray();
+        }
+
+        PreparedDocument document = new ExcelDocumentParser(properties(100, 1000, 20))
+                .parse(fileObject(7L, 23L, "regional.xls", "xls"), content);
+
+        assertThat(document.getBlocks()).singleElement().satisfies(block -> {
+            assertThat(block.getText()).isEqualTo(
+                    "2001-07-17（原表显示：7月17日）\t2001-07-17（原表显示：7月17日）");
+            assertThat((List<Map<String, Object>>) block.getStructuredData().get("cells"))
+                    .extracting(cell -> cell.get("formatIndex"))
+                    .containsExactly(27, 50);
+        });
+    }
+
+    @Test
+    void formatsFormulaDatesFromTheirEvaluatedValueInsteadOfTheFormulaText() throws Exception {
+        byte[] content;
+        try (XSSFWorkbook workbook = new XSSFWorkbook();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            Row row = workbook.createSheet("计划").createRow(0);
+            row.createCell(0).setCellValue(37089d);
+            Cell formula = row.createCell(1);
+            formula.setCellFormula("A1+1");
+            formula.setCellStyle(workbook.createCellStyle());
+            formula.getCellStyle().setDataFormat(workbook.createDataFormat().getFormat("yyyy-mm-dd"));
+            workbook.getCreationHelper().createFormulaEvaluator().evaluateFormulaCell(formula);
+            workbook.write(output);
+            content = output.toByteArray();
+        }
+
+        PreparedDocument document = new ExcelDocumentParser(properties(100, 1000, 20))
+                .parse(fileObject(7L, 24L, "formula.xlsx", "xlsx"), content);
+
+        assertThat(document.getBlocks()).singleElement()
+                .extracting(DocumentBlock::getText)
+                .isEqualTo("37089\t2001-07-18");
+        assertThat(document.getBlocks().get(0).getStructuredData().get("cells").toString())
+                .contains("sourceDisplay=2001-07-18")
+                .doesNotContain("A1+1");
+    }
+
+    @Test
     void supportsAndParsesTsvByFileExtension() {
         ExcelDocumentParser parser = new ExcelDocumentParser(properties(100, 1000, 20));
         byte[] content = "日期\t区域\t状态\n2026-09-03\t裙房\t待验收\n".getBytes(StandardCharsets.UTF_8);

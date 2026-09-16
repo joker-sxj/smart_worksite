@@ -231,4 +231,11 @@ describe('QaView latest-message positioning', () => {
     expect(qaViewSource).toContain("scrollToLatest('poll', wasNearBottom)");
     expect(qaViewSource).toContain('有新回答，回到底部');
   });
+
+  it('uses page scroll metrics on responsive layouts and observes page scrolling', () => {
+    expect(qaViewSource).toContain('window.getComputedStyle(viewport).overflowY');
+    expect(qaViewSource).toContain('document.scrollingElement');
+    expect(qaViewSource).toContain("window.addEventListener('scroll', handleMessageScroll");
+    expect(qaViewSource).toContain("window.removeEventListener('scroll', handleMessageScroll");
+  });
 });

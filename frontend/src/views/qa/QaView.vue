@@ -97,7 +97,7 @@ import type { DataSourceItem, KnowledgeBase, QaMessageSendRequest, QaSession } f
 import { hasSuspiciousText } from '../../utils/textQuality';
 import { renderQaMarkdown } from '../../utils/qaMarkdown';
 import { hasActiveQaGeneration, normalizeQaMessages, qaMessageText } from './qaMessagePolling';
-import { isNearMessageBottom, shouldFollowLatest, type LatestMessageReason } from './qaMessageScroll';
+import { isNearMessageBottom, shouldFollowLatest, shouldUsePageScroll, type LatestMessageReason } from './qaMessageScroll';
 
 type QaMessageExtra = QaMessage & Record<string, unknown>;
 
@@ -181,7 +181,11 @@ function suggestionKey(msg: QaMessageExtra, index: number) {
 
 function isMessageViewportNearBottom() {
   const viewport = messageScroll.value;
-  return !viewport || isNearMessageBottom(viewport);
+  if (!viewport) return true;
+  const scrollTarget = shouldUsePageScroll(window.getComputedStyle(viewport).overflowY)
+    ? document.scrollingElement
+    : viewport;
+  return !scrollTarget || isNearMessageBottom(scrollTarget);
 }
 
 function handleMessageScroll() {
@@ -196,7 +200,9 @@ async function scrollToLatest(reason: LatestMessageReason, wasNearBottom = true)
     return;
   }
   const viewport = messageScroll.value;
-  if (viewport) viewport.scrollTop = viewport.scrollHeight;
+  if (viewport && !shouldUsePageScroll(window.getComputedStyle(viewport).overflowY)) {
+    viewport.scrollTop = viewport.scrollHeight;
+  }
   messageEnd.value?.scrollIntoView({ block: 'end' });
   showLatestMessageButton.value = false;
 }
@@ -508,8 +514,14 @@ async function feedback(message: QaMessageExtra, useful: boolean) {
   }
 }
 
-onMounted(() => loadSessions());
-onUnmounted(stopMessagePolling);
+onMounted(() => {
+  window.addEventListener('scroll', handleMessageScroll, { passive: true });
+  loadSessions();
+});
+onUnmounted(() => {
+  window.removeEventListener('scroll', handleMessageScroll);
+  stopMessagePolling();
+});
 </script>
 
 <template>
