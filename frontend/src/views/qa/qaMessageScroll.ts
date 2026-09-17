@@ -7,6 +7,8 @@ export interface MessageScrollMetrics {
 }
 
 export type LatestMessageReason = 'initial-load' | 'session-switch' | 'submission' | 'poll' | 'send-complete';
+export type MessageScrollIntent = 'FOLLOWING_LATEST' | 'READING_HISTORY';
+export type MessageScrollEvent = LatestMessageReason | 'user-away-from-bottom' | 'user-near-bottom' | 'return-to-latest';
 
 export function isNearMessageBottom(
   metrics: MessageScrollMetrics,
@@ -15,8 +17,18 @@ export function isNearMessageBottom(
   return metrics.scrollHeight - metrics.clientHeight - metrics.scrollTop <= threshold;
 }
 
-export function shouldFollowLatest(reason: LatestMessageReason, wasNearBottom: boolean) {
-  return reason === 'initial-load' || reason === 'session-switch' || reason === 'submission' || wasNearBottom;
+export function nextMessageScrollIntent(
+  current: MessageScrollIntent,
+  event: MessageScrollEvent
+): MessageScrollIntent {
+  if (event === 'user-away-from-bottom') return 'READING_HISTORY';
+  if (event === 'user-near-bottom' || event === 'return-to-latest') return 'FOLLOWING_LATEST';
+  if (event === 'initial-load' || event === 'session-switch' || event === 'submission') return 'FOLLOWING_LATEST';
+  return current;
+}
+
+export function shouldFollowLatest(intent: MessageScrollIntent) {
+  return intent === 'FOLLOWING_LATEST';
 }
 
 export function shouldUsePageScroll(overflowY: string) {
