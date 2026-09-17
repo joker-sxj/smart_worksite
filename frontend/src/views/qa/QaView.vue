@@ -97,7 +97,14 @@ import type { DataSourceItem, KnowledgeBase, QaMessageSendRequest, QaSession } f
 import { hasSuspiciousText } from '../../utils/textQuality';
 import { renderQaMarkdown } from '../../utils/qaMarkdown';
 import { hasActiveQaGeneration, normalizeQaMessages, qaMessageText } from './qaMessagePolling';
-import { isNearMessageBottom, shouldFollowLatest, shouldUsePageScroll, type LatestMessageReason } from './qaMessageScroll';
+import {
+  isNearMessageBottom,
+  nextMessageScrollIntent,
+  shouldFollowLatest,
+  shouldUsePageScroll,
+  type MessageScrollEvent,
+  type MessageScrollIntent
+} from './qaMessageScroll';
 
 type QaMessageExtra = QaMessage & Record<string, unknown>;
 
@@ -134,8 +141,10 @@ const suggestionSubmission = ref<SuggestedFollowUpSubmissionState>({ pending: fa
 const messageScroll = ref<HTMLElement | null>(null);
 const messageEnd = ref<HTMLElement | null>(null);
 const showLatestMessageButton = ref(false);
+const messageScrollIntent = ref<MessageScrollIntent>('FOLLOWING_LATEST');
 let messagePollTimer: ReturnType<typeof setTimeout> | null = null;
-let pageScrollTarget: HTMLElement | null = null;
+let boundMessageScrollTarget: HTMLElement | null = null;
+let programmaticScrollDepth = 0;
 const MESSAGE_POLL_INTERVAL_MS = 2000;
 
 const activeSession = computed(() => sessions.value.find((item) => String(item.sessionId) === String(activeSessionId.value)) || null);
@@ -189,25 +198,40 @@ function activeMessageScrollTarget() {
   const viewport = messageScroll.value;
   if (!viewport) return null;
   if (!shouldUsePageScroll(window.getComputedStyle(viewport).overflowY)) return viewport;
-  return pageScrollTarget || viewport.closest<HTMLElement>('.content');
+  return viewport.closest<HTMLElement>('.content');
 }
 
 function handleMessageScroll() {
-  if (isMessageViewportNearBottom()) showLatestMessageButton.value = false;
+  if (programmaticScrollDepth > 0) return;
+  const event = isMessageViewportNearBottom() ? 'user-near-bottom' : 'user-away-from-bottom';
+  messageScrollIntent.value = nextMessageScrollIntent(messageScrollIntent.value, event);
+  showLatestMessageButton.value = messageScrollIntent.value === 'READING_HISTORY';
 }
 
-async function scrollToLatest(reason: LatestMessageReason, wasNearBottom = true) {
-  const follow = shouldFollowLatest(reason, wasNearBottom);
+function bindActiveMessageScrollTarget() {
+  const nextTarget = activeMessageScrollTarget();
+  if (nextTarget === boundMessageScrollTarget) return;
+  boundMessageScrollTarget?.removeEventListener('scroll', handleMessageScroll);
+  boundMessageScrollTarget = nextTarget;
+  boundMessageScrollTarget?.addEventListener('scroll', handleMessageScroll, { passive: true });
+}
+
+async function scrollToLatest(reason: MessageScrollEvent) {
+  messageScrollIntent.value = nextMessageScrollIntent(messageScrollIntent.value, reason);
   await nextTick();
-  if (!follow) {
+  bindActiveMessageScrollTarget();
+  if (!shouldFollowLatest(messageScrollIntent.value)) {
     showLatestMessageButton.value = true;
     return;
   }
   const scrollTarget = activeMessageScrollTarget();
-  if (scrollTarget && scrollTarget === messageScroll.value) {
+  if (scrollTarget) {
+    programmaticScrollDepth += 1;
     scrollTarget.scrollTop = scrollTarget.scrollHeight;
+    window.requestAnimationFrame(() => {
+      programmaticScrollDepth = Math.max(0, programmaticScrollDepth - 1);
+    });
   }
-  messageEnd.value?.scrollIntoView({ block: 'end' });
   showLatestMessageButton.value = false;
 }
 
@@ -221,13 +245,12 @@ function scheduleMessagePolling(sessionId: ID) {
   if (!hasActiveQaGeneration(messages.value)) return;
   messagePollTimer = setTimeout(async () => {
     if (String(activeSessionId.value) !== String(sessionId)) return;
-    const wasNearBottom = isMessageViewportNearBottom();
     try {
       const refreshed = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
       const accepted = acceptSessionMessages(suggestionSubmission.value, sessionId, activeSessionId.value, refreshed);
       if (!accepted) return;
       messages.value = accepted;
-      await scrollToLatest('poll', wasNearBottom);
+      await scrollToLatest('poll');
       messageError.value = '';
     } catch (err) {
       messageError.value = err instanceof Error ? err.message : t('回答状态刷新失败，请稍后重试。');
@@ -451,12 +474,11 @@ async function submitQuestion(content: string, payloadExtra: Partial<QaMessageSe
     const payload = buildQuestionPayload(content, payloadExtra);
     await sendQuestion(sessionId, payload, projectId) as QaMessageExtra;
     if (activeSend.value?.token !== sendToken || String(activeSessionId.value) !== String(sessionId)) return false;
-    const wasNearBottom = isMessageViewportNearBottom();
     const refreshed = normalizeQaMessages(await fetchQaMessages(sessionId) as QaMessageExtra[]);
     const accepted = acceptSessionMessages(suggestionSubmission.value, sessionId, activeSessionId.value, refreshed);
     if (!accepted || activeSend.value?.token !== sendToken) return false;
     messages.value = accepted;
-    await scrollToLatest('send-complete', wasNearBottom);
+    await scrollToLatest('send-complete');
     scheduleMessagePolling(sessionId);
     return true;
   } catch (err) {
@@ -519,14 +541,14 @@ async function feedback(message: QaMessageExtra, useful: boolean) {
 }
 
 onMounted(() => {
-  const viewport = messageScroll.value;
-  pageScrollTarget = viewport?.closest<HTMLElement>('.content') || null;
-  pageScrollTarget?.addEventListener('scroll', handleMessageScroll, { passive: true });
+  bindActiveMessageScrollTarget();
+  window.addEventListener('resize', bindActiveMessageScrollTarget);
   loadSessions();
 });
 onUnmounted(() => {
-  pageScrollTarget?.removeEventListener('scroll', handleMessageScroll);
-  pageScrollTarget = null;
+  window.removeEventListener('resize', bindActiveMessageScrollTarget);
+  boundMessageScrollTarget?.removeEventListener('scroll', handleMessageScroll);
+  boundMessageScrollTarget = null;
   stopMessagePolling();
 });
 </script>
@@ -583,7 +605,7 @@ onUnmounted(() => {
             <el-option v-for="item in enabledDataSources" :key="item.dataSourceId" :label="item.name" :value="item.dataSourceId" />
           </el-select>
         </div>
-        <div ref="messageScroll" class="message-scroll" @scroll="handleMessageScroll">
+        <div ref="messageScroll" class="message-scroll">
           <EmptyState v-if="!messages.length" :description="t('暂无消息，请输入问题开始问答。')" />
           <div v-for="msg in messages" :key="msg.messageId" class="chat" :class="[messageRole(msg), { pending: msg.pending }]">
             <el-tag v-if="hasSuspiciousText(msg.content || msg.answer)" type="warning" size="small" style="margin-left: 6px">疑似历史乱码数据</el-tag>
@@ -629,7 +651,7 @@ onUnmounted(() => {
           </div>
           <div ref="messageEnd" class="message-end" aria-hidden="true"></div>
         </div>
-        <el-button v-if="showLatestMessageButton" class="latest-message-button" type="primary" plain @click="scrollToLatest('session-switch')">有新回答，回到底部</el-button>
+        <el-button v-if="showLatestMessageButton" class="latest-message-button" type="primary" plain @click="scrollToLatest('return-to-latest')">有新回答，回到底部</el-button>
         <div class="qa-input-area">
           <div class="input-label required-label">{{ t('问题内容') }}</div>
           <el-input v-model="question" type="textarea" :rows="3" :placeholder="canManageQa ? t('\u8bf7\u8f93\u5165\u95ee\u9898') : qaManageTip" :disabled="!canManageQa || sending" @keyup.ctrl.enter="ask" />

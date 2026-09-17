@@ -226,16 +226,24 @@ describe('QaView latest-message positioning', () => {
     expect(qaViewSource).toContain('await nextTick()');
   });
 
-  it('captures stickiness before polling replaces messages and exposes a return control', () => {
-    expect(qaViewSource).toContain('const wasNearBottom = isMessageViewportNearBottom()');
-    expect(qaViewSource).toContain("scrollToLatest('poll', wasNearBottom)");
+  it('persists reading intent across polling and exposes an explicit return control', () => {
+    expect(qaViewSource).toContain("ref<MessageScrollIntent>('FOLLOWING_LATEST')");
+    expect(qaViewSource).toContain("? 'user-near-bottom' : 'user-away-from-bottom'");
+    expect(qaViewSource).toContain('nextMessageScrollIntent(messageScrollIntent.value, event)');
+    expect(qaViewSource).toContain("scrollToLatest('poll')");
+    expect(qaViewSource).toContain("scrollToLatest('send-complete')");
+    expect(qaViewSource).toContain("scrollToLatest('return-to-latest')");
+    expect(qaViewSource).toContain('programmaticScrollDepth');
+    expect(qaViewSource).not.toContain('const wasNearBottom = isMessageViewportNearBottom()');
     expect(qaViewSource).toContain('有新回答，回到底部');
   });
 
-  it('uses the application scroll ancestor on responsive layouts and observes it', () => {
+  it('rebinds the active scroll target when responsive layout changes', () => {
     expect(qaViewSource).toContain('window.getComputedStyle(viewport).overflowY');
     expect(qaViewSource).toContain("viewport.closest<HTMLElement>('.content')");
-    expect(qaViewSource).toContain("pageScrollTarget?.addEventListener('scroll', handleMessageScroll");
-    expect(qaViewSource).toContain("pageScrollTarget?.removeEventListener('scroll', handleMessageScroll");
+    expect(qaViewSource).toContain('bindActiveMessageScrollTarget()');
+    expect(qaViewSource).toContain("boundMessageScrollTarget?.addEventListener('scroll', handleMessageScroll");
+    expect(qaViewSource).toContain("boundMessageScrollTarget?.removeEventListener('scroll', handleMessageScroll");
+    expect(qaViewSource).toContain("window.addEventListener('resize', bindActiveMessageScrollTarget)");
   });
 });
