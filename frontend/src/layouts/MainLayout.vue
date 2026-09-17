@@ -167,6 +167,7 @@ async function submitPasswordChange() {
       v-model="mobileDrawerVisible"
       class="mobile-nav-drawer"
       direction="ltr"
+      title="主导航"
       size="min(320px, 88vw)"
       :with-header="false"
     >

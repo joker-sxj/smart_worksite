@@ -6,6 +6,7 @@ describe('MainLayout responsive navigation', () => {
     expect(source.match(/v-for="group in visibleMenuGroups"/g)).toHaveLength(2);
     expect(source).toContain('aria-label="打开导航菜单"');
     expect(source).toContain('<el-drawer');
+    expect(source).toContain('title="主导航"');
     expect(source).toContain('size="min(320px, 88vw)"');
   });
 
