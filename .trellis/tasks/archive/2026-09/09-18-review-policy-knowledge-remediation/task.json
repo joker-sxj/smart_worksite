@@ -1,0 +1,30 @@
+{
+  "id": "review-policy-knowledge-remediation",
+  "name": "review-policy-knowledge-remediation",
+  "title": "审查政策知识库问题修复",
+  "description": "统筹修复合规审查恢复与展示、政策抓取时间语义及最新内容发现、知识库文档分页，并完成真实部署验收",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "宋经纬",
+  "assignee": "宋经纬",
+  "createdAt": "2026-09-18",
+  "completedAt": "2026-09-18",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-18-review-result-persistence",
+    "09-18-policy-recrawl-freshness",
+    "09-18-knowledge-document-pagination"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
