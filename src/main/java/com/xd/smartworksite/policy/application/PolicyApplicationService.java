@@ -412,7 +412,9 @@ public class PolicyApplicationService {
         article.setUrlHash(hash);
         article.setSummary(limit(trimToNull(item.getSummary()), 1000));
         article.setContent(content);
-        article.setPublishDate(item.getPublishDate());
+        if (creating || item.getPublishDate() != null) {
+            article.setPublishDate(item.getPublishDate());
+        }
         article.setCategory(limit(trimToNull(item.getCategory()), 128));
         article.setPolicyNo(limit(trimToNull(item.getPolicyNo()), 128));
         article.setIndexStatus(PolicyIndexStatus.PENDING.name());

@@ -8,6 +8,7 @@ import StatusTag from '../../components/common/StatusTag.vue';
 import { createPolicyCrawlTask, createPolicySource, deletePolicySource, fetchPolicyArticles, fetchPolicyCrawlTasks, fetchPolicySources, preflightPolicySource, updatePolicySource } from '../../api/policy';
 import { useProjectStore } from '../../stores/project';
 import type { ID, PolicyArticle, PolicyCrawlTask, PolicyPreflightResult, PolicySource } from '../../api/types';
+import { formatPolicyPublishDate, formatPolicySystemTime, isLikelySingleArticleUrl, POLICY_ARTICLE_TIME_EXPLANATION, POLICY_ARTICLE_UPDATED_AT_LABEL } from './policyViewModel';
 
 const projectStore = useProjectStore();
 const sourceLoading = ref(false);
@@ -33,6 +34,7 @@ const articlePager = reactive({ pageNo: 1, pageSize: 10, total: 0, keyword: '', 
 const form = reactive({ sourceId: '' as ID | '', name: '', url: '', crawlFrequency: 'DAILY', description: '' });
 const projectId = computed(() => projectStore.currentProject?.projectId || '');
 const activeCrawlSourceIds = computed(() => new Set(tasks.value.filter((task) => isActiveTaskStatus(task.status)).map((task) => task.sourceId || 'ALL')));
+const singleArticleSourceHint = computed(() => isLikelySingleArticleUrl(form.url));
 let crawlPollTimer: ReturnType<typeof window.setInterval> | null = null;
 
 function resetForm() {
@@ -338,9 +340,11 @@ watch(projectId, () => {
           </div>
         </div>
       </template>
-      <AppTable :loading="articleLoading" :error="articleError" :data="articles" :total="articlePager.total" :page-no="articlePager.pageNo" :page-size="articlePager.pageSize" :columns="[{ prop: 'title', label: '标题', slot: 'title' }, { prop: 'category', label: '分类', width: 120 }, { prop: 'publishDate', label: '发布日期', width: 130 }, { prop: 'indexStatus', label: '入库状态', slot: 'indexStatus', width: 120 }]" @page-change="(p, s) => { articlePager.pageNo = p; articlePager.pageSize = s; loadArticles(); }">
+      <AppTable :loading="articleLoading" :error="articleError" :data="articles" :total="articlePager.total" :page-no="articlePager.pageNo" :page-size="articlePager.pageSize" :columns="[{ prop: 'title', label: '标题', slot: 'title' }, { prop: 'category', label: '分类', width: 120 }, { prop: 'publishDate', label: '发布日期', slot: 'publishDate', width: 130 }, { prop: 'updatedAt', label: POLICY_ARTICLE_UPDATED_AT_LABEL, slot: 'updatedAt', width: 180 }, { prop: 'indexStatus', label: '入库状态', slot: 'indexStatus', width: 120 }]" @page-change="(p, s) => { articlePager.pageNo = p; articlePager.pageSize = s; loadArticles(); }">
         <template #empty><EmptyState description="暂无政策资讯，请先触发政策源爬取。" /></template>
         <template #title="{ row }"><div><el-button link type="primary" @click="openArticleDetail(row)">{{ row.title }}</el-button><p class="muted">{{ row.summary }}</p><p class="muted url-text">{{ row.url }}</p></div></template>
+        <template #publishDate="{ row }">{{ formatPolicyPublishDate(row.publishDate) }}</template>
+        <template #updatedAt="{ row }">{{ formatPolicySystemTime(row.updatedAt) }}</template>
         <template #indexStatus="{ row }"><StatusTag :status="row.indexStatus" /></template>
       </AppTable>
     </el-card>
@@ -348,7 +352,10 @@ watch(projectId, () => {
     <el-dialog v-model="articleDetailVisible" title="政策资讯详情" width="760px">
       <el-descriptions v-if="selectedArticle" :column="2" border>
         <el-descriptions-item label="标题">{{ selectedArticle.title }}</el-descriptions-item>
-        <el-descriptions-item label="发布时间">{{ selectedArticle.publishDate || '未提取' }}</el-descriptions-item>
+        <el-descriptions-item label="发布日期">{{ formatPolicyPublishDate(selectedArticle.publishDate) }}</el-descriptions-item>
+        <el-descriptions-item label="首次入库">{{ formatPolicySystemTime(selectedArticle.createdAt) }}</el-descriptions-item>
+        <el-descriptions-item :label="POLICY_ARTICLE_UPDATED_AT_LABEL">{{ formatPolicySystemTime(selectedArticle.updatedAt) }}</el-descriptions-item>
+        <el-descriptions-item label="时间说明">{{ POLICY_ARTICLE_TIME_EXPLANATION }}</el-descriptions-item>
         <el-descriptions-item label="来源地址" :span="2"><span class="url-text">{{ selectedArticle.url }}</span></el-descriptions-item>
         <el-descriptions-item label="项目 ID">{{ selectedArticle.projectId }}</el-descriptions-item>
         <el-descriptions-item label="来源">{{ sourceName(selectedArticle.sourceId) }}（ID: {{ selectedArticle.sourceId }}）</el-descriptions-item>
@@ -360,7 +367,12 @@ watch(projectId, () => {
     <el-dialog v-model="sourceDialogVisible" title="政策源配置" width="640px">
       <el-form label-width="96px">
         <el-form-item label="来源名称" required><el-input v-model="form.name" placeholder="例如：住建部政策公开栏目" /></el-form-item>
-        <el-form-item label="栏目地址" required><el-input v-model="form.url" placeholder="https://example.gov.cn/policy" /></el-form-item>
+        <el-form-item label="来源地址" required>
+          <div class="source-url-field">
+            <el-input v-model="form.url" placeholder="https://example.gov.cn/policy" />
+            <el-alert v-if="singleArticleSourceHint" title="该地址看起来是单篇文章：可以刷新当前文章，但无法发现同栏目后续发布的新文章。" type="warning" show-icon :closable="false" />
+          </div>
+        </el-form-item>
         <el-form-item label="合规预检">
           <div class="preflight-box">
             <el-button :loading="preflightLoading" @click="runPreflight">检查 robots.txt</el-button>
@@ -394,5 +406,6 @@ watch(projectId, () => {
 .url-text { word-break: break-all; margin: 4px 0 0; }
 .article-content { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; line-height: 1.8; max-height: 52vh; overflow: auto; }
 .preflight-box { display: grid; gap: 10px; width: 100%; }
+.source-url-field { display: grid; gap: 10px; width: 100%; }
 @media (max-width: 960px) { .table-head, .filters, .header-actions { align-items: stretch; flex-direction: column; } }
 </style>

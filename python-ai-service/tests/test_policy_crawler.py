@@ -389,6 +389,88 @@ def test_policy_crawler_deduplicates_links_and_limits_articles():
     assert links[:service.settings.policy_crawler_max_articles] == [("https://public.example/2026/a.html", "A")]
 
 
+def test_policy_crawler_prioritizes_newest_dated_urls_before_limit():
+    service = PolicyCrawlerService(crawler_settings(policy_crawler_max_articles=2))
+
+    links = service._select_article_links(
+        """
+        <a href="/policy/20260101/old.html">old</a>
+        <a href="/policy/misc.html">undated</a>
+        <a href="/policy/20260918/new.html">new</a>
+        """,
+        "https://public.example/news/",
+    )
+
+    assert links == [
+        ("https://public.example/policy/20260918/new.html", "new"),
+        ("https://public.example/policy/20260101/old.html", "old"),
+    ]
+
+
+def test_policy_crawler_keeps_dom_order_for_same_date():
+    service = PolicyCrawlerService(crawler_settings(policy_crawler_max_articles=3))
+
+    links = service._select_article_links(
+        """
+        <a href="/policy/20260918/first.html">first</a>
+        <a href="/policy/20260918/second.html">second</a>
+        <a href="/policy/20260918/third.html">third</a>
+        """,
+        "https://public.example/news/",
+    )
+
+    assert [title for _, title in links] == ["first", "second", "third"]
+
+
+def test_policy_crawler_keeps_dom_order_for_undated_urls():
+    service = PolicyCrawlerService(crawler_settings(policy_crawler_max_articles=3))
+
+    links = service._select_article_links(
+        """
+        <a href="/policy/alpha.html">alpha</a>
+        <a href="/policy/beta.html">beta</a>
+        <a href="/policy/gamma.html">gamma</a>
+        """,
+        "https://public.example/news/",
+    )
+
+    assert [title for _, title in links] == ["alpha", "beta", "gamma"]
+
+
+def test_policy_crawler_prioritizes_common_separated_url_dates():
+    service = PolicyCrawlerService(crawler_settings(policy_crawler_max_articles=3))
+
+    links = service._select_article_links(
+        """
+        <a href="/policy/2026/01/01/old.html">old</a>
+        <a href="/policy/2026-09-18/new.html">new</a>
+        <a href="/policy/20260820/middle.html">middle</a>
+        """,
+        "https://public.example/news/",
+    )
+
+    assert [title for _, title in links] == ["new", "middle", "old"]
+
+
+def test_policy_crawler_deduplicates_before_newest_selection_and_limit():
+    service = PolicyCrawlerService(crawler_settings(policy_crawler_max_articles=2))
+
+    links = service._select_article_links(
+        """
+        <a href="/policy/20260101/old.html#top">old</a>
+        <a href="/policy/20260918/new.html">new</a>
+        <a href="/policy/20260101/old.html">old duplicate</a>
+        <a href="/policy/20260820/middle.html">middle</a>
+        """,
+        "https://public.example/news/",
+    )
+
+    assert links == [
+        ("https://public.example/policy/20260918/new.html", "new"),
+        ("https://public.example/policy/20260820/middle.html", "middle"),
+    ]
+
+
 def test_policy_crawler_upgrades_same_host_article_links_to_source_https():
     service = PolicyCrawlerService(crawler_settings())
 

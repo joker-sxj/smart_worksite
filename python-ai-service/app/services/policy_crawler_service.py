@@ -3,6 +3,7 @@ import ipaddress
 import re
 import socket
 import time
+from datetime import date
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -91,7 +92,7 @@ class PolicyCrawlerService:
                 if not await self._robots_allowed(client, source_url): raise PolicyCrawlerUrlError("policy crawler is disallowed by robots.txt")
                 response, final_url = await self._fetch(client, source_url)
                 root_html = self._decode(response)
-                links = self._extract_article_links(root_html, final_url)[:self.settings.policy_crawler_max_articles]
+                links = self._select_article_links(root_html, final_url)
                 articles, failed = await self._crawl_articles(client, links)
                 if not articles: articles = [self._build_article(root_html, final_url, request.url)]
                 return PolicyCrawlData(fetchedCount=len(articles) + failed, failedCount=failed, message="policy content crawled", articles=articles), {"provider": "HTTPX", "sourceUrl": request.url, "finalUrl": final_url, "fetched": len(articles), "failed": failed}
@@ -258,6 +259,30 @@ class PolicyCrawlerService:
             normalized = urlunparse(parsed._replace(fragment=""))
             if normalized not in seen and _looks_like_article_url(normalized): seen.add(normalized); links.append((normalized, title[:256]))
         return links
+
+    def _select_article_links(self, html, base_url):
+        links = self._extract_article_links(html, base_url)
+        dated_links = []
+        undated_links = []
+        for original_index, link in enumerate(links):
+            url_date = self._extract_url_date(link[0])
+            if url_date is None:
+                undated_links.append(link)
+            else:
+                dated_links.append((url_date, original_index, link))
+        dated_links.sort(key=lambda item: (-item[0].toordinal(), item[1]))
+        prioritized = [link for _, _, link in dated_links] + undated_links
+        return prioritized[:self.settings.policy_crawler_max_articles]
+
+    @staticmethod
+    def _extract_url_date(url):
+        path = urlparse(url).path
+        for match in re.finditer(r"(?<!\d)(20\d{2})[/_-]?(0[1-9]|1[0-2])[/_-]?(0[1-9]|[12]\d|3[01])(?!\d)", path):
+            try:
+                return date(int(match[1]), int(match[2]), int(match[3]))
+            except ValueError:
+                continue
+        return None
 
     def _build_article(self, html, url, fallback_title):
         extractor = _HtmlTextExtractor(); extractor.feed(html); content = _clean_text("\n".join(extractor.body_parts))
