@@ -15,6 +15,7 @@ import { fileParseStatusText } from '../file/fileParseStatus';
 import { fileExtension, isParseableFileName, parseTargetFormatForFileName } from '../file/supportedFileParse';
 import { documentParseActionText, documentParseRecord, documentProcessingMessage, isDocumentParseReady, isKnowledgeDocumentIndexReady, isParseableKnowledgeDocument, knowledgeDocumentParseTargetFormat, setDocumentParseRecord, type DocumentParseRecords } from './knowledgeDocumentParseState';
 import { buildDocumentDetailView, selectSuccessfulContentRecord, type DocumentDetailView } from './knowledgeDocumentDetail';
+import { buildKnowledgeDocumentQuery, createKnowledgeDocumentRequestGuard, isSameKnowledgeBase, knowledgeDocumentPageAfterDelete, resetKnowledgeDocumentPage, updateKnowledgeDocumentFilters, type KnowledgeDocumentPaging } from './knowledgeDocumentPaging';
 
 const projectStore = useProjectStore();
 const userStore = useUserStore();
@@ -26,6 +27,10 @@ const error = ref('');
 const docsError = ref('');
 const bases = ref<KnowledgeBase[]>([]);
 const docs = ref<KnowledgeDocument[]>([]);
+const docsPager = reactive<KnowledgeDocumentPaging>({ pageNo: 1, pageSize: 20, total: 0, keyword: '', indexStatus: '' });
+const documentFilters = reactive({ keyword: '', indexStatus: '' });
+const documentRequestGuard = createKnowledgeDocumentRequestGuard();
+const parseRecordRequestGuard = createKnowledgeDocumentRequestGuard();
 const documentParseRecords = ref<DocumentParseRecords>({});
 const activeBaseId = ref<ID>('');
 const dialogVisible = ref(false);
@@ -104,6 +109,7 @@ function parseDisabledReason(row: KnowledgeDocument) {
 }
 
 async function refreshDocumentParseRecords(baseId: ID) {
+  const request = parseRecordRequestGuard.begin(baseId);
   const currentDocs = docs.value.filter((row) => row.fileId && isParseableDocument(row));
   const results = await Promise.all(currentDocs.map(async (row) => {
     try {
@@ -113,7 +119,7 @@ async function refreshDocumentParseRecords(baseId: ID) {
       return null;
     }
   }));
-  if (String(activeBaseId.value) !== String(baseId)) return false;
+  if (!parseRecordRequestGuard.isCurrent(request, activeBaseId.value)) return false;
   documentParseRecords.value = Object.fromEntries(results.filter((item): item is readonly [string, FileParseRecord] => Boolean(item)));
   return Object.values(documentParseRecords.value).some((record) => ['PENDING', 'PARSING', 'RUNNING'].includes(normalizeStatus(record.status)));
 }
@@ -160,8 +166,11 @@ async function loadBases(selectId?: ID) {
     bases.value = await fetchKnowledgeBases(projectId);
     const nextId = selectId || activeBaseId.value;
     const matched = bases.value.find((item) => String(item.knowledgeBaseId) === String(nextId));
+    const previousBaseId = activeBaseId.value;
     activeBaseId.value = matched ? matched.knowledgeBaseId : (bases.value[0]?.knowledgeBaseId || '');
-    if (activeBaseId.value) await loadDocs(activeBaseId.value); else docs.value = [];
+    // A changed selection is loaded by the watcher; unchanged selections need an explicit refresh.
+    if (activeBaseId.value && Object.is(activeBaseId.value, previousBaseId)) await loadDocs(activeBaseId.value);
+    else if (!activeBaseId.value) docs.value = [];
   } catch (err) {
     error.value = err instanceof Error ? err.message : '知识库数据加载失败，请检查后端知识库接口。';
   } finally { loading.value = false; }
@@ -169,14 +178,42 @@ async function loadBases(selectId?: ID) {
 
 async function loadDocs(baseId: ID) {
   parsePolling.stop();
+  parseRecordRequestGuard.invalidate();
+  const request = documentRequestGuard.begin(baseId);
   docsLoading.value = true;
   docsError.value = '';
+  let loaded = false;
   try {
-    docs.value = (await fetchKnowledgeDocuments(baseId)).records;
+    const page = await fetchKnowledgeDocuments(baseId, buildKnowledgeDocumentQuery(docsPager));
+    if (!documentRequestGuard.isCurrent(request, activeBaseId.value)) return;
+    docs.value = page.records;
+    docsPager.total = page.total;
+    loaded = true;
     await parsePolling.start();
   }
-  catch (err) { docsError.value = err instanceof Error ? err.message : '文档列表加载失败，请检查后端知识库文档接口。'; docs.value = []; documentParseRecords.value = {}; }
-  finally { docsLoading.value = false; scheduleDocsAutoRefresh(); }
+  catch (err) {
+    if (documentRequestGuard.isCurrent(request, activeBaseId.value)) {
+      docsError.value = err instanceof Error ? err.message : '文档列表加载失败，请检查后端知识库文档接口。';
+      documentParseRecords.value = {};
+    }
+  }
+  finally {
+    if (documentRequestGuard.isCurrent(request, activeBaseId.value)) {
+      docsLoading.value = false;
+      if (loaded) scheduleDocsAutoRefresh(); else stopDocsAutoRefresh();
+    }
+  }
+}
+
+function searchDocuments() {
+  Object.assign(docsPager, updateKnowledgeDocumentFilters(docsPager, documentFilters));
+  if (activeBaseId.value) void loadDocs(activeBaseId.value);
+}
+
+function changeDocumentPage(pageNo: number, pageSize: number) {
+  docsPager.pageNo = pageNo;
+  docsPager.pageSize = pageSize;
+  if (activeBaseId.value) void loadDocs(activeBaseId.value);
 }
 
 async function submitCreate() {
@@ -304,11 +341,15 @@ async function downloadOriginalFile() {
 
 async function removeDocument(row: KnowledgeDocument) {
   if (!canManageKnowledge.value) return ElMessage.warning(knowledgeManageTip);
+  const baseId = row.knowledgeBaseId;
   try {
     await ElMessageBox.confirm(`确认删除文档“${row.title}”？`, '删除文档', { type: 'warning' });
     await deleteKnowledgeDocument(row.documentId);
     ElMessage.success('文档已删除');
-    await loadDocs(activeBaseId.value);
+    if (isSameKnowledgeBase(activeBaseId.value, baseId)) {
+      docsPager.pageNo = knowledgeDocumentPageAfterDelete(docsPager, docs.value.length);
+      await loadDocs(baseId);
+    }
   } catch (err) {
     if (err === 'cancel' || err === 'close') return;
     ElMessage.error(err instanceof Error ? err.message : '知识文档删除失败');
@@ -320,6 +361,7 @@ async function uploadDocs() {
   if (!activeBaseId.value) return ElMessage.warning('请先选择知识库');
   if (isPolicyBase(activeBase.value)) return ElMessage.warning('政策资讯库由系统爬虫维护，不支持手动上传');
   if (!selectedFiles.value.length) return ElMessage.warning('请先选择文件');
+  const baseId = activeBaseId.value;
   uploading.value = true;
   docsError.value = '';
   try {
@@ -328,10 +370,13 @@ async function uploadDocs() {
       ElMessage.error(`以下文件暂不支持知识库解析入库：${unsupported.map((file) => file.name).join('、')}`);
       return;
     }
-    for (const file of selectedFiles.value) await uploadKnowledgeDocument(activeBaseId.value, file);
+    for (const file of selectedFiles.value) await uploadKnowledgeDocument(baseId, file);
     ElMessage.success('文档上传成功');
     selectedFiles.value = [];
-    await loadDocs(activeBaseId.value);
+    if (isSameKnowledgeBase(activeBaseId.value, baseId)) {
+      Object.assign(docsPager, resetKnowledgeDocumentPage(docsPager));
+      await loadDocs(baseId);
+    }
   } catch (err) {
     const detail = err instanceof Error && err.message ? ` ${err.message}` : '';
     ElMessage.error(`知识库文档上传失败，请检查后端知识库文档接口或文件存储配置。${detail}`);
@@ -381,9 +426,18 @@ async function handleIndex(row: KnowledgeDocument) {
   finally { indexingId.value = ''; }
 }
 
-watch(activeBaseId, (id) => { stopDocsAutoRefresh(); parsePolling.stop(); documentParseRecords.value = {}; if (id) loadDocs(id); });
+watch(activeBaseId, (id) => {
+  documentRequestGuard.invalidate();
+  parseRecordRequestGuard.invalidate();
+  stopDocsAutoRefresh();
+  parsePolling.stop();
+  documentParseRecords.value = {};
+  docs.value = [];
+  Object.assign(docsPager, resetKnowledgeDocumentPage(docsPager), { total: 0 });
+  if (id) loadDocs(id);
+});
 onMounted(loadBases);
-onUnmounted(() => { stopDocsAutoRefresh(); parsePolling.stop(); });
+onUnmounted(() => { documentRequestGuard.invalidate(); parseRecordRequestGuard.invalidate(); stopDocsAutoRefresh(); parsePolling.stop(); });
 </script>
 
 <template>
@@ -394,7 +448,29 @@ onUnmounted(() => { stopDocsAutoRefresh(); parsePolling.stop(); });
     <template v-else>
       <el-card class="work-card"><div class="base-list"><div v-for="base in bases" :key="base.knowledgeBaseId" class="base-card" :class="{ active: String(activeBaseId) === String(base.knowledgeBaseId) }" @click="activeBaseId = base.knowledgeBaseId"><strong>{{ base.name }} <el-tag v-if="isPolicyBase(base)" size="small" type="warning">系统政策库</el-tag></strong><span>{{ base.description || '暂无描述' }}</span><small>领域：{{ base.domain || '-' }} / <StatusTag :status="base.status" /></small><div v-if="canManageKnowledge && !isPolicyBase(base)" class="base-actions"><el-button link type="primary" @click.stop="openEditBase(base)">编辑</el-button><el-button link :type="['ENABLED','ACTIVE'].includes(String(base.status).toUpperCase()) ? 'warning' : 'success'" @click.stop="setBaseStatus(base, !['ENABLED','ACTIVE'].includes(String(base.status).toUpperCase()))">{{ ['ENABLED','ACTIVE'].includes(String(base.status).toUpperCase()) ? '停用' : '启用' }}</el-button><el-button link type="danger" @click.stop="removeBase(base)">删除</el-button></div></div></div><p v-if="activeBase" class="muted">当前知识库：{{ activeBase.name }} / <StatusTag :status="activeBase.status" /></p></el-card>
       <el-card class="work-card"><h3 class="panel-title">上传文档</h3><el-alert v-if="isPolicyBase(activeBase)" title="政策资讯库由系统爬虫维护，不支持手动上传、编辑、停用或删除。" type="warning" show-icon :closable="false" style="margin-bottom: 12px" /><el-alert v-else title="可上传 Word、PPT、Excel/CSV/TSV、PDF 和图片。" type="info" show-icon :closable="false" style="margin-bottom: 12px" /><div class="upload-title required-label">知识库文档</div><AppUpload v-model="selectedFiles" accept=".doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.tsv,.pdf,.jpg,.jpeg,.png,.webp" :max-size-mb="100" tip="支持 Word、PPT、Excel/CSV/TSV、PDF 和图片；入库前需完成可解析文件内容抽取" :uploading="uploading"  /><el-button type="primary" style="margin-top: 12px" :loading="uploading" :disabled="!activeBaseId || isPolicyBase(activeBase)" @click="uploadDocs">上传到当前知识库</el-button></el-card>
-      <el-card class="work-card"><h3 class="panel-title">文档处理状态</h3><el-alert v-if="docsError" :title="docsError" type="error" show-icon :closable="false" style="margin-bottom: 12px" /><AppTable :loading="docsLoading" :data="docs" :columns="[{ prop: 'title', label: '文档名称' }, { prop: 'sourceType', label: '来源类型', width: 120 }, { prop: 'parseStatus', label: '解析状态', slot: 'parseStatus', width: 110 }, { prop: 'indexStatus', label: '入库状态', slot: 'index', width: 110 }, { prop: 'errorMessage', label: '说明' }, { prop: 'createdAt', label: '创建时间', width: 180 }]"><template #empty><EmptyState description="暂无知识库文档，可先上传项目资料。" /></template><template #parseStatus="{ row }"><StatusTag :status="latestParse(row)?.status" :text="parseStatusText(row)" /></template><template #index="{ row }"><StatusTag :status="row.indexStatus" /></template><el-table-column label="操作" width="350"><template #default="{ row }"><el-button link type="primary" @click="openDocumentDetail(row)">详情</el-button><el-tooltip :disabled="canStartParse(row)" :content="parseDisabledReason(row)"><span><el-button link type="primary" :loading="String(parsingId) === String(row.documentId)" :disabled="!canStartParse(row)" @click="handleParse(row)">{{ parseActionText(row) }}</el-button></span></el-tooltip><el-button link type="primary" :loading="String(indexingId) === String(row.documentId)" :disabled="!canSubmitIndex(row)" @click="handleIndex(row)">{{ indexActionText(row) }}</el-button><el-button v-if="canManageKnowledge" link type="danger" @click="removeDocument(row)">删除</el-button></template></el-table-column></AppTable><template v-for="row in docs" :key="`processing-${row.documentId}`"><p v-if="processingMessage(row)" class="muted">{{ row.title }}：{{ processingMessage(row) }}</p></template></el-card>
+      <el-card class="work-card">
+        <div class="document-toolbar">
+          <h3 class="panel-title">文档处理状态</h3>
+          <div class="document-filters">
+            <el-input v-model="documentFilters.keyword" clearable placeholder="搜索文档名称" style="width: 220px" @keyup.enter="searchDocuments" />
+            <el-select v-model="documentFilters.indexStatus" clearable placeholder="入库状态" style="width: 140px" @change="searchDocuments">
+              <el-option label="待入库" value="PENDING" />
+              <el-option label="入库中" value="INDEXING" />
+              <el-option label="已入库" value="SUCCESS" />
+              <el-option label="入库失败" value="FAILED" />
+            </el-select>
+            <el-button type="primary" @click="searchDocuments">查询</el-button>
+          </div>
+        </div>
+        <el-alert v-if="docsError" :title="docsError" type="error" show-icon :closable="false" style="margin-bottom: 12px" />
+        <AppTable :loading="docsLoading" :data="docs" :total="docsPager.total" :page-no="docsPager.pageNo" :page-size="docsPager.pageSize" :columns="[{ prop: 'title', label: '文档名称' }, { prop: 'sourceType', label: '来源类型', width: 120 }, { prop: 'parseStatus', label: '解析状态', slot: 'parseStatus', width: 110 }, { prop: 'indexStatus', label: '入库状态', slot: 'index', width: 110 }, { prop: 'errorMessage', label: '说明' }, { prop: 'createdAt', label: '创建时间', width: 180 }]" @page-change="changeDocumentPage">
+          <template #empty><EmptyState description="暂无符合条件的知识库文档。" /></template>
+          <template #parseStatus="{ row }"><StatusTag :status="latestParse(row)?.status" :text="parseStatusText(row)" /></template>
+          <template #index="{ row }"><StatusTag :status="row.indexStatus" /></template>
+          <el-table-column label="操作" width="350"><template #default="{ row }"><el-button link type="primary" @click="openDocumentDetail(row)">详情</el-button><el-tooltip :disabled="canStartParse(row)" :content="parseDisabledReason(row)"><span><el-button link type="primary" :loading="String(parsingId) === String(row.documentId)" :disabled="!canStartParse(row)" @click="handleParse(row)">{{ parseActionText(row) }}</el-button></span></el-tooltip><el-button link type="primary" :loading="String(indexingId) === String(row.documentId)" :disabled="!canSubmitIndex(row)" @click="handleIndex(row)">{{ indexActionText(row) }}</el-button><el-button v-if="canManageKnowledge" link type="danger" @click="removeDocument(row)">删除</el-button></template></el-table-column>
+        </AppTable>
+        <template v-for="row in docs" :key="`processing-${row.documentId}`"><p v-if="processingMessage(row)" class="muted">{{ row.title }}：{{ processingMessage(row) }}</p></template>
+      </el-card>
     </template>
     <el-dialog v-model="dialogVisible" :title="form.knowledgeBaseId ? '编辑知识库' : '新建知识库'" width="520px"><el-form label-width="96px"><el-form-item label="知识库名称" required><el-input v-model="form.name" placeholder="请输入知识库名称" /></el-form-item><el-form-item label="领域"><el-input v-model="form.domain" placeholder="如 SAFETY、QUALITY" /></el-form-item><el-form-item label="描述"><el-input v-model="form.description" type="textarea" placeholder="请输入知识库描述" /></el-form-item></el-form><template #footer><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" :loading="creating" @click="submitCreate">保存</el-button></template></el-dialog>
     <el-drawer v-model="detailDrawerVisible" title="知识文档详情" size="min(760px, 92vw)">
@@ -462,6 +538,8 @@ onUnmounted(() => { stopDocsAutoRefresh(); parsePolling.stop(); });
 .base-card span, .base-card small, .muted { color: var(--sw-muted); }
 .base-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .panel-title { margin: 0 0 12px; font-size: 16px; }
+.document-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.document-filters { display: flex; gap: 10px; flex-wrap: wrap; }
 .upload-title { margin: 0 0 10px; font-weight: 700; }
 .detail-actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
 .detail-section { margin-bottom: 18px; }

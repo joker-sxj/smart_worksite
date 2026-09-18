@@ -127,9 +127,25 @@ export async function triggerDocumentIndex(documentId: ID) {
   return request.post<KnowledgeDocument>(`/knowledge-documents/${documentId}/index`);
 }
 
-export async function fetchKnowledgeDocuments(knowledgeBaseId: ID, params: PageQuery = {}) {
-  const records = mockDocumentState.filter((item) => String(item.knowledgeBaseId) === String(knowledgeBaseId));
-  if (useMock) return { pageNo: params.pageNo || 1, pageSize: params.pageSize || 20, total: records.length, records } satisfies PageResult<KnowledgeDocument>;
+export function buildMockKnowledgeDocumentPage(
+  state: KnowledgeDocument[],
+  knowledgeBaseId: ID,
+  params: PageQuery & { indexStatus?: string } = {}
+): PageResult<KnowledgeDocument> {
+  const pageNo = params.pageNo || 1;
+  const pageSize = params.pageSize || 20;
+  const keyword = params.keyword?.trim() || '';
+  const records = state.filter((item) => (
+    String(item.knowledgeBaseId) === String(knowledgeBaseId)
+    && (!keyword || item.title.includes(keyword))
+    && (!params.indexStatus || item.indexStatus === params.indexStatus)
+  ));
+  const offset = (pageNo - 1) * pageSize;
+  return { pageNo, pageSize, total: records.length, records: records.slice(offset, offset + pageSize) };
+}
+
+export async function fetchKnowledgeDocuments(knowledgeBaseId: ID, params: PageQuery & { indexStatus?: string } = {}) {
+  if (useMock) return buildMockKnowledgeDocumentPage(mockDocumentState, knowledgeBaseId, params);
   return request.get<PageResult<KnowledgeDocument>>(`/knowledge-bases/${knowledgeBaseId}/documents`, { params });
 }
 
