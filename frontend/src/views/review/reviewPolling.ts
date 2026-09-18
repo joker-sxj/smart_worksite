@@ -18,6 +18,10 @@ export function isReviewTerminal(record: Pick<ReviewRecord, 'status'>) {
   return TERMINAL_STATUSES.has(String(record.status).toUpperCase());
 }
 
+export function shouldPollReviewRecord(record: Pick<ReviewRecord, 'status'> | null | undefined) {
+  return Boolean(record && !isReviewTerminal(record));
+}
+
 export function canUpdateReviewIssues(status?: string) {
   return ['COMPLETED', 'PARTIAL_SUCCESS'].includes(String(status || '').toUpperCase());
 }
