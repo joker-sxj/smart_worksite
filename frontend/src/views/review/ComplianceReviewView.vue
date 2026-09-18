@@ -15,7 +15,7 @@ import { useProjectStore } from '../../stores/project';
 import { useUserStore } from '../../stores/user';
 import type { ID, KnowledgeDocument, ReviewField, ReviewFieldSchema, ReviewRecord, ReviewTemplate, TaskStageLog } from '../../api/types';
 import { canUpdateReviewIssues, progressFromReviewState, reviewStorageKey, shouldPollReviewRecord } from './reviewPolling';
-import { deriveManualConfirmationItems, isCurrentReviewRequest, reviewRuleResults, selectRestoredReviewRecord } from './reviewResultViewModel';
+import { createReviewRestoreGuard, deriveManualConfirmationItems, isCurrentReviewRequest, reviewRuleResults, selectRestoredReviewRecord } from './reviewResultViewModel';
 import { exceedsReviewReferenceLimit } from './reviewSubmission';
 
 const router = useRouter();
@@ -47,7 +47,7 @@ const logs = ref<TaskStageLog[]>([]);
 const updatingIssueId = ref('');
 let recordPollTimer: ReturnType<typeof setTimeout> | null = null;
 let recordLoadGeneration = 0;
-let restoreGeneration = 0;
+const restoreGuard = createReviewRestoreGuard();
 const RECORD_POLL_INTERVAL_MS = 2000;
 const canManageReview = computed(() => userStore.hasPermission('review:manage'));
 const reviewManageTip = '当前账号没有合规审查管理权限';
@@ -100,12 +100,12 @@ function scheduleRecordPolling(recordId: ID, fallbackStatus?: string) {
 }
 
 async function restoreProjectRecord(projectId: ID) {
-  const generation = ++restoreGeneration;
+  const request = restoreGuard.begin(projectId);
   const storageKey = reviewStorageKey(projectId);
   const persistedRecordId = localStorage.getItem(storageKey);
   try {
     const page = await fetchReviewRecords({ projectId, pageNo: 1, pageSize: 50 });
-    if (!isCurrentReviewRequest(generation, restoreGeneration, projectId, projectStore.currentProject?.projectId)) return;
+    if (!restoreGuard.isCurrent(request, projectStore.currentProject?.projectId)) return;
     recentRecords.value = page.records;
     const target = selectRestoredReviewRecord(page.records, persistedRecordId);
     if (!target) {
@@ -116,15 +116,20 @@ async function restoreProjectRecord(projectId: ID) {
     if (persistedRecordId && String(target.recordId) !== String(persistedRecordId)) {
       localStorage.removeItem(storageKey);
     }
-    await openRecord(target.recordId, target.status);
+    await openRestoredRecord(target.recordId, target.status);
   } catch (err) {
-    if (!isCurrentReviewRequest(generation, restoreGeneration, projectId, projectStore.currentProject?.projectId)) return;
+    if (!restoreGuard.isCurrent(request, projectStore.currentProject?.projectId)) return;
     const detail = err instanceof Error && err.message ? ` ${err.message}` : '';
     resultNotice.value = `${t('最近审查记录加载失败，请稍后重试。')}${detail}`;
   }
 }
 
 async function openRecord(recordId: ID, fallbackStatus?: string) {
+  restoreGuard.invalidate();
+  await openRestoredRecord(recordId, fallbackStatus);
+}
+
+async function openRestoredRecord(recordId: ID, fallbackStatus?: string) {
   stopRecordPolling();
   selectedRecordId.value = recordId;
   currentRecord.value = null;
@@ -243,6 +248,7 @@ async function submit() {
   const missing = (fieldSchema.value?.fields || []).filter((item) => item.stage === 'INPUT' && item.required && (fieldValues.value[item.key] == null || fieldValues.value[item.key] === '')).map((item) => item.label || item.key);
   if (missing.length) return ElMessage.warning(`请填写必填审查字段：${missing.join('、')}`);
   submitting.value = true;
+  restoreGuard.invalidate();
   resultNotice.value = '';
   stageNotice.value = '';
   try {
@@ -290,7 +296,7 @@ watch(() => projectStore.currentProject?.projectId, async (projectId, previousPr
   if (!projectId || String(projectId) === String(previousProjectId || '')) return;
   stopRecordPolling();
   recordLoadGeneration += 1;
-  restoreGeneration += 1;
+  restoreGuard.invalidate();
   selectedTemplateId.value = '';
   currentRecord.value = null;
   recentRecords.value = [];
@@ -308,7 +314,7 @@ watch(selectedTemplateId, loadFieldSchema, { immediate: true });
 onUnmounted(() => {
   stopRecordPolling();
   recordLoadGeneration += 1;
-  restoreGeneration += 1;
+  restoreGuard.invalidate();
 });
 </script>
 

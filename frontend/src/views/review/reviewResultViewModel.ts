@@ -16,6 +16,22 @@ interface ReviewResultSource {
   ruleResults?: ReviewRuleResult[];
 }
 
+export function createReviewRestoreGuard() {
+  let generation = 0;
+
+  return {
+    begin(projectId: ID) {
+      return { generation: ++generation, projectId: String(projectId) };
+    },
+    isCurrent(request: { generation: number; projectId: string }, activeProjectId?: ID) {
+      return request.generation === generation && request.projectId === String(activeProjectId ?? '');
+    },
+    invalidate() {
+      generation += 1;
+    }
+  };
+}
+
 export function selectRestoredReviewRecord(records: ReviewRecord[], persistedRecordId?: ID | null) {
   if (!records.length) return null;
   const persisted = persistedRecordId == null

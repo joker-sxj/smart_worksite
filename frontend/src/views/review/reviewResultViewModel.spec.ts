@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ReviewRecord } from '../../api/types';
-import { deriveManualConfirmationItems, isCurrentReviewRequest, selectRestoredReviewRecord } from './reviewResultViewModel';
+import { createReviewRestoreGuard, deriveManualConfirmationItems, isCurrentReviewRequest, selectRestoredReviewRecord } from './reviewResultViewModel';
 
 function record(recordId: number, createdAt: string): ReviewRecord {
   return {
@@ -33,6 +33,15 @@ describe('review result restoration', () => {
     expect(isCurrentReviewRequest(2, 2, 10, 10)).toBe(true);
     expect(isCurrentReviewRequest(1, 2, 10, 10)).toBe(false);
     expect(isCurrentReviewRequest(2, 2, 10, 11)).toBe(false);
+  });
+
+  it('rejects a delayed restoration after a newer user intent', () => {
+    const guard = createReviewRestoreGuard();
+    const restore = guard.begin(1);
+
+    guard.invalidate();
+
+    expect(guard.isCurrent(restore, 1)).toBe(false);
   });
 });
 
